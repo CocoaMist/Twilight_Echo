@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { crc32 } from 'node:zlib'
 import { isCoreRequest, coreOperation } from './coreProtocol.ts'
 import { isBoundedCoreJson } from './coreRequestValidation.ts'
 import { emptyCoreStateCounts } from './coreState.ts'
@@ -11,6 +12,147 @@ const request = (name: string, payload: unknown, kind = 'command') => ({
   payload,
   requestId: 'request:1',
   epoch: 'core:1'
+})
+
+test('personal metadata operations stay library-write scoped and the full 2 MiB bitmap request crosses the public payload budget', () => {
+  const tiny = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=', 'base64')
+  // A bounded PNG ancillary chunk makes a maximum-size structural fixture,
+  // exercising the actual JSON envelope rather than a small validator sample.
+  const extra = Buffer.alloc(2 * 1024 * 1024 - tiny.length)
+  extra.writeUInt32BE(extra.length - 12, 0); extra.write('tEXt', 4)
+  extra.fill(120, 8, extra.length - 4); extra.write('Comment\0', 8)
+  extra.writeUInt32BE(crc32(extra.subarray(4, -4)), extra.length - 4)
+  const png = 'data:image/png;base64,' + Buffer.concat([tiny.subarray(0, -12), extra, tiny.subarray(-12)]).toString('base64')
+  const payload = { entityId: 'artist', revision: 0, language: 'en', mode: 'value', dataUrl: png }
+  assert.equal(isCoreRequest(request('metadata.entity.artworkOverride', payload)), true)
+  assert.equal(isCoreRequest(request('metadata.entity.artworkOverride', { ...payload, dataUrl: png + 'A' })), false)
+  assert.equal(isCoreRequest(request('metadata.entity.artworkOverride', { ...payload, filePath: 'D:/not-authorized.png' })), false)
+  assert.equal(isCoreRequest(request('metadata.entity.sourcePreference', { entityId: 'artist', revision: 0, language: 'en', provider: null })), true)
+  for (const name of ['metadata.entity.sourcePreference', 'metadata.entity.artworkOverride'] as const)
+    assert.equal(coreOperation(name)?.permission, 'library:write')
+})
+
+test('Focus exposes bounded versioned queries and independent saved edits without private contexts or queue pages', () => {
+  const query = { version: 1, entity: 'recording', where: { all: [
+    { source: { provider: 'local', bitDepth: { gte: 24 } } },
+    { not: { rating: { target: 'self', mode: 'personal', gteStars: 4 } } }
+  ] } }
+  for (const [name, input] of Object.entries({
+    'focus.query': { query, limit: 200 }, 'focus.facets': { query, facet: 'provider', limit: 200 },
+    'focus.saved.list': { limit: 200, savedRevision: 0 }
+  })) {
+    assert.equal(isCoreRequest(request(name, input, 'query')), true)
+    assert.equal(isCoreRequest(request(name, { ...input, limit: 201 }, 'query')), false)
+    assert.equal(isCoreRequest(request(name, { ...input, platformContexts: {} }, 'query')), false)
+    assert.equal(isCoreRequest(request(name, { ...input, profileId: 'other' }, 'query')), false)
+    assert.equal(coreOperation(name as Parameters<typeof coreOperation>[0])?.permission, 'library:read')
+  }
+  for (const [name, input] of Object.entries({
+    'focus.saved.create': { name: 'Night', query, savedRevision: 0 },
+    'focus.saved.rename': { id: 'saved', name: 'Jazz', nameRevision: 1 },
+    'focus.saved.update': { id: 'saved', query, queryRevision: 1 },
+    'focus.saved.delete': { id: 'saved', nameRevision: 1, queryRevision: 1 }
+  })) {
+    assert.equal(isCoreRequest(request(name, input)), true)
+    assert.equal(isCoreRequest(request(name, { ...input, tracks: [] })), false)
+    assert.equal(coreOperation(name as Parameters<typeof coreOperation>[0])?.permission, 'library:write')
+  }
+  const token = { savedRevision: 0, catalogRevision: 0, contentRevision: 0, genresRevision: 0,
+    metadataRevision: 0, ratingsRevision: 0, preferencesRevision: 0, tagsRevision: 0, linkRevision: 0,
+    historyRevision: 0, queryKey: 'query', contextKey: 'context', asOf: 1, expiresAt: null }
+  assert.equal(isCoreRequest(request('focus.play', { query, token })), true)
+  assert.equal(coreOperation('focus.play')?.permission, 'playback:write')
+  assert.equal(isCoreRequest(request('focus.play.status', { requestId: 'one', epoch: 'current' }, 'query')), true)
+  assert.equal(isCoreRequest(request('focus.play.status', { requestId: 'one', epoch: 'current', owner: 'other' }, 'query')), false)
+  assert.equal(isCoreRequest(request('focus.play.status', { requestId: '', epoch: 'current' }, 'query')), false)
+  assert.equal(coreOperation('focus.play.status')?.permission, 'playback:read')
+  assert.equal(isCoreRequest(request('focus.query', { query: { ...query, sql: 'SELECT 1' } }, 'query')), false)
+  assert.equal(isCoreRequest(request('focus.query', { query: { ...query, where: { all: Array.from({ length: 65 }, () => ({ text: 'song' })) } } }, 'query')), false)
+  let where: unknown = { text: 'song' }
+  for (let i = 0; i < 8; i++) where = { not: where }
+  assert.equal(isCoreRequest(request('focus.query', { query: { ...query, where } }, 'query')), false)
+  for (const name of ['focus.state', 'focus.playbackPage'])
+    assert.equal(isCoreRequest(request(name, {}, 'query')), false)
+})
+
+test('tags expose bounded reference queries and independent edits, not paths, profiles or private queue pages', () => {
+  const token = { tagsRevision: 1, catalogRevision: 2, contentRevision: 3, linkRevision: 4 }
+  const inputs = {
+    'tags.list': { search: '夜晚', offset: 0, limit: 100, token },
+    'tags.entity': { entityId: 'recording', limit: 100, token },
+    'tags.members': { tagId: 'tag:one', limit: 100, token },
+    'tags.recordings': { tagId: 'tag:one', limit: 100, token }
+  }
+  for (const [name, input] of Object.entries(inputs)) {
+    assert.equal(isCoreRequest(request(name, input, 'query')), true)
+    assert.equal(isCoreRequest(request(name, { ...input, limit: 101 }, 'query')), false)
+    assert.equal(isCoreRequest(request(name, { ...input, profileId: 'someone' }, 'query')), false)
+    assert.equal(coreOperation(name as Parameters<typeof coreOperation>[0])?.permission, 'library:read')
+  }
+  const commands = {
+    'tags.create': { name: '夜晚', tagsRevision: 1 },
+    'tags.rename': { tagId: 'tag:one', name: '雨夜', nameRevision: 1 },
+    'tags.delete': { tagId: 'tag:one', nameRevision: 1, membersRevision: 2 },
+    'tags.member.set': { tagId: 'tag:one', entityId: 'recording', present: true, membersRevision: 2 }
+  }
+  for (const [name, input] of Object.entries(commands)) {
+    assert.equal(isCoreRequest(request(name, input)), true)
+    assert.equal(isCoreRequest(request(name, { ...input, filePath: 'D:/private.flac' })), false)
+    assert.equal(coreOperation(name as Parameters<typeof coreOperation>[0])?.permission, 'library:write')
+  }
+  assert.equal(isCoreRequest(request('tags.member.set', { tagId: 'tag:one', entityId: 'r', present: true })), false)
+  assert.equal(isCoreRequest(request('tags.play', { tagId: 'tag:one', token, sourceId: 'source' })), true)
+  assert.equal(isCoreRequest(request('tags.play', { tagId: 'tag:one', token: { ...token, path: 'D:/private' } })), false)
+  assert.equal(isCoreRequest(request('tags.play', { tagId: 'tag:one', token, tracks: [] })), false)
+  assert.equal(coreOperation('tags.play')?.permission, 'playback:write')
+  for (const name of ['tags.state', 'tags.playbackPage', 'tags.sourceTracks'])
+    assert.equal(isCoreRequest(request(name, {}, 'query')), false)
+})
+
+test('preferences validate local states and server-owned targets without exposing migration or playback policy', () => {
+  const token = { preferencesRevision: 0, linkRevision: 0, targetKey: 'opaque' }
+  for (const state of ['none', 'favorite', 'ban'])
+    assert.equal(isCoreRequest(request('preferences.set', { entityId: 'song', token, state })), true)
+  for (const state of [null, false, 'like', 1, undefined])
+    assert.equal(isCoreRequest(request('preferences.set', { entityId: 'song', token, state })), false)
+  for (const extra of [{ profileId: 'other' }, { filePath: 'D:/private' }, { targetId: 'identity' }])
+    assert.equal(isCoreRequest(request('preferences.set', { entityId: 'song', token, state: 'ban', ...extra })), false)
+  assert.equal(isCoreRequest(request('preferences.set', { entityId: 'song', token: { ...token, extra: 1 }, state: 'ban' })), false)
+  assert.equal(isCoreRequest(request('preferences.detail', { entityId: 'song' }, 'query')), true)
+  assert.equal(isCoreRequest(request('preferences.targets', { entityId: 'song', trackContext: { provider: 'local', id: 'song' }, limit: 100 }, 'query')), true)
+  assert.equal(isCoreRequest(request('preferences.targets', { entityId: 'song', limit: 101 }, 'query')), false)
+  assert.equal(isCoreRequest(request('preferences.history', { entityId: 'song', offset: 0, limit: 100 }, 'query')), true)
+  assert.equal(isCoreRequest(request('preferences.history', { entityId: 'song', limit: 101 }, 'query')), false)
+  for (const name of ['preferences.automaticEligibility', 'preferences.playlistsMigrate', 'preferences.playlistsSave'])
+    assert.equal(isCoreRequest(request(name, { tracks: [] })), false)
+  for (const name of ['preferences.detail', 'preferences.targets', 'preferences.history'])
+    assert.equal(coreOperation(name as Parameters<typeof coreOperation>[0])?.permission, 'library:read')
+  assert.equal(coreOperation('preferences.set')?.permission, 'library:write')
+  assert.equal(coreOperation('playback.favorite')?.permission, 'playback:write')
+})
+
+test('ratings validate half-star steps, bounded history and server-owned default profile', () => {
+  const token = { ratingsRevision: 0, linkRevision: 0, targetKey: 'opaque' }
+  assert.equal(isCoreRequest(request('ratings.detail', { entityId: 'song' }, 'query')), true)
+  assert.equal(isCoreRequest(request('ratings.targets', { entityId: 'manual', offset: 20, limit: 100 }, 'query')), true)
+  assert.equal(isCoreRequest(request('ratings.targets', { entityId: 'manual', limit: 101 }, 'query')), false)
+  assert.equal(isCoreRequest(request('ratings.targets', { entityId: 'manual', trackContext: { provider: 'local', id: 'song' } }, 'query')), true)
+  assert.equal(isCoreRequest(request('ratings.targets', { entityId: 'manual', trackContext: { provider: 'local', id: 'song', filePath: 'D:/private' } }, 'query')), false)
+  assert.equal(isCoreRequest(request('ratings.targets', { entityId: 'manual', trackContext: { provider: 'Local', id: 'song' } }, 'query')), false)
+  assert.equal(isCoreRequest(request('ratings.targets', { entityId: 'manual', kind: 'release' }, 'query')), false)
+  assert.equal(isCoreRequest(request('ratings.history', { entityId: 'song', limit: 100 }, 'query')), true)
+  assert.equal(isCoreRequest(request('ratings.history', { entityId: 'song', limit: 101 }, 'query')), false)
+  for (const steps of [1, 10, null])
+    assert.equal(isCoreRequest(request('ratings.set', { entityId: 'song', token, steps })), true)
+  for (const steps of [0, 11, 1.5, '8', undefined])
+    assert.equal(isCoreRequest(request('ratings.set', { entityId: 'song', token, steps })), false)
+  for (const extra of [{ profileId: 'other' }, { filePath: 'D:/private' }, { targetId: 'identity' }])
+    assert.equal(isCoreRequest(request('ratings.set', { entityId: 'song', token, steps: 8, ...extra })), false)
+  assert.equal(isCoreRequest(request('ratings.set', { entityId: 'song', token: { ...token, x: 1 }, steps: 8 })), false)
+  assert.equal(coreOperation('ratings.detail')?.permission, 'library:read')
+  assert.equal(coreOperation('ratings.targets')?.permission, 'library:read')
+  assert.equal(coreOperation('ratings.history')?.permission, 'library:read')
+  assert.equal(coreOperation('ratings.set')?.permission, 'library:write')
 })
 
 test('unified catalog exposes bounded identity queries and explicit playback, not caller-owned source authority', () => {
@@ -272,7 +414,7 @@ test('Core analysis takes revision-fenced records and SQL selections, never arbi
 })
 
 test('personal backup accepts a Core preview identity and restore choices, never renderer-owned data or file paths', () => {
-  for (const name of ['backup.export', 'backup.preview', 'backup.chooseFolder']) {
+  for (const name of ['backup.export', 'backup.preview', 'backup.recover', 'backup.chooseFolder']) {
     assert.equal(isCoreRequest(request(name, {})), true)
     assert.equal(isCoreRequest(request(name, { statistics: {} })), false)
     assert.equal(isCoreRequest(request(name, { path: 'D:/backup.json' })), false)
@@ -287,6 +429,14 @@ test('personal backup accepts a Core preview identity and restore choices, never
     false
   )
   assert.equal(isCoreRequest(request('backup.stage', { id: 'preview', options, data: {} })), false)
+  assert.equal(isCoreRequest(request('backup.export', { domains: ['music', 'versions'] })), true)
+  for (const domains of [[], ['music', 'music'], ['unknown']])
+    assert.equal(isCoreRequest(request('backup.export', { domains })), false)
+  assert.equal(isCoreRequest(request('backup.repreview', { id: 'preview', options: { ...options, domains: ['music'] } })), true)
+  assert.equal(isCoreRequest(request('backup.repreview', { id: 'preview', options, data: {} })), false)
+  assert.equal(isCoreRequest(request('backup.stage', { id: 'preview', options: { ...options, domains: ['music', 'music'] } })), false)
+  for (const name of ['musicBackupExport', 'musicBackupRestore', 'musicBackupRevision', 'musicBackupPreview'])
+    assert.equal(isCoreRequest(request(name, {})), false)
 })
 
 test('duplicate inspection exposes finite task and bounded result pages, never caller-supplied candidates or hash paths', () => {

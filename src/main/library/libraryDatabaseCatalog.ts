@@ -20,6 +20,10 @@ import type { TrackData } from '../../shared/track.ts'
 import { projectCoreTrack } from '../../core/projections.ts'
 import { normalizeCueRange } from '../../shared/cue.ts'
 import { libraryTrack } from '../../core/playback/libraryTrack.ts'
+import { normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
+
+/** First actual catalog membership publication, not Track.addedAt or cached-source time. */
+export const CATALOG_MEMBERSHIP_ADDED_PREFIX = 'membership_added:'
 
 /** Created in the same schema transaction as user_version. Backfill is deliberately not DDL. */
 export const CATALOG_SCHEMA_SQL = `
@@ -79,8 +83,26 @@ CREATE VIEW catalog_entity_sources AS
   UNION ALL SELECT artist_id,source_id FROM catalog_source_artists;
 `
 
+/** A source album project is a new layer, not a relabelled release/version. */
+export const CATALOG_PROJECT_SCHEMA_SQL = `
+CREATE TABLE catalog_release_projects(release_id TEXT PRIMARY KEY REFERENCES catalog_entities(id),
+  project_id TEXT NOT NULL UNIQUE REFERENCES catalog_entities(id));
+CREATE INDEX catalog_entities_kind ON catalog_entities(kind,id);
+INSERT INTO catalog_state VALUES('project_cursor','0'),
+  ('project_horizon',CAST((SELECT coalesce(max(rowid),0) FROM catalog_entities) AS TEXT));
+DROP VIEW catalog_entity_sources;
+CREATE VIEW catalog_entity_sources AS
+  SELECT recording AS entity_id,id AS source_id FROM catalog_bindings
+  UNION ALL SELECT release,id FROM catalog_bindings WHERE release IS NOT NULL
+  UNION ALL SELECT artist_id,source_id FROM catalog_source_artists
+  UNION ALL SELECT p.project_id,s.id FROM catalog_bindings s
+    JOIN catalog_release_projects p ON p.release_id=s.release;
+`
+
 type Row = Record<string, string | number | null>
-type Owner = { sql: DatabaseSync; transaction<T>(action: () => T): T }
+type Owner = { sql: DatabaseSync; transaction<T>(action: () => T): T;
+  collectionSelection(collection: 'artists' | 'albums', id: string): { sql: string; params: SQLInputValue[] }
+}
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 const stale = () =>
   Object.assign(new Error('音乐资料已变化，请刷新后重试'), { code: 'STALE_REVISION' })
@@ -114,6 +136,75 @@ export class LibraryDatabaseCatalog {
   private fence(revision?: number) {
     if (revision !== undefined && revision !== Number(this.state('revision'))) throw stale()
   }
+  /** Existing members without historical evidence remain unknown, including after re-add. */
+  private preserveMembershipHistory(owner: 'local' | 'playlists', trackId?: string) {
+    if (owner === 'local' && trackId !== undefined) {
+      // Local maintenance publishes one exact Track at a time. Start with its
+      // indexed source pair, not all prior local members for every new file.
+      this.sql.prepare(`INSERT OR IGNORE INTO catalog_state(key,value)
+        SELECT ?||s.id,'unknown' FROM catalog_sources s CROSS JOIN catalog_memberships m
+        ON m.source_id=s.id AND m.owner='local' WHERE s.provider='local' AND s.track_id=?`)
+        .run(CATALOG_MEMBERSHIP_ADDED_PREFIX, trackId)
+      return
+    }
+    this.sql.prepare(`INSERT OR IGNORE INTO catalog_state(key,value)
+      SELECT ?||m.source_id,'unknown' FROM catalog_memberships m
+      JOIN catalog_sources s ON s.id=m.source_id
+      WHERE m.owner=? AND (? IS NULL OR s.track_id=?)`)
+      .run(CATALOG_MEMBERSHIP_ADDED_PREFIX, owner, trackId ?? null, trackId ?? null)
+  }
+  private rememberMembership(sourceId: string) {
+    this.sql.prepare(`INSERT OR IGNORE INTO catalog_state(key,value)
+      VALUES(?,CASE WHEN EXISTS(SELECT 1 FROM catalog_memberships WHERE source_id=?)
+        THEN 'unknown' ELSE ? END)`)
+      .run(CATALOG_MEMBERSHIP_ADDED_PREFIX + sourceId, sourceId, String(Date.now()))
+  }
+  /** A portable music-only restore retains personal source references, not playable sources.
+   * Attach them only when the ordinary catalog ingests that exact real source again. */
+  private reattachPortablePersonalSource(sourceId: string, sourceKey: string) {
+    const retained = (key: string): Record<string, string | number | null> | null => {
+      const row = this.sql.prepare('SELECT value FROM meta WHERE key=?').get(key)
+      if (!row) return null
+      const value = JSON.parse(String(row.value))
+      return value as Record<string, string | number | null>
+    }
+    const restored = retained('music_backup_offline_source:' + sourceKey)
+    if (restored && restored.id !== sourceId) {
+      this.sql.prepare(`INSERT OR IGNORE INTO music_genre_overrides(target_kind,target_id,genre_ids)
+        SELECT target_kind,?,genre_ids FROM music_genre_overrides WHERE target_kind='source' AND target_id=?`).run(sourceId, restored.id)
+      this.sql.prepare(`INSERT OR IGNORE INTO music_genre_import_overrides(target_kind,target_id,import_key,genre_ids)
+        SELECT target_kind,?,import_key,genre_ids FROM music_genre_import_overrides WHERE target_kind='source' AND target_id=?`).run(sourceId, restored.id)
+      this.sql.prepare("DELETE FROM music_genre_overrides WHERE target_kind='source' AND target_id=?").run(restored.id)
+      this.sql.prepare("DELETE FROM music_genre_import_overrides WHERE target_kind='source' AND target_id=?").run(restored.id)
+    }
+    const history = retained('music_backup_offline_membership:' + sourceKey)
+    if (history) this.sql.prepare('INSERT OR IGNORE INTO catalog_state VALUES(?,?)').run(CATALOG_MEMBERSHIP_ADDED_PREFIX + sourceId, String(history.added_at))
+    const favorite = this.sql.prepare('SELECT value FROM meta WHERE key=?').get('music_backup_offline_favorites:' + sourceKey)
+    if (favorite) {
+      const placeholders = JSON.parse(JSON.parse(String(favorite.value))) as Array<{ id: string }>, row = this.sql.prepare('SELECT payload,default_id FROM personal_preference_playlists WHERE id=1').get()
+      const source = this.sql.prepare(`SELECT s.track_id,s.provider,s.payload,t.payload AS local_payload
+        FROM catalog_sources s LEFT JOIN tracks t ON s.provider='local' AND t.id=s.track_id WHERE s.id=?`).get(sourceId)
+      if (row && source) {
+        const lists = JSON.parse(String(row.payload)) as Array<{ id: string; trackIds: string[]; trackSnapshots?: Record<string, unknown> }>, view = lists.find(list => list.id === row.default_id)
+        if (view && placeholders.some(p => view.trackIds.includes(p.id))) {
+          const ids = new Set(placeholders.map(p => p.id)), snapshots = { ...view.trackSnapshots }
+          const track = source.provider === 'local' && source.local_payload
+            ? libraryTrack(JSON.parse(String(source.local_payload))) : JSON.parse(String(source.payload)) as TrackData
+          const existing = snapshots[String(source.track_id)] as TrackData | undefined
+          // A Track ID from another provider cannot replace this exact source's
+          // retained occurrence or overwrite the other source's saved snapshot.
+          if (existing && versionSourceKey(existing) !== sourceKey) return
+          view.trackIds = view.trackIds.map(id => ids.has(id) ? String(source.track_id) : id)
+          for (const id of ids) delete snapshots[id]
+          snapshots[String(source.track_id)] = track; view.trackSnapshots = snapshots
+          this.sql.prepare('UPDATE personal_preference_playlists SET payload=? WHERE id=1').run(JSON.stringify(lists))
+          // Publish through the existing preference event boundary. Its trigger
+          // advances the playlist revision in this same catalog transaction.
+          this.sql.prepare("UPDATE personal_preferences_state SET revision=revision+1 WHERE profile_id='default'").run()
+        }
+      }
+    }
+  }
   status(): CatalogStatus {
     const cursor = Number(this.state('local_cursor')),
       horizon = Number(this.state('local_horizon'))
@@ -126,7 +217,9 @@ export class LibraryDatabaseCatalog {
       revision: Number(this.state('revision')),
       localCursor: cursor,
       localHorizon: horizon,
-      localPending: cursor < horizon || dirty > 0,
+      localPending:
+        cursor < horizon || dirty > 0 ||
+        Number(this.state('project_cursor')) < Number(this.state('project_horizon')),
       dirtySources: dirty,
       playlistsRevision: playlists === null ? null : Number(playlists),
       versionsRevision: versions === null ? null : Number(versions)
@@ -163,6 +256,7 @@ export class LibraryDatabaseCatalog {
           const raw = JSON.parse(str(row.payload))
           this.upsert(libraryTrack(raw), 'local', raw)
         } else {
+          this.preserveMembershipHistory('local', str(item.track_id))
           this.sql
             .prepare(
               "DELETE FROM catalog_memberships WHERE owner='local' AND source_id IN (SELECT id FROM catalog_sources WHERE provider='local' AND track_id=?)"
@@ -176,7 +270,17 @@ export class LibraryDatabaseCatalog {
         }
         this.sql.prepare('DELETE FROM catalog_pending WHERE track_id=?').run(item.track_id)
       }
-      if (processed || pending.length || cursor < horizon) this.bump()
+      const projectCursor = Number(this.state('project_cursor')),
+        projectHorizon = Number(this.state('project_horizon'))
+      const remaining = limit - processed - pending.length
+      if (projectCursor < projectHorizon && remaining > 0) {
+        const rows = this.sql
+          .prepare("SELECT rowid AS seq,id FROM catalog_entities WHERE rowid>? AND rowid<=? AND kind='release' ORDER BY rowid LIMIT ?")
+          .all(projectCursor, projectHorizon, remaining) as Row[]
+        for (const row of rows) this.project(str(row.id))
+        this.set('project_cursor', rows.length === remaining ? Number(rows.at(-1)!.seq) : projectHorizon)
+      }
+      if (processed || pending.length || cursor < horizon || projectCursor < projectHorizon) this.bump()
       return this.status()
     })
   }
@@ -201,6 +305,30 @@ export class LibraryDatabaseCatalog {
       this.sql
         .prepare('UPDATE catalog_entities SET title=?,artist=? WHERE id=?')
         .run(title, artist, id)
+    return id
+  }
+  private project(releaseId: string): string {
+    const release = this.sql
+      .prepare('SELECT title,artist,identity FROM catalog_entities WHERE id=?')
+      .get(releaseId) as Row
+    const found = this.sql
+      .prepare('SELECT project_id FROM catalog_release_projects WHERE release_id=?')
+      .get(releaseId) as Row | undefined
+    const id = found ? str(found.project_id) : `music_${randomUUID()}`
+    if (!found) {
+      this.sql.prepare("INSERT INTO catalog_entities VALUES(?,'album_project',?,?,?)")
+        .run(id, release.title, release.artist, release.identity)
+      this.sql.prepare('INSERT INTO catalog_release_projects VALUES(?,?)').run(releaseId, id)
+    } else this.sql.prepare('UPDATE catalog_entities SET title=?,artist=? WHERE id=?')
+      .run(release.title, release.artist, id)
+    return id
+  }
+  /** Personal data may retain a precise source without making it a library member. */
+  retainPersonalSource(track: TrackData): string {
+    const existing = this.sql.prepare('SELECT id FROM catalog_sources WHERE source_key=?').get(versionSourceKey(track))
+    if (existing) return String(existing.id)
+    const id = this.upsert(track)
+    this.bump()
     return id
   }
   private upsert(input: TrackData, owner?: 'local', raw: Partial<TrackData> = input): string {
@@ -267,10 +395,12 @@ export class LibraryDatabaseCatalog {
           input.albumArtist || input.artist || ''
         )
     }
+    if (release) this.project(release)
     const track = snapshot(input, provider)
     if (owner) {
       // A changed selector/path is a different source. Retain its offline record,
       // but do not keep it as a live library member under the same Track ID.
+      this.preserveMembershipHistory(owner, input.id)
       this.sql
         .prepare(
           `DELETE FROM catalog_memberships WHERE owner='local' AND source_id IN
@@ -283,24 +413,19 @@ export class LibraryDatabaseCatalog {
         )
         .run(input.id, key)
     }
-    this.sql
-      .prepare(
-        `INSERT INTO catalog_sources VALUES(?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(source_key) DO UPDATE SET track_id=excluded.track_id,release_id=excluded.release_id,
-      album_key=excluded.album_key,payload=excluded.payload,availability=excluded.availability`
-      )
-      .run(
-        id,
-        key,
-        provider,
-        input.id,
-        recording,
-        release,
-        release ? albumKey : null,
-        JSON.stringify(track),
-        provider === 'local' ? 'indexed' : 'unknown'
-      )
-    this.sql.prepare('DELETE FROM catalog_source_artists WHERE source_id=?').run(id)
+    const availability = provider === 'local' ? 'indexed' : 'unknown'
+    if (previous) {
+      // An UPSERT DO UPDATE's conflict policy also governs writes in triggers.
+      // Use the known source branch so a queued genre invalidation stays idempotent.
+      this.sql.prepare(`UPDATE catalog_sources SET track_id=?,release_id=?,album_key=?,
+        payload=?,availability=? WHERE source_key=?`)
+        .run(input.id, release, release ? albumKey : null, JSON.stringify(track), availability, key)
+    } else {
+      this.sql.prepare('INSERT INTO catalog_sources VALUES(?,?,?,?,?,?,?,?,?)')
+        .run(id, key, provider, input.id, recording, release, release ? albumKey : null,
+          JSON.stringify(track), availability)
+    }
+    this.reattachPortablePersonalSource(id, key)
     this.sql.prepare('DELETE FROM catalog_facts WHERE source_id=?').run(id)
     const fact = (entityId: string, field: string, value: string) =>
       this.sql
@@ -313,6 +438,7 @@ export class LibraryDatabaseCatalog {
       Array.isArray(raw.artists) && raw.artists.length
         ? (track.artists ?? [])
         : [{ name: str(raw.artist) }]
+    const performerIds: string[] = []
     for (const [index, artist] of artists.entries()) {
       if (!str(artist.name).trim()) continue
       // A compilation's first credit need not be the same person on every track.
@@ -322,13 +448,18 @@ export class LibraryDatabaseCatalog {
           ? JSON.stringify([provider, String(artist.id)])
           : JSON.stringify([provider, recording, index])
       const performer = this.entity('source.artist', artistKey, 'artist', artist.name)
+      performerIds.push(performer)
       this.sql
         .prepare('INSERT OR IGNORE INTO catalog_source_artists VALUES(?,?)')
         .run(id, performer)
       fact(performer, 'artist', artist.name)
     }
-    if (owner)
+    this.sql.prepare(`DELETE FROM catalog_source_artists WHERE source_id=?
+      AND artist_id NOT IN (SELECT value FROM json_each(?))`).run(id, JSON.stringify(performerIds))
+    if (owner) {
+      this.rememberMembership(id)
       this.sql.prepare('INSERT OR IGNORE INTO catalog_memberships VALUES(?,?)').run(owner, id)
+    }
     return id
   }
   sync(request: CatalogSync): CatalogSyncResult {
@@ -373,6 +504,14 @@ export class LibraryDatabaseCatalog {
         if (request.tracks.length) this.bump()
         return { id: request.id, sequence: request.sequence + 1 }
       }
+      this.preserveMembershipHistory('playlists')
+      // Only this publication makes staged platform sources library members. An
+      // aborted append never records a time, and re-projection never changes it.
+      this.sql.prepare(`INSERT OR IGNORE INTO catalog_state(key,value)
+        SELECT ?||i.source_id,CASE WHEN EXISTS(SELECT 1 FROM catalog_memberships m
+          WHERE m.source_id=i.source_id) THEN 'unknown' ELSE ? END
+        FROM catalog_import_members i WHERE i.import_id=?`)
+        .run(CATALOG_MEMBERSHIP_ADDED_PREFIX, String(Date.now()), request.id)
       this.sql.prepare("DELETE FROM catalog_memberships WHERE owner='playlists'").run()
       this.sql
         .prepare(
@@ -389,6 +528,10 @@ export class LibraryDatabaseCatalog {
     const parsed = parseMusicVersions(JSON.stringify(document))
     if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid version revision')
     this.owner.transaction(() => {
+      const bindings = () => new Map((this.sql.prepare(`SELECT s.scope,s.source_key,v.entity_id
+        FROM catalog_version_sources s JOIN catalog_versions v ON v.scope=s.scope AND v.id=s.version_id`)
+        .all() as Row[]).map((row) => [JSON.stringify([row.scope, row.source_key]), str(row.entity_id)]))
+      const before = bindings()
       this.sql.exec('DELETE FROM catalog_version_sources; DELETE FROM catalog_versions;')
       for (const scope of ['tracks', 'albums'] as const) {
         const families = new Map(
@@ -405,6 +548,7 @@ export class LibraryDatabaseCatalog {
             'manual'
           )
           const family = families.get(version.id)
+          if (kind === 'release') this.project(id)
           this.sql
             .prepare('INSERT INTO catalog_versions VALUES(?,?,?,?,?,?,?)')
             .run(
@@ -422,6 +566,29 @@ export class LibraryDatabaseCatalog {
               .run(scope, source, version.id)
         }
       }
+      const after = bindings()
+      const touched = new Set<string>()
+      for (const key of new Set([...before.keys(), ...after.keys()])) {
+        if (before.get(key) === after.get(key)) continue
+        if (before.has(key)) touched.add(before.get(key)!)
+        if (after.has(key)) touched.add(after.get(key)!)
+        const [scope, sourceKey] = JSON.parse(key) as string[]
+        const column = scope === 'tracks' ? 'source_key' : 'album_key'
+        const rows = this.sql.prepare(`SELECT recording_id,release_id FROM catalog_sources WHERE ${column}=?`)
+          .all(sourceKey) as Row[]
+        for (const row of rows) {
+          const id = scope === 'tracks' ? row.recording_id : row.release_id
+          if (id) touched.add(str(id))
+        }
+      }
+      const touch = this.sql.prepare(`INSERT INTO metadata_identification_inputs VALUES(?,1)
+        ON CONFLICT(entity_id) DO UPDATE SET revision=revision+1`)
+      for (const id of touched) {
+        touch.run(id)
+        const project = this.sql.prepare('SELECT project_id FROM catalog_release_projects WHERE release_id=?')
+          .get(id) as Row | undefined
+        if (project) touch.run(project.project_id)
+      }
       this.set('versions_revision', revision)
       this.bump()
     })
@@ -437,29 +604,52 @@ export class LibraryDatabaseCatalog {
       conditions.push('s.provider=?')
       params.push(query.source)
     }
+    const context = query.context
+    if (context) {
+      conditions.push("s.availability<>'missing'", `s.provider<>'local' OR (EXISTS(SELECT 1 FROM tracks t WHERE t.id=s.track_id)
+        AND NOT EXISTS(SELECT 1 FROM catalog_pending p WHERE p.track_id=s.track_id))`)
+      if (context.type === 'track') {
+        conditions.push('s.provider=? AND s.track_id=?')
+        params.push(context.provider, context.id)
+      } else if (context.type === 'collection') {
+        const selection = this.owner.collectionSelection(context.collection, context.id)
+        conditions.push(`s.provider='local' AND s.track_id IN (SELECT id FROM tracks ${selection.sql})`)
+        params.push(...selection.params)
+      } else if (query.kind === 'artist') {
+        conditions.push("b.entity_id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.artist' AND key=?)")
+        params.push(JSON.stringify([context.provider, context.id]))
+      } else {
+        conditions.push("s.release_id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.release' AND key=?)")
+        params.push(JSON.stringify(['album', context.provider, `id:${context.id}`]))
+      }
+    }
     // Aggregate from the source side once, rather than an OR-correlated full
     // source scan for every entity. Filtering keeps sourceCount meaningful.
+    const bindings = query.kind === 'artist' ? 'catalog_source_artists'
+      : query.kind === 'album_project' ? `(SELECT p.project_id entity_id,s.id source_id FROM catalog_bindings s
+        JOIN catalog_release_projects p ON p.release_id=s.release)`
+      : `(SELECT ${query.kind} entity_id,id source_id FROM catalog_bindings${query.kind === 'release' ? ' WHERE release IS NOT NULL' : ''})`
+    const relation = query.kind === 'artist' ? '(SELECT artist_id entity_id,source_id FROM catalog_source_artists)' : bindings
     const cte = `WITH candidates AS (SELECT b.entity_id,count(*) AS source_count
-      FROM catalog_entity_sources b JOIN catalog_sources s ON s.id=b.source_id
-      WHERE ${conditions.join(' AND ')} GROUP BY b.entity_id)`
+      FROM ${relation} b JOIN catalog_sources s ON s.id=b.source_id
+      WHERE ${conditions.map(c => `(${c})`).join(' AND ')} GROUP BY b.entity_id)`
     params.push(query.kind)
     let where = 'e.kind=?'
     if (query.search) {
       where += " AND instr(lower(e.title || ' ' || e.artist),lower(?))>0"
       params.push(query.search)
     }
-    const from = `FROM candidates c JOIN catalog_entities e ON e.id=c.entity_id WHERE ${where}`
-    const total = Number(
-      (this.sql.prepare(`${cte} SELECT count(*) AS n ${from}`).get(...params) as Row).n
-    )
+    const from = `FROM candidates c CROSS JOIN catalog_entities e ON e.id=c.entity_id WHERE ${where}`
     const offset = query.offset ?? 0
     const rows = this.sql
       .prepare(
-        `${cte} SELECT e.*,c.source_count ${from}
-      ORDER BY e.title COLLATE NOCASE,e.id LIMIT ? OFFSET ?`
+        `${cte}, matched AS MATERIALIZED (SELECT e.*,c.source_count ${from}),
+        page AS (SELECT * FROM matched ORDER BY title COLLATE NOCASE,id LIMIT ? OFFSET ?)
+        SELECT p.*,t.total FROM (SELECT count(*) total FROM matched) t LEFT JOIN page p ON 1
+        ORDER BY title COLLATE NOCASE,id`
       )
       .all(...params, query.limit ?? 200, offset) as Row[]
-    return { revision: Number(this.state('revision')), offset, total, items: rows.map(entityView) }
+    return { revision: Number(this.state('revision')), offset, total: Number(rows[0].total), items: rows.filter(row => row.id !== null).map(entityView) }
   }
   detail(id: string, revision?: number): CatalogDetail {
     if (!validCatalogPayload('catalog.detail', { id, revision }))
@@ -472,7 +662,9 @@ export class LibraryDatabaseCatalog {
       )
       .get(id) as Row | undefined
     const mapped =
-      row?.kind === 'recording' ? 'recording_id' : row?.kind === 'release' ? 'release_id' : null
+      row?.kind === 'recording'
+        ? 'recording_id'
+        : row?.kind === 'release' || row?.kind === 'album_project' ? 'release_id' : null
     const args: SQLInputValue[] = [id]
     const projection = mapped
       ? `UNION ALL SELECT f.source_id,f.field,f.value,f.origin
@@ -608,6 +800,7 @@ function snapshot(track: TrackData, provider: string): TrackData {
     else if (typeof track[field] === 'number' && Number.isFinite(track[field]))
       Object.assign(result, { [field]: track[field] })
   if (track.cueRange) result.cueRange = normalizeCueRange(track.cueRange) ?? undefined
+  result.identityTags = normalizeTrackIdentityTags(track.identityTags)
   if (Array.isArray(track.artists))
     result.artists = track.artists
       .slice(0, 128)

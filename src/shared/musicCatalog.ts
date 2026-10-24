@@ -2,7 +2,7 @@ import type { CoreTrackView } from './coreViews.ts'
 import type { MusicVersionsDocument } from './musicVersions.ts'
 import type { TrackData } from './track.ts'
 
-export type CatalogKind = 'recording' | 'release' | 'artist'
+export type CatalogKind = 'recording' | 'release' | 'artist' | 'album_project'
 export const CATALOG_MAX_BATCH_BYTES = 1024 * 1024
 export interface CatalogEntity {
   id: string
@@ -12,6 +12,20 @@ export interface CatalogEntity {
   identity: 'source' | 'manual'
   sourceCount: number
 }
+/** References to existing catalog rows, not a claim of confirmed external identity. */
+export type CatalogEntityReference = Pick<CatalogEntity, 'id' | 'kind' | 'title' | 'artist'>
+export interface CatalogReferences {
+  revision: number
+  total: number
+  items: CatalogEntityReference[]
+}
+export interface CatalogTrackReferences extends CatalogReferences {
+  sourceId: string
+}
+export type CatalogReferenceContext =
+  | { type: 'track'; provider: string; id: string }
+  | { type: 'collection'; collection: 'artists' | 'albums'; id: string }
+  | { type: 'native'; provider: string; id: string }
 export interface CatalogQuery {
   kind: CatalogKind
   scope?: 'library' | 'all'
@@ -20,6 +34,8 @@ export interface CatalogQuery {
   revision?: number
   offset?: number
   limit?: number
+  /** Exact legacy membership/native-ID lookup. Never a title-search shortcut. */
+  context?: CatalogReferenceContext
 }
 export interface CatalogPage {
   revision: number
@@ -105,6 +121,21 @@ const text = (v: unknown, max: number) =>
 const optional = (v: unknown, check: (v: unknown) => boolean) => v === undefined || check(v)
 const keys = (v: Record<string, unknown>, allowed: string[]) =>
   Object.keys(v).every((key) => allowed.includes(key))
+const validContext = (v: unknown, kind: unknown): boolean => {
+  if (!record(v)) return false
+  if (v.type === 'collection')
+    return (
+      keys(v, ['type', 'collection', 'id']) &&
+      (v.collection === 'artists' || v.collection === 'albums') && text(v.id, 32768)
+    )
+  return (
+    (v.type === 'track' || v.type === 'native') && keys(v, ['type', 'provider', 'id']) &&
+    typeof v.provider === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(v.provider) &&
+    text(v.id, v.type === 'track' ? 8192 : 128) &&
+    (v.type !== 'native' || (v.provider !== 'local' && typeof kind === 'string' &&
+      ['artist', 'release', 'album_project'].includes(kind)))
+  )
+}
 
 /** Shared by public validation and SQL reads; paths, URLs and arbitrary filters are not inputs. */
 export function validCatalogPayload(name: string, value: unknown): boolean {
@@ -116,15 +147,16 @@ export function validCatalogPayload(name: string, value: unknown): boolean {
   switch (name) {
     case 'catalog.query':
       return (
-        keys(value, ['kind', 'scope', 'source', 'search', 'revision', 'offset', 'limit']) &&
-        ['recording', 'release', 'artist'].includes(String(value.kind)) &&
+        keys(value, ['kind', 'scope', 'source', 'search', 'revision', 'offset', 'limit', 'context']) &&
+        typeof value.kind === 'string' &&
+        ['recording', 'release', 'artist', 'album_project'].includes(value.kind) &&
         optional(value.scope, (v) => v === 'library' || v === 'all') &&
         optional(value.source, (v) => text(v, 128)) &&
         optional(
           value.search,
           (v) => typeof v === 'string' && v.length <= 512 && !v.includes('\0')
         ) &&
-        page()
+        optional(value.context, v => validContext(v, value.kind)) && page()
       )
     case 'catalog.sources':
       return (

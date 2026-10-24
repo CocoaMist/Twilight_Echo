@@ -5,6 +5,7 @@ import type { LibraryQueueSeedProducer } from './libraryQueueBuild.ts'
 import { libraryTrack } from './libraryTrack.ts'
 import { toPlaybackQueueSnapshot } from './queueSnapshots.ts'
 import { projectCoreError } from '../projections.ts'
+import { automaticPlaybackTracks, type AutomaticPlaybackAllowed } from './automaticPlayback.ts'
 
 export interface HeartProviders {
   call(
@@ -14,6 +15,7 @@ export interface HeartProviders {
   ): Promise<unknown>
 }
 interface Options extends HeartProviders {
+  automaticPlaybackAllowed?: AutomaticPlaybackAllowed
   queue(): CoreQueueReference | null
   track(): TrackData | null
   append(queueId: string, tracks: TrackData[], current: () => boolean): Promise<number>
@@ -68,11 +70,11 @@ export class HeartQueue {
   state(): CoreHeartState {
     const queue = this.options.queue(),
       track = this.options.track()
-    const available =
-      !!this.context && this.context.queueId === queue?.id && track?.source === 'ncm'
+    const attached = !!this.context && this.context.queueId === queue?.id
+    const available = attached && track?.source === 'ncm'
     return {
       available,
-      active: available && !!this.context?.baseQueue,
+      active: attached && !!this.context?.baseQueue,
       loading: this.pending !== null,
       remaining: queue ? Math.max(0, queue.total - queue.index - 1) : 0,
       error: this.error
@@ -82,7 +84,8 @@ export class HeartQueue {
     if (this.closed) return
     if (this.context && this.context.queueId !== this.options.queue()?.id) this.stop()
     const state = this.state()
-    if (playing && state.active && state.remaining < 3) void this.refill().catch(() => {})
+    if (playing && state.active && state.available && state.remaining < 3)
+      void this.refill().catch(() => {})
   }
 
   async liked(
@@ -152,7 +155,7 @@ export class HeartQueue {
       signal
     )
     signal.throwIfAborted()
-    return tracks(result)
+    return automaticPlaybackTracks(tracks(result), this.options.automaticPlaybackAllowed, signal)
   }
   refill(explicit = false): Promise<number> {
     if (this.pending) return this.pending
@@ -169,6 +172,12 @@ export class HeartQueue {
       (!explicit && this.options.now() < this.retryAfter)
     )
       return Promise.resolve(0)
+    // Source recovery can keep this recommendation occurrence playing locally.
+    // It remains an automatic queue, but a local decoder is not a provider seed.
+    if (seed.source !== 'ncm' || !seed.ncmSongId) {
+      if (explicit) return Promise.reject(new Error('Heart mode requires an NCM seed'))
+      return Promise.resolve(0)
+    }
     const current = () =>
       !signal.aborted && context === this.context && this.options.queue()?.id === context.queueId
     const work = Promise.resolve()

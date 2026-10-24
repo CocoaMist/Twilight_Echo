@@ -3,6 +3,7 @@ import type { BpmAnalysisResult } from './audioEngineTypes.ts'
 import type { NcmPlaybackQuality } from './appSettings.ts'
 import type { LyricSource } from './lyricsManagement.ts'
 import type { NetworkEntry } from './networkSources.ts'
+import type { TrackIdentityTags } from './trackIdentification.ts'
 
 export type BuiltInTrackSource = 'local' | 'ncm'
 export type TrackSource = BuiltInTrackSource | (string & {})
@@ -21,6 +22,8 @@ export interface TrackArtistRef {
 }
 
 export interface TrackData {
+  /** Source observations retained for identity matching, independent of display enrichment. */
+  identityTags?: TrackIdentityTags
   isrc?: string
   id: string
   /** An occurrence is not a track ID: duplicate queue entries retain their identity. */

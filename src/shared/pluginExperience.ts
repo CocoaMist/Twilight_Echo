@@ -17,6 +17,13 @@ export interface StartupExperience {
   experienceId: string
 }
 
+export const EXPERIENCE_MUSIC_OPERATIONS = [
+  'status', 'task', 'preview', 'import', 'reconcile', 'introductions', 'credits', 'enrich',
+  'inventory', 'history', 'history.read', 'restore', 'cancel',
+  'provenance.list', 'provenance.read', 'provenance.review'
+] as const
+export type ExperienceMusicOperation = typeof EXPERIENCE_MUSIC_OPERATIONS[number]
+
 export function normalizeStartupExperience(value: unknown): StartupExperience | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const { pluginId, experienceId } = value as Record<string, unknown>

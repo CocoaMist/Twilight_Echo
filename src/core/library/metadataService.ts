@@ -18,8 +18,10 @@ import {
 } from './metadataEnrichment.ts'
 import { searchMetadataTracks } from './metadataSearch.ts'
 import { patchLibraryMetadata } from './metadataPatch.ts'
+import { CoreEntityMetadataService, type EntityMetadataOptions } from './entityMetadataService.ts'
 
 interface Options {
+  entities?: EntityMetadataOptions
   database: Pick<LibraryDatabaseApi, 'queryTracks' | 'getTracksByIds' | 'patchTracks'>
   provider: LibraryMetadataEnrichmentProvider
   available(): boolean
@@ -38,6 +40,7 @@ interface Candidates {
 
 /** Provider work and version-fenced commits survive UI detachment, never a second library writer. */
 export class CoreMetadataService {
+  readonly entities: CoreEntityMetadataService | undefined
   private readonly options: Options
   private readonly queue: LibraryMetadataEnrichmentQueue
   private activated = false
@@ -54,6 +57,7 @@ export class CoreMetadataService {
   private totals = { total: 0, completed: 0, failed: 0, skipped: 0, error: '' }
   constructor(options: Options) {
     this.options = options
+    this.entities = options.entities ? new CoreEntityMetadataService(options.entities) : undefined
     this.queue = new LibraryMetadataEnrichmentQueue({
       provider: options.provider,
       now: options.now,
@@ -90,6 +94,7 @@ export class CoreMetadataService {
   activate(): void {
     if (this.activated || this.stopped) return
     this.activated = true
+    this.entities?.activate()
     this.refresh()
   }
   snapshot() {
@@ -249,7 +254,7 @@ export class CoreMetadataService {
     this.stopped = true
     this.cancel()
     this.lifetime.abort(new Error('Core metadata service stopped'))
-    await Promise.all([this.task, this.queue.join(), Promise.allSettled([...this.requests])])
+    await Promise.all([this.entities?.shutdown(), this.task, this.queue.join(), Promise.allSettled([...this.requests])])
     this.candidates.clear()
   }
 }

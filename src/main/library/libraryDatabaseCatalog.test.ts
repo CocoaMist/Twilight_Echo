@@ -10,6 +10,7 @@ import { versionSourceKey } from '../../shared/trackSourceIdentity.ts'
 import { getAlbumIdentity } from '../../shared/libraryIdentity.ts'
 import type { TrackData } from '../../shared/track.ts'
 import { LEGACY_CATALOG_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
+import { CATALOG_MEMBERSHIP_ADDED_PREFIX } from './libraryDatabaseCatalog.ts'
 
 const track = (id: string, extra: Partial<TrackData> = {}): TrackData => ({
   id,
@@ -46,6 +47,18 @@ function remote(db: LibraryDatabase, tracks: TrackData[], revision = 1) {
   job = db.catalogSync({ kind: 'append', ...job, tracks })
   db.catalogSync({ kind: 'commit', ...job })
 }
+
+test('catalog shared count/page preserves kind counts, empty results and beyond-tail offsets', t => {
+  const db = memory(t)
+  seed(db, [track('local')]); drain(db)
+  remote(db, [track('ncm:1', { source: 'ncm', filePath: '', albumId: 'remote' })])
+  const page = db.catalogQuery({ kind: 'recording', limit: 1, offset: 99 })
+  assert.equal(page.total, 2); assert.deepEqual(page.items, [])
+  assert.equal(db.catalogQuery({ kind: 'release', limit: 1 }).total, 2)
+  assert.equal(db.catalogQuery({ kind: 'album_project', limit: 1 }).total, 2)
+  const empty = db.catalogQuery({ kind: 'recording', search: 'no such title' })
+  assert.equal(empty.total, 0); assert.deepEqual(empty.items, [])
+})
 
 test('catalog incrementally preserves IDs across metadata edits, removal, reimport and selector changes', (t) => {
   const db = memory(t),
@@ -369,4 +382,165 @@ test('catalog pages are bounded and revision fenced; albums without provider IDs
   assert.throws(() => db.catalogQuery({ kind: 'recording', limit: 201 }), /Invalid/)
   remote(db, [], 2)
   assert.throws(() => db.catalogQuery({ kind: 'recording', revision: first.revision }), /已变化/)
+})
+
+function sourceId(db: LibraryDatabase, value: TrackData): string {
+  return String(db.sql.prepare('SELECT id FROM catalog_sources WHERE source_key=?')
+    .get(versionSourceKey(value))!.id)
+}
+function membershipTime(db: LibraryDatabase, id: string): string | null {
+  return db.sql.prepare('SELECT value FROM catalog_state WHERE key=?')
+    .get(CATALOG_MEMBERSHIP_ADDED_PREFIX + id)?.value as string | undefined ?? null
+}
+
+test('catalog membership time records actual local publication once, independent of Track.addedAt, rescan and re-add', (t) => {
+  let now = 1700000000000
+  t.mock.method(Date, 'now', () => now)
+  const db = memory(t), original = track('local-member', { addedAt: 42 })
+  seed(db, [original])
+  assert.equal(db.sql.prepare('SELECT count(*) n FROM catalog_state WHERE key LIKE ?')
+    .get(CATALOG_MEMBERSHIP_ADDED_PREFIX + '%')!.n, 0)
+  drain(db)
+  const id = sourceId(db, original)
+  assert.equal(membershipTime(db, id), String(now))
+  now += 1000
+  seed(db, [track(original.id, { addedAt: 9999999999999, title: 'Retagged' })])
+  drain(db)
+  assert.equal(membershipTime(db, id), '1700000000000')
+  now += 1000
+  seed(db, []); drain(db)
+  assert.equal(membershipTime(db, id), '1700000000000')
+  seed(db, [original]); drain(db)
+  assert.equal(sourceId(db, original), id)
+  assert.equal(membershipTime(db, id), '1700000000000')
+  now += 1000
+  const changed = track(original.id, { filePath: 'D:/music/different.flac' })
+  seed(db, [changed]); drain(db)
+  assert.equal(membershipTime(db, sourceId(db, changed)), String(now))
+  assert.equal(membershipTime(db, id), '1700000000000')
+})
+
+test('platform append and abort never invent membership time; successful publication and re-add preserve first time', (t) => {
+  let now = 1700000000000
+  t.mock.method(Date, 'now', () => now)
+  const db = memory(t), a = track('ncm:1001', { source: 'ncm', filePath: '', addedAt: 1 }),
+    b = track('ncm:1002', { source: 'ncm', filePath: '', addedAt: 9999999999999 })
+  remote(db, [a])
+  const aId = sourceId(db, a)
+  assert.equal(membershipTime(db, aId), String(now))
+  now += 1000
+  let job = db.catalogSync({ kind: 'begin', revision: 2 })
+  job = db.catalogSync({ kind: 'append', ...job, tracks: [b] })
+  const bId = sourceId(db, b)
+  assert.equal(membershipTime(db, bId), null)
+  db.catalogSync({ kind: 'abort', id: job.id })
+  assert.equal(membershipTime(db, bId), null)
+  assert.equal(membershipTime(db, aId), '1700000000000')
+  now += 1000
+  remote(db, [b], 3)
+  assert.equal(membershipTime(db, bId), String(now))
+  assert.equal(membershipTime(db, aId), '1700000000000')
+  now += 1000
+  remote(db, [a, b], 4)
+  assert.equal(membershipTime(db, aId), '1700000000000')
+  assert.equal(membershipTime(db, bId), '1700000002000')
+  remote(db, [a, b], 5)
+  assert.equal(membershipTime(db, bId), '1700000002000')
+})
+
+test('existing local membership without historical time remains unknown after reprojection, removal and selector changes', (t) => {
+  let now = 1700000000000
+  t.mock.method(Date, 'now', () => now)
+  const db = memory(t), a = track('legacy-a'), b = track('legacy-b'), c = track('legacy-c')
+  seed(db, [a, b, c]); drain(db)
+  const ids = [a, b, c].map(value => sourceId(db, value))
+  for (const id of ids) db.sql.prepare('DELETE FROM catalog_state WHERE key=?')
+    .run(CATALOG_MEMBERSHIP_ADDED_PREFIX + id)
+  now += 1000
+  // Retag one existing member, remove a second and change the third source key.
+  const changed = track(c.id, { filePath: 'D:/music/new-selector.flac' })
+  seed(db, [track(a.id, { title: 'Retagged' }), changed]); drain(db)
+  assert.deepEqual(ids.map(id => membershipTime(db, id)), ['unknown', 'unknown', 'unknown'])
+  assert.equal(membershipTime(db, sourceId(db, changed)), String(now))
+  now += 1000
+  seed(db, [a, b, c]); drain(db)
+  assert.deepEqual(ids.map(id => membershipTime(db, id)), ['unknown', 'unknown', 'unknown'])
+})
+
+test('legacy platform members stay unknown rather than receiving upgrade or reprojection time', (t) => {
+  let now = 1700000000000
+  t.mock.method(Date, 'now', () => now)
+  const db = memory(t), a = track('ncm:legacy', { source: 'ncm', filePath: '' }),
+    b = track('ncm:new', { source: 'ncm', filePath: '' })
+  remote(db, [a])
+  const aId = sourceId(db, a)
+  db.sql.prepare('DELETE FROM catalog_state WHERE key=?').run(CATALOG_MEMBERSHIP_ADDED_PREFIX + aId)
+  now += 1000
+  let job = db.catalogSync({ kind: 'begin', revision: 2 })
+  job = db.catalogSync({ kind: 'append', ...job, tracks: [a, b] })
+  const bId = sourceId(db, b)
+  assert.equal(membershipTime(db, aId), null)
+  assert.equal(membershipTime(db, bId), null)
+  db.catalogSync({ kind: 'abort', id: job.id })
+  remote(db, [a, b], 3)
+  assert.equal(membershipTime(db, aId), 'unknown')
+  assert.equal(membershipTime(db, bId), String(now))
+  now += 1000
+  remote(db, [], 4)
+  remote(db, [a, b], 5)
+  assert.equal(membershipTime(db, aId), 'unknown')
+  assert.equal(membershipTime(db, bId), '1700000001000')
+})
+
+test('membership time and actual membership publication roll back together on commit failure', (t) => {
+  let now = 1700000000000
+  t.mock.method(Date, 'now', () => now)
+  const db = memory(t), a = track('ncm:existing', { source: 'ncm', filePath: '' }),
+    b = track('ncm:staged', { source: 'ncm', filePath: '' })
+  remote(db, [a])
+  const aId = sourceId(db, a)
+  let job = db.catalogSync({ kind: 'begin', revision: 2 })
+  job = db.catalogSync({ kind: 'append', ...job, tracks: [b] })
+  const bId = sourceId(db, b)
+  db.sql.exec(`CREATE TEMP TRIGGER fail_membership BEFORE INSERT ON catalog_memberships
+    WHEN new.owner='playlists' BEGIN SELECT RAISE(ABORT,'Injected membership publication failure'); END;`)
+  now += 1000
+  assert.throws(() => db.catalogSync({ kind: 'commit', ...job }), /Injected membership publication/)
+  assert.equal(membershipTime(db, bId), null)
+  assert.equal(membershipTime(db, aId), '1700000000000')
+  assert.equal(db.sql.prepare('SELECT source_id FROM catalog_memberships').get()!.source_id, aId)
+  db.sql.exec('DROP TRIGGER fail_membership')
+  now += 1000
+  db.catalogSync({ kind: 'commit', ...job })
+  assert.equal(membershipTime(db, bId), String(now))
+})
+
+test('membership history survives database reopen and opening an older catalog does not fabricate missing times', (t) => {
+  let now = 1700000000000
+  t.mock.method(Date, 'now', () => now)
+  const root = mkdtempSync(join(tmpdir(), 'catalog-membership-history-')),
+    path = join(root, 'library.sqlite')
+  let db = new LibraryDatabase(path)
+  t.after(() => {
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const a = track('persisted'), b = track('legacy-unknown')
+  seed(db, [a, b]); drain(db)
+  const aId = sourceId(db, a), bId = sourceId(db, b)
+  db.sql.prepare('DELETE FROM catalog_state WHERE key=?').run(CATALOG_MEMBERSHIP_ADDED_PREFIX + bId)
+  const version = db.sql.prepare('PRAGMA user_version').get()!.user_version
+  db.close()
+  now += 1000
+  db = new LibraryDatabase(path)
+  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, version)
+  assert.equal(membershipTime(db, aId), '1700000000000')
+  assert.equal(membershipTime(db, bId), null)
+  seed(db, []); drain(db)
+  db.close()
+  now += 1000
+  db = new LibraryDatabase(path)
+  seed(db, [a, b]); drain(db)
+  assert.equal(membershipTime(db, aId), '1700000000000')
+  assert.equal(membershipTime(db, bId), 'unknown')
 })

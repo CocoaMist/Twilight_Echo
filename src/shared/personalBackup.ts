@@ -4,9 +4,10 @@ import { isPlaybackBookmarksDocument } from './playbackBookmarks.ts'
 import { isRadioStationsDocument } from './radioStations.ts'
 import { isPodcastSubscriptionsDocument } from './podcastSubscriptions.ts'
 import { isPlaybackSession } from './playbackSession.ts'
+import { validateMusicPersonalBackup, type MusicPersonalBackupDocument, type MusicPersonalBackupPreview } from './musicPersonalBackup.ts'
 
 export const PERSONAL_BACKUP_LIMIT = 180 * 1024 * 1024
-export const PERSONAL_DOMAINS = [
+export const PERSONAL_V1_DOMAINS = [
   'library',
   'playlists',
   'queue',
@@ -18,13 +19,18 @@ export const PERSONAL_DOMAINS = [
   'statistics',
   'versions'
 ] as const
+export const PERSONAL_DOMAINS = [...PERSONAL_V1_DOMAINS, 'music'] as const
 export type PersonalDomain = (typeof PERSONAL_DOMAINS)[number]
 export type PersonalData = Partial<Record<PersonalDomain, unknown>>
 export interface PersonalBackup {
   format: 'twilight-personal-data'
-  version: 1
+  version: 1 | 2
   createdAt: string
   data: PersonalData
+}
+export interface PersonalBackupExportOptions {
+  /** Omitted exports every available domain; selection never truncates a domain. */
+  domains?: PersonalDomain[]
 }
 export interface PathMapping {
   from: string
@@ -36,10 +42,13 @@ export interface PersonalRestoreOptions {
   domains: PersonalDomain[]
 }
 export interface PersonalBackupPreview {
-  version: 1
+  version: 1 | 2
   createdAt: string
   rows: { domain: PersonalDomain; incoming: number; current: number; conflicts: number }[]
   roots: string[]
+  rootsTruncated?: boolean
+  music?: MusicPersonalBackupPreview
+  dependencies?: { domain: PersonalDomain; requires: PersonalDomain; selected: boolean; reason: string }[]
 }
 export const PERSONAL_DOMAIN_LABELS: Record<PersonalDomain, string> = {
   library: '曲库索引与排除记录',
@@ -51,7 +60,16 @@ export const PERSONAL_DOMAIN_LABELS: Record<PersonalDomain, string> = {
   radio: '电台收藏',
   podcasts: '播客订阅与进度',
   statistics: '听歌统计',
-  versions: '曲目与专辑版本关系'
+  versions: '曲目与专辑版本关系',
+  music: '收藏与音乐整理'
+}
+export const personalDomainLabel = (domain: PersonalDomain, version: 1 | 2): string =>
+  domain === 'playlists' && version === 2 ? '歌单' : PERSONAL_DOMAIN_LABELS[domain]
+export function validPersonalExportOptions(value: unknown): value is PersonalBackupExportOptions {
+  return isRecord(value) && Object.keys(value).every((key) => key === 'domains') &&
+    (value.domains === undefined || (Array.isArray(value.domains) && value.domains.length > 0 &&
+      value.domains.length <= PERSONAL_DOMAINS.length && new Set(value.domains).size === value.domains.length &&
+      value.domains.every((domain) => PERSONAL_DOMAINS.includes(domain))))
 }
 export const PERSONAL_STORAGE_KEYS = {
   statistics: 'twilight-echo:listening-stats:v1',
@@ -67,6 +85,12 @@ export function personalBackupJsonReplacer(this: unknown, key: string, value: un
     (key === 'streamUrl' && isRecord(this) && ('title' in this || 'source' in this))
     ? undefined
     : value
+}
+/** V2 embeds existing user images, never cache handles or session image URLs. */
+export function personalBackupV2JsonReplacer(this: unknown, key: string, value: unknown): unknown {
+  if (key === 'coverSource' || key === 'coverSmallSource') return undefined
+  if ((key === 'cover' || key === 'coverSmall') && typeof value === 'string' && !value.startsWith('data:image/')) return null
+  return personalBackupJsonReplacer.call(this, key, value)
 }
 const records = (v: unknown): v is Record<string, unknown>[] =>
   Array.isArray(v) && v.every(isRecord)
@@ -128,6 +152,8 @@ export function validatePersonalDomain(domain: PersonalDomain, value: unknown): 
       )
     case 'versions':
       return validateVersions(value)
+    case 'music':
+      return validateMusicPersonalBackup(value)
   }
 }
 function validateVersions(value: unknown): boolean {
@@ -182,16 +208,20 @@ export function validatePersonalBackup(value: unknown): value is PersonalBackup 
   return (
     isRecord(value) &&
     value.format === 'twilight-personal-data' &&
-    value.version === 1 &&
+    (value.version === 1 || value.version === 2) &&
     typeof value.createdAt === 'string' &&
     Number.isFinite(Date.parse(value.createdAt)) &&
     isRecord(value.data) &&
     Object.entries(value.data).every(
       ([k, v]) =>
-        PERSONAL_DOMAINS.includes(k as PersonalDomain) &&
+        (value.version === 1 ? PERSONAL_V1_DOMAINS : PERSONAL_DOMAINS).includes(k as never) &&
         // Database queue IDs belong to one profile, not to the portable format.
         !(k === 'playback' && isRecord(v) && v.libraryQueue !== undefined) &&
-        validatePersonalDomain(k as PersonalDomain, v)
+        validatePersonalDomain(k as PersonalDomain, v) &&
+        !(value.version === 2 && k === 'playlists' && Array.isArray(v) && v.some((playlist) =>
+          isRecord(playlist) && playlist.isDefault === true &&
+          ((Array.isArray(playlist.trackIds) && playlist.trackIds.length > 0) || playlist.trackSnapshots !== undefined || playlist.imported !== undefined ||
+            playlist.hiddenSources !== undefined || playlist.variantPreferences !== undefined)))
     )
   )
 }
@@ -299,9 +329,44 @@ function entries(domain: PersonalDomain, v: unknown): unknown[] {
   if (Array.isArray(v)) return v
   if (!isRecord(v)) return [v]
   if (domain === 'versions' || domain === 'playback') return [v]
+  if (domain === 'music' && isRecord(v.records)) return Object.values(v.records).flatMap((rows) => Array.isArray(rows) ? rows : [])
   return (collections[domain] || []).flatMap((k) =>
     Array.isArray(v[k]) ? v[k] : isRecord(v[k]) ? Object.keys(v[k]).map((id) => ({ id })) : []
   )
+}
+/** Music-only files retain exact local source identities. Offer common parent directories
+ * per volume/share without making those paths authorized or playable sources. */
+export function personalBackupPathRoots(backup: PersonalBackup): { roots: string[]; rootsTruncated?: boolean } {
+  if (isRecord(backup.data.library) && Array.isArray(backup.data.library.folders) && backup.data.library.folders.length)
+    return { roots: backup.data.library.folders as string[] }
+  if (backup.version !== 2 || !backup.data.music) return { roots: [] }
+  const directories = new Map<string, { path: string }>()
+  let truncated = false
+  for (const row of (backup.data.music as MusicPersonalBackupDocument).records.sources) {
+    if (row.provider !== 'local' || typeof row.source_key !== 'string') continue
+    let key: unknown
+    try { key = JSON.parse(row.source_key) } catch { continue }
+    if (!Array.isArray(key) || key[0] !== 'local' || typeof key[1] !== 'string') continue
+    const path = key[1].replace(/\\/g, '/'), windows = /^[a-z]:\//i.test(path) || path.startsWith('//')
+    if (!windows && !path.startsWith('/')) continue
+    const separator = path.lastIndexOf('/')
+    let directory = path.slice(0, separator) || '/'
+    if (/^[a-z]:$/i.test(directory)) directory += '/'
+    const volume = /^[a-z]:\//i.test(path) ? path.slice(0, 2).toLowerCase()
+      : path.startsWith('//') ? path.split('/').slice(0, 4).join('/').toLowerCase() : '/'
+    const previous = directories.get(volume)
+    if (previous) {
+      const old = previous.path.split('/'), next = directory.split('/')
+      let count = 0
+      while (count < old.length && count < next.length &&
+        (windows ? old[count].toLowerCase() === next[count].toLowerCase() : old[count] === next[count])) count++
+      directory = old.slice(0, count).join('/') || '/'
+      if (/^[a-z]:$/i.test(directory)) directory += '/'
+      previous.path = directory
+    } else if (directories.size < 100) directories.set(volume, { path: directory })
+    else truncated = true
+  }
+  return { roots: [...directories.values()].map(({ path }) => path), ...(truncated ? { rootsTruncated: true } : {}) }
 }
 export function previewPersonalBackup(
   backup: PersonalBackup,
@@ -323,9 +388,6 @@ export function previewPersonalBackup(
           : incoming.filter((v) => aliases(v).some((key) => keys.has(key))).length
       }
     }),
-    roots:
-      isRecord(backup.data.library) && Array.isArray(backup.data.library.folders)
-        ? (backup.data.library.folders as string[])
-        : []
+    ...personalBackupPathRoots(backup)
   }
 }

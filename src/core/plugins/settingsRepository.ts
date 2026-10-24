@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { isSecureValueEnvelope, isSensitiveStorageKey } from '../../shared/secureValue.ts'
 import type { SecureValueEnvelope } from '../../shared/secureValue.ts'
@@ -20,6 +21,18 @@ export class PluginSettingsRepository {
   private readonly crypto: PluginSettingsCryptography
   constructor(crypto: PluginSettingsCryptography) {
     this.crypto = crypto
+  }
+
+  /** Stable across Core restarts, changes with the persisted account/config.
+   * Inspect only filesystem metadata, never decrypt or fingerprint credentials. */
+  identityContext(storagePath: string): string {
+    try {
+      const stat = statSync(pluginSettingsPath(storagePath), { bigint: true })
+      return JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent'
+      throw error
+    }
   }
 
   get(storagePath: string, key?: string): Promise<unknown> {

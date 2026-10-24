@@ -33,6 +33,24 @@ import { CoreSleepTimer } from './sleepService.ts'
 import { createPlaybackSourceRecovery } from './sourceRecovery.ts'
 import { createLogicalTrackModel } from '../../shared/logicalTrackModel.ts'
 
+test('Focus paged source owner receives one adoption receipt before native acknowledgement and none on preparation failure', async t => {
+  const f = await fixture(t)
+  let adopted = 0
+  await f.session.fromPages(async append => append([{ id: 'a' }]), { onAdopt: () => { adopted++ } })
+  assert.equal(adopted, 1)
+  const previous = f.session.snapshot().queue?.id
+  await assert.rejects(f.session.fromPages(async () => { throw new Error('cancel before publication') }, { onAdopt: () => { adopted++ } }), /cancel before publication/)
+  assert.equal(adopted, 1)
+  assert.equal(f.session.snapshot().queue?.id, previous)
+  f.engine.play = async () => {
+    assert.equal(adopted, 2, 'receipt observes the actual owner before a native failure')
+    return { nativeStarted: false, fallbackReason: 'native acknowledgement failed' }
+  }
+  await assert.rejects(f.session.fromPages(async append => append([{ id: 'b' }]), { onAdopt: () => { adopted++ } }), /native acknowledgement failed/)
+  assert.equal(adopted, 2)
+  assert.notEqual(f.session.snapshot().queue?.id, previous)
+})
+
 async function castFixture(
   t: test.TestContext,
   options: {
@@ -42,6 +60,7 @@ async function castFixture(
     fatal?: (error: Error) => void
     observePlayback?: CorePlaybackSessionOptions['observePlayback']
     sleepTimer?: CoreSleepTimer
+    automaticPlaybackAllowed?: CorePlaybackSessionOptions['automaticPlaybackAllowed']
   } = {}
 ) {
   const resources = new SourceResources()
@@ -124,12 +143,13 @@ async function castFixture(
     resources,
     undefined,
     cast,
-    options.sleepTimer
-      ? {
+    {
+      ...(options.sleepTimer ? {
           sleepTimer: options.sleepTimer,
-          naturalBoundary: (boundary, at) => options.sleepTimer!.boundary(boundary, at)
-        }
-      : undefined
+          naturalBoundary: (boundary: 'trackEnd' | 'queueEnd', at: number) => options.sleepTimer!.boundary(boundary, at)
+        } : {}),
+      automaticPlaybackAllowed: options.automaticPlaybackAllowed
+    }
   )
   const session = f.session
   await cast.discover()
@@ -1317,6 +1337,391 @@ function recommended(id: number): TrackData {
   }
 }
 
+async function automaticFixture(
+  t: test.TestContext,
+  allowed: CorePlaybackSessionOptions['automaticPlaybackAllowed'],
+  options: {
+    tracks?: TrackData[]
+    resolver?: SourceResolver
+    heart?: HeartProviders
+    sources?: PlaybackSourceRecovery
+  } = {}
+) {
+  let tracks = options.tracks ?? [1, 2, 3, 4, 5].map(recommended)
+  let requests = 0
+  const f = await fixture(
+    t,
+    options.resolver ?? {
+      resolve: async (track) => ({ source: `https://audio.test/${(track as TrackData).id}`, expiresAt: null })
+    },
+    undefined,
+    undefined,
+    {
+      supportedMethods: () => ['fetchPersonalFm', 'fetchPrivateContent'],
+      call: async () => {
+        requests++
+        return tracks
+      }
+    },
+    options.heart,
+    options.sources,
+    undefined,
+    undefined,
+    undefined,
+    { automaticPlaybackAllowed: allowed }
+  )
+  return {
+    ...f,
+    setTracks: (value: TrackData[]) => { tracks = value },
+    get requests() { return requests }
+  }
+}
+
+function automaticEof(f: { engine: Engine }): void {
+  const selected = f.engine.items[f.engine.info.queueIndex]
+  f.engine.end = {
+    intent: 1,
+    selection: {
+      queueToken: f.engine.token,
+      index: f.engine.info.queueIndex,
+      id: selected.id,
+      source: selected.source
+    }
+  }
+  f.engine.info = { ...f.engine.info, state: 'stopped', position: 60 }
+  f.engine.emit('playback-info', f.engine.info)
+}
+
+test('automatic bans filter initial recommendations and refills but retain a named initial selection', async (t) => {
+  const banned = new Set(['ncm:1', 'ncm:4'])
+  const f = await automaticFixture(t, async (tracks) => tracks.map((track) => !banned.has(track.id)))
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', play: false })
+  assert.deepEqual(
+    f.db.readLibraryQueue(f.session.snapshot().queue!.id).items.map((row) => row.track!.id).sort(),
+    ['ncm:2', 'ncm:3', 'ncm:5']
+  )
+  f.setTracks([4, 6].map(recommended))
+  assert.equal(await f.session.refillPersonalized(f.session.snapshot().queue!), 1)
+  await f.session.startPersonalized({
+    providerId: 'ncm', key: 'fm', selectedId: 'ncm:4', play: true
+  })
+  assert.equal(f.session.snapshot().track?.id, 'ncm:4')
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+})
+
+test('new bans do not interrupt or reorder an automatic queue; native EOF checks the existing batch again', async (t) => {
+  const banned = new Set<string>()
+  const f = await automaticFixture(t, async (tracks) => tracks.map((track) => !banned.has(track.id)))
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  await tick()
+  const queue = f.session.snapshot().queue!
+  const rows = f.db.readLibraryQueue(queue.id).items
+  const next = rows[1].track!.id
+  banned.add('ncm:1')
+  banned.add(next)
+  f.engine.emit('playback-info', f.engine.info)
+  for (let i = 0; i < 5; i++) await tick()
+  assert.equal(f.session.snapshot().track?.id, 'ncm:1')
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.engine.items.length, 1, 'recommendations are not native-preloaded')
+  assert.deepEqual(f.db.readLibraryQueue(queue.id).items.map((row) => row.queueEntryId), rows.map((row) => row.queueEntryId))
+  automaticEof(f)
+  for (let i = 0; i < 40 && f.session.snapshot().track?.id === 'ncm:1'; i++) await tick()
+  assert.equal(f.session.snapshot().track?.id, rows[2].track!.id)
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.engine.items.length, 1)
+  assert.equal(f.engine.calls.filter((call) => call === 'play').length, 2)
+})
+
+test('automatic next rechecks after slow source preparation and skips a newly banned candidate', async (t) => {
+  const banned = new Set<string>()
+  const entered = deferred<void>(), release = deferred<void>()
+  let slow = ''
+  const f = await automaticFixture(t,
+    async (tracks) => tracks.map((track) => !banned.has(track.id)),
+    { resolver: { resolve: async (value) => {
+      const track = value as TrackData
+      if (track.id === slow) { entered.resolve(); await release.promise }
+      return { source: `https://audio.test/${track.id}`, expiresAt: null }
+    } } }
+  )
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  const rows = f.db.readLibraryQueue(f.session.snapshot().queue!.id).items
+  slow = rows[1].track!.id
+  const next = f.session.navigate(1)
+  await entered.promise
+  banned.add(slow)
+  release.resolve()
+  await next
+  assert.equal(f.session.snapshot().track?.id, rows[2].track!.id)
+  assert.equal(f.engine.calls.filter((call) => call === 'loadQueue').length, 2)
+})
+
+test('an all-banned automatic batch stops at EOF without repeated refetches or native replay', async (t) => {
+  let deny = false
+  const f = await automaticFixture(t, async (tracks) => tracks.map(() => !deny))
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  await tick()
+  deny = true
+  const requests = f.requests
+  automaticEof(f)
+  for (let i = 0; i < 30; i++) await tick()
+  const after = f.requests
+  for (let i = 0; i < 10; i++) { f.engine.emit('playback-info', f.engine.info); await tick() }
+  assert.ok(after <= requests + 1)
+  assert.equal(f.requests, after)
+  assert.equal(f.engine.calls.filter((call) => call === 'play').length, 1)
+  assert.equal(f.session.snapshot().playback?.state, 'stopped')
+  assert.equal(f.session.snapshot().track?.id, 'ncm:1')
+})
+
+test('automatic skip inspects at most 100 occurrences even when the frozen queue is larger', async (t) => {
+  let deny = false, inspected = 0
+  const f = await automaticFixture(t, async (tracks) => {
+    if (deny) inspected += tracks.length
+    return tracks.map(() => !deny)
+  }, { tracks: Array.from({ length: 150 }, (_, index) => recommended(index + 1)) })
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  deny = true
+  await f.session.navigate(1)
+  assert.equal(inspected, 100)
+  assert.equal(f.session.snapshot().track?.id, 'ncm:1')
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+})
+
+test('explicit queue selection, source playback and ordinary liked playback ignore automatic bans', async (t) => {
+  let reads = 0
+  const f = await automaticFixture(t, async (tracks) => { reads++; return tracks.map(() => false) },
+    { heart: heartProvider() })
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  const queue = f.session.snapshot().queue!
+  const row = f.db.readLibraryQueue(queue.id).items[0]
+  const before = reads
+  await f.session.select({ ...queue, index: 0, occurrenceId: row.queueEntryId })
+  await f.session.fromTrack(recommended(8))
+  await f.session.startLiked({ selectedId: 'ncm:1' })
+  await f.session.navigate(1)
+  assert.equal(reads, before)
+  assert.equal(f.session.snapshot().heart?.active, false)
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+})
+
+test('heart bans filter intelligence batches without suppressing the already-playing liked seed', async (t) => {
+  const banned = new Set(['ncm:1', 'ncm:10'])
+  const f = await automaticFixture(t, async (tracks) => tracks.map((track) => !banned.has(track.id)),
+    { heart: heartProvider(async () => [10, 11, 12, 13].map(recommended)) })
+  await f.session.startLiked({ selectedId: 'ncm:1' })
+  const plays = f.engine.calls.filter((call) => call === 'play').length
+  await f.session.setMode('heart')
+  assert.equal(f.session.snapshot().heart?.active, true)
+  assert.equal(f.session.snapshot().track?.id, 'ncm:1')
+  assert.equal(f.engine.calls.filter((call) => call === 'play').length, plays)
+  assert.equal(f.engine.items.length, 1)
+  assert.equal(f.db.readLibraryQueue(f.session.snapshot().queue!.id).items.some((row) => row.track?.id === 'ncm:10'), false)
+  automaticEof(f)
+  for (let i = 0; i < 30 && f.session.snapshot().track?.id === 'ncm:1'; i++) await tick()
+  assert.equal(f.session.snapshot().track?.id, 'ncm:11')
+})
+
+test('slow automatic preference reads leave Pause responsive and cannot publish a late Play', async (t) => {
+  const entered = deferred<void>(), release = deferred<void>()
+  let slow = false
+  const f = await automaticFixture(t, async (tracks) => {
+    if (slow && tracks.length === 1) { entered.resolve(); await release.promise }
+    return tracks.map(() => true)
+  })
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  slow = true
+  const next = f.session.navigate(1)
+  const cancelled = assert.rejects(next)
+  await entered.promise
+  await f.session.pause()
+  release.resolve()
+  await cancelled
+  assert.equal(f.session.snapshot().playback?.state, 'paused')
+  assert.equal(f.engine.calls.filter((call) => call === 'play').length, 1)
+})
+
+test('invalid automatic preference batches fail visibly instead of permitting recommendations', async (t) => {
+  const f = await automaticFixture(t, async () => [])
+  await assert.rejects(f.session.startPersonalized({ providerId: 'ncm', key: 'fm' }), /invalid batch/)
+  assert.equal(f.engine.calls.filter((call) => call === 'play').length, 0)
+})
+
+test('an initial automatic choice banned during source IO never replaces the currently playing queue', async (t) => {
+  const entered = deferred<void>(), release = deferred<void>()
+  let deny = false
+  const f = await automaticFixture(t, async (tracks) => tracks.map(() => !deny), {
+    resolver: { resolve: async (value) => {
+      const track = value as TrackData
+      if (track.source === 'ncm') { entered.resolve(); await release.promise }
+      return { source: track.filePath || `https://audio.test/${track.id}`, expiresAt: null }
+    } }
+  })
+  await f.session.fromQuery({}, 'a')
+  const before = f.session.snapshot().queue!
+  const starting = f.session.startPersonalized({ providerId: 'ncm', key: 'fm' })
+  const rejected = assert.rejects(starting, /excluded from automatic playback/)
+  await entered.promise
+  deny = true
+  release.resolve()
+  await rejected
+  assert.equal(f.session.snapshot().queue?.id, before.id)
+  assert.equal(f.session.snapshot().track?.id, 'a')
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.engine.calls.filter((call) => call === 'loadQueue').length, 1)
+})
+
+test('repeat in an automatic context has a Core preference boundary instead of native replay', async (t) => {
+  const banned = new Set<string>()
+  const f = await automaticFixture(t, async (tracks) => tracks.map((track) => !banned.has(track.id)))
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  await f.session.setMode('repeat')
+  assert.equal(f.engine.info.playMode, 'sequential')
+  banned.add('ncm:1')
+  automaticEof(f)
+  for (let i = 0; i < 30 && f.session.snapshot().track?.id === 'ncm:1'; i++) await tick()
+  assert.notEqual(f.session.snapshot().track?.id, 'ncm:1')
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.engine.info.playMode, 'sequential')
+})
+
+test('injecting automatic preferences leaves ordinary playlist native preloading intact', async (t) => {
+  let reads = 0
+  const f = await automaticFixture(t, async (tracks) => { reads++; return tracks.map(() => false) })
+  await f.session.fromPages(async (append) => append([1, 2].map((id) => ({
+    id: recommended(id).id, snapshot: { ...recommended(id) }
+  }))))
+  for (let i = 0; i < 10; i++) await tick()
+  assert.equal(f.engine.items.length, 2)
+  assert.equal(reads, 0)
+})
+
+test('Cast recommendation EOF skips newly banned queue entries before issuing remote LOAD', async (t) => {
+  const banned = new Set<string>()
+  const f = await castFixture(t, {
+    automaticPlaybackAllowed: async (tracks) => tracks.map((track) => !banned.has(track.id)),
+    personalized: {
+      supportedMethods: () => ['fetchPersonalFm'],
+      call: async () => [1, 2, 3, 4, 5].map(recommended)
+    }
+  })
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  await f.start()
+  const rows = f.db.readLibraryQueue(f.session.snapshot().queue!.id).items
+  banned.add(rows[1].track!.id)
+  const before = f.loads.length
+  await f.fire({ state: 'stopped', position: 60, duration: 60, ended: true })
+  for (let i = 0; i < 20 && f.loads.length === before; i++) await tick()
+  assert.equal(f.session.snapshot().track?.id, rows[2].track!.id)
+  assert.equal(f.loads.length, before + 1)
+})
+
+test('a background recommendation append during automatic source IO preserves the selected next occurrence', async (t) => {
+  const entered = deferred<void>(), release = deferred<void>()
+  let slow = ''
+  const f = await automaticFixture(t, async (tracks) => tracks.map(() => true), {
+    resolver: { resolve: async (value) => {
+      const track = value as TrackData
+      if (track.id === slow) { entered.resolve(); await release.promise }
+      return { source: `https://audio.test/${track.id}`, expiresAt: null }
+    } }
+  })
+  await f.session.startPersonalized({ providerId: 'ncm', key: 'fm', selectedId: 'ncm:1' })
+  const rows = f.db.readLibraryQueue(f.session.snapshot().queue!.id).items
+  slow = rows[1].track!.id
+  const next = f.session.navigate(1)
+  await entered.promise
+  f.setTracks([recommended(6)])
+  assert.equal(await f.session.refillPersonalized(f.session.snapshot().queue!), 1)
+  release.resolve()
+  await next
+  assert.equal(f.session.snapshot().track?.id, slow)
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.session.snapshot().queue?.total, 6)
+})
+
+async function recoveredHeartFixture(t: test.TestContext, recommendations = [11, 12, 13, 14]) {
+  const banned = new Set<string>()
+  let requests = 0
+  const f = await automaticFixture(
+    t,
+    async (tracks) => tracks.map((track) => !banned.has(track.id)),
+    {
+      heart: heartProvider(async () => {
+        requests++
+        return recommendations.map(recommended)
+      }),
+      sources: {
+        prepare: async (track) => {
+          const prepared = track.id === 'ncm:11'
+            ? {
+                ...track,
+                id: 'fallback-local',
+                source: 'local',
+                ncmSongId: undefined,
+                filePath: 'D:/Music/fallback-local.flac'
+              }
+            : track
+          return {
+            track: prepared,
+            resolved: {
+              source: prepared.source === 'local'
+                ? prepared.filePath
+                : `https://audio.test/${prepared.id}`,
+              expiresAt: null
+            }
+          }
+        }
+      }
+    }
+  )
+  await f.session.startLiked({ selectedId: 'ncm:1' })
+  await f.session.setMode('heart')
+  await f.session.navigate(1)
+  assert.equal(f.session.snapshot().track?.id, 'fallback-local')
+  assert.equal(f.session.snapshot().heart?.available, false)
+  assert.equal(f.session.snapshot().heart?.active, true)
+  assert.equal(f.engine.items.length, 1)
+  return { ...f, banned, get heartRequests() { return requests } }
+}
+
+test('a heart recommendation repaired to local keeps automatic bans and the single-item native window on Next', async (t) => {
+  const f = await recoveredHeartFixture(t)
+  f.banned.add('ncm:12')
+  await f.session.navigate(1)
+  assert.equal(f.session.snapshot().track?.id, 'ncm:13')
+  assert.equal(f.session.snapshot().heart?.active, true)
+  assert.equal(f.engine.items.length, 1)
+  assert.equal(f.engine.items.some((item) => item.id === 'ncm:12'), false)
+})
+
+test('a heart recommendation repaired to local keeps automatic bans at natural EOF without native preloading', async (t) => {
+  const f = await recoveredHeartFixture(t)
+  f.banned.add('ncm:12')
+  automaticEof(f)
+  for (let i = 0; i < 30 && f.session.snapshot().track?.id === 'fallback-local'; i++) await tick()
+  assert.equal(f.session.snapshot().track?.id, 'ncm:13')
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.engine.items.length, 1)
+  assert.equal(f.engine.items.some((item) => item.id === 'ncm:12'), false)
+})
+
+test('a local repaired heart occurrence remains active without sending an invalid refill seed', async (t) => {
+  const f = await recoveredHeartFixture(t, [11, 12, 13])
+  for (let i = 0; i < 10; i++) {
+    f.engine.emit('playback-info', f.engine.info)
+    await tick()
+  }
+  assert.equal(f.heartRequests, 1)
+  assert.equal(f.session.snapshot().heart?.active, true)
+  assert.equal(f.session.snapshot().heart?.error, null)
+  await assert.rejects(f.session.refillHeart(f.session.snapshot().queue!), /requires an NCM seed/)
+  assert.equal(f.heartRequests, 1)
+  assert.equal(f.session.snapshot().playback?.state, 'playing')
+  assert.equal(f.engine.items.length, 1)
+})
+
 test('Core starts and extends FM/radar with lazy provider identities, deduplication and independent original order; cold restore is paused', async (t) => {
   let tracks = [recommended(1), recommended(2), recommended(3)],
     calls = 0
@@ -2108,7 +2513,7 @@ async function fixture(
   extra?: Partial<
     Pick<
       CorePlaybackSessionOptions,
-      'sleepTimer' | 'setNativeSleepGain' | 'naturalBoundary' | 'schedule'
+      'sleepTimer' | 'setNativeSleepGain' | 'naturalBoundary' | 'schedule' | 'automaticPlaybackAllowed'
     >
   >
 ) {
@@ -3477,4 +3882,206 @@ test('all music load/play/pause/stop entry points use the output-test transport 
   await f.session.stop()
   assert.ok(dispatches >= 5)
   for (const reset of restore) reset()
+})
+
+test('unified preparation tries equivalent candidates once before staging a single selected occurrence', async (t) => {
+  const prepared: string[] = []
+  let liveQueueId: string | null = null
+  let inspect = false
+  const f = await fixture(t, undefined, undefined, undefined, undefined, undefined, {
+    prepare: async (track) => {
+      prepared.push(track.id)
+      if (inspect) {
+        assert.equal(f.session.snapshot().queue?.id, liveQueueId)
+        assert.equal(track.sourceSelection, 'explicit')
+      }
+      if (track.id === 'ncm:1') throw new Error('First equivalent source unavailable')
+      return { track, resolved: { source: `https://audio.test/${track.id}`, expiresAt: null } }
+    },
+    recover: async () => assert.fail('unified playback must not use legacy automatic recovery')
+  })
+  await f.session.fromTrack(recommended(9))
+  liveQueueId = f.session.snapshot().queue!.id
+  prepared.length = 0
+  inspect = true
+  const before = f.engine.calls.length
+  const result = await f.session.fromUnifiedTrack(async (_signal, prepare) => {
+    await assert.rejects(prepare(recommended(1)), /First equivalent source/)
+    return { prepared: await prepare(recommended(2)), result: 'source-two' }
+  })
+  inspect = false
+  assert.equal(result, 'source-two')
+  assert.deepEqual(prepared, ['ncm:1', 'ncm:2'])
+  assert.notEqual(f.session.snapshot().queue?.id, liveQueueId)
+  assert.equal(f.session.snapshot().track?.id, 'ncm:2')
+  assert.equal(f.engine.items[0].queueEntryId, f.session.snapshot().queue?.occurrenceId)
+  assert.equal(f.saved?.data?.track?.sourceSelection, 'explicit')
+  assert.equal(f.engine.calls.slice(before).filter((call) => call === 'loadQueue').length, 1)
+  assert.equal(f.engine.calls.slice(before).filter((call) => call === 'play').length, 1)
+})
+
+test('unified all-source failure and commit-time stale scope preserve the previous queue without native writes', async (t) => {
+  const f = await fixture(t)
+  await f.session.fromQuery({}, 'a')
+  const queue = f.session.snapshot().queue
+  const calls = transportCalls(f.engine)
+  const result = await f.session.fromUnifiedTrack(async () => ({ prepared: null, result: 'unavailable' }))
+  assert.equal(result, 'unavailable')
+  assert.deepEqual(f.session.snapshot().queue, queue)
+  assert.deepEqual(transportCalls(f.engine), calls)
+  await assert.rejects(f.session.fromUnifiedTrack(async (_signal, prepare) => ({
+    prepared: await prepare(recommended(1)), result: 'not-committed'
+  }), undefined, async () => {
+    throw Object.assign(new Error('Frozen scope expired'), { code: 'STALE_REVISION' })
+  }), { code: 'STALE_REVISION' })
+  assert.deepEqual(f.session.snapshot().queue, queue)
+  assert.deepEqual(transportCalls(f.engine), calls)
+  assert.equal(f.session.snapshot().loading, false)
+})
+
+test('unified native rejection stops once and never prepares a replacement after a committed load', async (t) => {
+  let preparations = 0
+  const f = await fixture(t, undefined, undefined, undefined, undefined, undefined, {
+    prepare: async (track) => {
+      preparations++
+      return { track, resolved: { source: 'https://audio.test/selected', expiresAt: null } }
+    },
+    recover: async () => assert.fail('native rejection cannot switch unified versions or sources')
+  })
+  f.engine.play = async () => {
+    f.engine.calls.push('play')
+    return { nativeStarted: false, fallbackReason: 'decoder rejected selected source' }
+  }
+  await assert.rejects(f.session.fromUnifiedTrack(async (_signal, prepare) => ({
+    prepared: await prepare(recommended(1)), result: 'selected'
+  })), /decoder rejected selected source/)
+  assert.equal(preparations, 1)
+  assert.equal(f.engine.calls.filter((call) => call === 'loadQueue').length, 1)
+  assert.equal(f.engine.calls.filter((call) => call === 'play').length, 1)
+  assert.equal(f.session.snapshot().track?.id, 'ncm:1')
+  assert.equal(f.session.snapshot().playback?.state, 'stopped')
+})
+
+test('unified preparation is cancellable by Pause and does not adopt a late successful candidate', async (t) => {
+  const entered = deferred<void>(), release = deferred<void>()
+  const f = await fixture(t)
+  await f.session.fromQuery({}, 'a')
+  const queue = f.session.snapshot().queue
+  const old = f.session.fromUnifiedTrack(async (signal, prepare) => {
+    entered.resolve()
+    await release.promise
+    signal.throwIfAborted()
+    return { prepared: await prepare(recommended(1)), result: 'cancelled' }
+  })
+  const rejected = assert.rejects(old, /superseded/)
+  await entered.promise
+  await f.session.pause()
+  release.resolve()
+  await rejected
+  assert.deepEqual(f.session.snapshot().queue, queue)
+  assert.equal(f.session.snapshot().playback?.state, 'paused')
+  assert.equal(f.session.snapshot().loading, false)
+})
+
+test('unified source resource lease spans preparation and commit without a nested maintenance deadlock', async (t) => {
+  const resources = new SourceResources(), entered = deferred<void>(), release = deferred<void>()
+  let maintenanceRan = false
+  const f = await fixture(t, undefined, undefined, undefined, undefined, undefined, undefined, resources)
+  const playback = f.session.fromUnifiedTrack(async (_signal, prepare) => {
+    const prepared = await prepare(recommended(1))
+    entered.resolve()
+    await release.promise
+    assert.equal(maintenanceRan, false)
+    return { prepared, result: 'selected' }
+  })
+  await entered.promise
+  const maintaining = resources.maintain(async () => {
+    maintenanceRan = true
+    assert.equal(f.session.snapshot().track?.id, 'ncm:1')
+    assert.equal(f.session.snapshot().playback?.state, 'playing')
+  })
+  release.resolve()
+  await Promise.all([playback, maintaining])
+  assert.equal(maintenanceRan, true)
+})
+
+test('switching between duplicate occurrences or replacing the queue samples the departing occurrence before activating the next', async (t) => {
+  const observed: Array<{ id: string | null; occurrenceId: string | null; position: number; state: string }> = []
+  const f = await fixture(t, undefined, undefined, (track, info) => {
+    observed.push({
+      id: track?.id ?? null,
+      occurrenceId: track?.queueEntryId ?? null,
+      position: info.position,
+      state: info.state
+    })
+  })
+  const podcastEpisode: TrackData = {
+    id: 'podcast:sub-1:ep-1',
+    title: 'Episode 1',
+    artist: 'Show',
+    album: 'Show',
+    duration: 180,
+    filePath: 'https://audio.test/ep-1.mp3',
+    fileName: 'ep-1.mp3',
+    size: 0,
+    cover: null,
+    lyrics: null,
+    streamUrl: 'https://audio.test/ep-1.mp3',
+    source: 'podcast'
+  }
+  await f.session.fromPages(async (append) => {
+    await append([
+      { id: podcastEpisode.id, snapshot: { ...podcastEpisode } },
+      { id: podcastEpisode.id, snapshot: { ...podcastEpisode } }
+    ])
+  })
+  const queue = f.session.snapshot().queue!
+  const page = f.db.readLibraryQueue(queue.id)
+  const firstOccurrence = page.items[0].queueEntryId
+  const secondOccurrence = page.items[1].queueEntryId
+  assert.notEqual(firstOccurrence, secondOccurrence)
+
+  f.engine.info.position = 47
+  await f.session.select({
+    id: queue.id,
+    revision: queue.revision,
+    index: 1,
+    occurrenceId: secondOccurrence
+  })
+  assert.equal(
+    observed.some(
+      (item) => item.id === podcastEpisode.id && item.occurrenceId === firstOccurrence && item.position === 47
+    ),
+    true
+  )
+
+  f.engine.info.position = 83
+  await f.session.fromPages(async (append) => {
+    await append([{ id: 'a' }])
+  })
+  assert.equal(
+    observed.some(
+      (item) => item.id === podcastEpisode.id && item.occurrenceId === secondOccurrence && item.position === 83
+    ),
+    true
+  )
+})
+
+test('unified playback waits for explicit source maintenance before acquiring its source lease', async (t) => {
+  const resources = new SourceResources(), entered = deferred<void>(), release = deferred<void>()
+  const f = await fixture(t, undefined, undefined, undefined, undefined, undefined, undefined, resources)
+  let maintained = false
+  const maintenance = f.session.maintainSources(async () => {
+    entered.resolve()
+    await release.promise
+    await resources.maintain(async () => { maintained = true })
+  })
+  await entered.promise
+  const playback = f.session.fromUnifiedTrack(async (_signal, prepare) => {
+    assert.equal(maintained, true)
+    return { prepared: await prepare(recommended(1)), result: 'selected' }
+  })
+  release.resolve()
+  await Promise.all([maintenance, playback])
+  assert.equal(f.session.snapshot().track?.id, 'ncm:1')
 })

@@ -1,9 +1,39 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { Agent } from 'undici'
+import { Agent, MockAgent } from 'undici'
 import { NcmApiService } from '../../core/providers/ncmApi.ts'
 import { waitForListeningPort } from './serverBinding.ts'
+import { createNcmLoopbackTransport } from './runtimeAdapter.ts'
+
+test('the production NCM transport reaches Fetch-restricted ports and retains redirects and headers', async () => {
+  const agent = new MockAgent()
+  agent.disableNetConnect()
+  const server = agent.get('http://127.0.0.1:6000')
+  server
+    .intercept({ path: '/redirect', method: 'GET', headers: { cookie: 'a=1' } })
+    .reply(302, '', {
+      headers: { location: '/result' }
+    })
+  server
+    .intercept({ path: '/result', method: 'GET', headers: { cookie: 'a=1' } })
+    .reply(200, '{"code":200}', {
+      headers: { 'content-type': 'application/json' }
+    })
+  const transport = createNcmLoopbackTransport(agent)
+  try {
+    const response = await transport.fetch('http://127.0.0.1:6000/redirect', {
+      signal: new AbortController().signal,
+      headers: { cookie: 'a=1' }
+    })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/json')
+    assert.deepEqual(JSON.parse(await response.text()), { code: 200 })
+    agent.assertNoPendingInterceptors()
+  } finally {
+    await transport.closeTransport()
+  }
+})
 
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   if (!server.listening) return
@@ -208,11 +238,12 @@ test('shutdown cancels a partial HTTP response and closes its real pooled connec
     socket.once('close', () => sockets.delete(socket))
   })
   let transportClosed = false
+  const transport = createNcmLoopbackTransport(agent)
   const api = new NcmApiService({
     startServer: async () => server.listen(0, '127.0.0.1'),
-    fetch: (url, init) => fetch(url, { ...init, dispatcher: agent } as RequestInit),
+    fetch: transport.fetch,
     closeTransport: async () => {
-      await agent.close()
+      await transport.closeTransport()
       transportClosed = true
     }
   })
@@ -237,11 +268,12 @@ test('shutdown releases idle HTTP connections through their Agent before waiting
   const events: string[] = []
   const server = createServer((_request, response) => response.end('{"code":200}'))
   server.once('close', () => events.push('listener closed'))
+  const transport = createNcmLoopbackTransport(agent)
   const api = new NcmApiService({
     startServer: async () => server.listen(0, '127.0.0.1'),
-    fetch: (url, init) => fetch(url, { ...init, dispatcher: agent } as RequestInit),
+    fetch: transport.fetch,
     closeTransport: async () => {
-      await agent.close()
+      await transport.closeTransport()
       events.push('transport closed')
     }
   })

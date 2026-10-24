@@ -1,3 +1,4 @@
+import { CoreMusicExplorationService } from '../../core/library/explorationService.ts'
 import { networkInterfaces } from 'node:os'
 import { CoreCastService } from '../../core/cast/service.ts'
 import { CoreNcmCloudTransferService } from '../../core/ncm/cloudTransferService.ts'
@@ -5,6 +6,12 @@ import { RemoteHttpServer } from '../../core/cast/httpServer.ts'
 import { createCastBackend } from '../../core/cast/backend.ts'
 import { stat, access } from 'node:fs/promises'
 import { CoreLibraryMaintenance } from '../../core/library/maintenanceService.ts'
+import { CoreGenresService } from '../../core/library/genresService.ts'
+import { CoreMusicRatingsService } from '../../core/library/ratingsService.ts'
+import { CoreMusicPreferencesService } from '../../core/library/preferencesService.ts'
+import { CoreMusicTagsService } from '../../core/library/tagsService.ts'
+import { CoreMusicFocusService } from '../../core/library/focusService.ts'
+import { createPreferencesPlaylistRepository } from '../../core/playlists/preferencesRepository.ts'
 import { CoreDuplicatesService } from '../../core/library/duplicatesService.ts'
 import { createPersonalBackupRepository } from '../../core/persistence/personalBackup.ts'
 import { CorePersonalBackupService } from '../../core/persistence/personalBackupService.ts'
@@ -109,6 +116,9 @@ import { CoreLibraryLoudnessService } from '../../core/audio/libraryLoudnessServ
 import { CorePlaybackSession, type CoreSessionRepository } from '../../core/playback/session.ts'
 import { CoreQueueSubmission } from '../../core/playback/queueSubmission.ts'
 import { CoreCatalogService } from '../../core/catalog/service.ts'
+import { CoreAlbumBrowseService } from '../../core/library/albumBrowseService.ts'
+import { CoreUnifiedPlaybackService } from '../../core/catalog/unifiedPlayback.ts'
+import { CoreCatalogPlaybackScope } from '../../core/catalog/playbackScope.ts'
 import { CorePlaylistSubmission, createPlaylistInputResolver } from '../../core/playlists/submission.ts'
 import { CoreAudioDiagnosticsService } from '../../core/audio/diagnosticsService.ts'
 import { CorePlayerPresentationService } from '../../core/playback/presentationService.ts'
@@ -125,6 +135,12 @@ import { getTrackSource } from '../../shared/trackSourceIdentity.ts'
 import { CoreScanService } from '../../core/library/scanService.ts'
 import { CoreLibraryBackground } from '../../core/library/background.ts'
 import { CoreMetadataService } from '../../core/library/metadataService.ts'
+import { MusicBrainzWikiProvider, MusicBrainzDetailsProvider } from '../../core/library/entityMetadataProvider.ts'
+import { MusicBrainzIdentificationProvider, PlatformIdentificationProvider } from '../../core/library/musicIdentificationProvider.ts'
+import { resolveLocale } from '../../shared/i18n/locale.ts'
+import { IdentificationResponseCache } from '../../core/library/identificationResponseCache.ts'
+import { PlatformMetadataProvider, platformMetadataApprovals } from '../../core/library/platformMetadataProvider.ts'
+import { PublicArtworkProvider, artworkUsageApproval } from '../../core/library/publicArtworkProvider.ts'
 import { CoreStatisticsService } from '../../core/listening/service.ts'
 import { CoreStatisticsRepository } from '../../core/listening/repository.ts'
 import { createLibraryListeningProjection } from '../../core/listening/libraryProjection.ts'
@@ -149,6 +165,7 @@ import { CoreServiceLauncher, type CoreServiceLease } from './serviceLauncher.ts
 import { CorePlatformClient } from './platformClient.ts'
 import type { CorePlatformOperations } from '../../shared/corePlatform.ts'
 import { CorePluginExperiences } from '../../core/plugins/experiences.ts'
+import { createLegacyMusicLookupProvider } from '../../core/plugins/legacyMusicLookupProvider.ts'
 import { CorePluginMarketplace } from '../../core/plugins/marketplace.ts'
 import { TwilightPluginManager } from '../../core/plugins/manager.ts'
 import { providerPlaybackIdentities } from '../../core/audio/providerPlaybackIdentity.ts'
@@ -209,11 +226,25 @@ send({ kind: 'core:booted' })
 
 async function initialize(config: CoreProcessConfiguration): Promise<void> {
   let libraryRevision: number | null = null
-  let catalog: CoreCatalogService | undefined
+  let catalog: CoreCatalogService | undefined = undefined
+  let genres: CoreGenresService | undefined = undefined
+  let ratings: CoreMusicRatingsService | undefined = undefined
+  let preferences: CoreMusicPreferencesService | undefined = undefined
+  let tags: CoreMusicTagsService | undefined = undefined
+  let exploration: CoreMusicExplorationService | undefined = undefined
+  let focus: CoreMusicFocusService | undefined = undefined
   launcher = new CoreServiceLauncher(config.epoch, send)
   platform = new CorePlatformClient(config.epoch, send)
   database = new LibraryDatabaseServiceClient({
     changed: (revision) => { libraryRevision = revision; application?.changed(); catalog?.invalidate() },
+    genresChanged: revision => { genres?.observe(revision) },
+    classificationMetadataChanged: revision => { genres?.observeMetadata(revision) },
+    ratingsChanged: revision => { ratings?.observe(revision) },
+    preferencesChanged: revision => { preferences?.observe(revision) },
+    tagsChanged: token => { tags?.observe(token) },
+    explorationChanged: state => { exploration?.observe(state) },
+    focusChanged: state => { focus?.observe(state) },
+    genresInvalidated: () => genres?.invalidate(),
     serviceEntry: 'database',
     libraryFilePath: config.libraryFilePath,
     coverCacheDir: config.coverCacheDir,
@@ -224,10 +255,14 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
   // Recover the old journal before any staged owner can scan or mutate the library.
   await database.recoverRemoval()
   await recoverLocalLibraryRemovalFromDatabase(config.libraryFilePath, database)
-  await createPersonalBackupRepository().applyPendingPersonalRestoreFromDatabase(
-    config.root,
-    database
-  )
+  const personalBackupRepository = createPersonalBackupRepository()
+  try {
+    await personalBackupRepository.applyPendingPersonalRestoreFromDatabase(config.root, database)
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'STALE_REVISION' ||
+      !personalBackupRepository.deferStalePersonalRestore(config.root)) throw error
+    console.warn('[core.backup] Music data changed after preview; restore awaits a fresh review in Settings')
+  }
   const initialLibrary = await database.getMetadata()
   libraryRevision = initialLibrary.revision
   const settings = new CoreSettingsRepository({
@@ -276,6 +311,8 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
         output?.changed()
       else application?.changed()
       publishSettings()
+      if (Object.hasOwn(patch, 'musicIdentification') || Object.hasOwn(patch, 'language')) metadata?.entities?.refreshIdentification(true)
+      if (Object.hasOwn(patch, 'genreSeparators')) genres?.invalidate()
     }
   })
   function publishSettings(): void {
@@ -641,12 +678,15 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     changed: () => application?.changed(),
     failed: (error) => console.error('[core.streams]', error)
   })
-  const playlistRepository = new VersionedDataStore<Playlist[]>({
+  const legacyPlaylistRepository = new VersionedDataStore<Playlist[]>({
     filePath: join(config.root, 'playlists.json'),
     label: 'playlists',
     maxBytes: 20 * 1024 * 1024,
     isData: Array.isArray,
     isLegacy: Array.isArray
+  })
+  const playlistRepository = createPreferencesPlaylistRepository({
+    legacy: legacyPlaylistRepository, database, identity: recordingVersions.identity, now: Date.now
   })
   let networkEnvironment:
     | Promise<CorePlatformOperations['network.environment']['output']>
@@ -697,6 +737,12 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
   })
   const repairOwner = { isDestroyed: () => false, once: () => {}, removeListener: () => {} }
   const playlists = new CorePlaylistService({
+    preferencesTrackStates: async tracks => {
+      const states: Array<import('../../shared/musicPreferences.ts').MusicPreferenceState | null> = []
+      for (let offset = 0; offset < tracks.length; offset += 200)
+        states.push(...await database!.preferencesTrackStates(tracks.slice(offset, offset + 200)))
+      return states
+    },
     findRelocationsInFolder: (missing, folder) =>
       findLibraryPlaylistRelocations(missing, folder, {
         repairPlaylist: (request) => libraryRepair.handle(repairOwner, request)
@@ -820,6 +866,15 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
       readNeighbor: (...args) => database!.readLibraryQueueNeighbor(...args)
     },
     resolver,
+    automaticPlaybackAllowed: async (tracks, signal) => {
+      const allowed: boolean[] = []
+      for (let offset = 0; offset < tracks.length; offset += 200) {
+        signal?.throwIfAborted()
+        allowed.push(...await database!.preferencesAutomaticEligibility(tracks.slice(offset, offset + 200)))
+      }
+      signal?.throwIfAborted()
+      return allowed
+    },
     sources: createPlaybackSourceRecovery({
       resolver,
       authorize: (source) => platform!.call('paths.prepareAudio', { source }),
@@ -1245,6 +1300,7 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     failed: (error) => console.error('[core.imports]', error)
   })
   let providerInventory = ''
+  let identificationInventoryRevision = 0
   const pluginTheme = async (pluginId: string, themeId: string) => {
     const theme = (await plugins?.listExtensions())
       ?.find((extension) => extension.pluginId === pluginId)
@@ -1292,7 +1348,11 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     pluginExperiences = new CorePluginExperiences(plugins, database!, () => {
       const state = scan.snapshot()?.state
       return state === 'running' || state === 'paused'
-    }, (name, content) => platform!.call('plugins.exportExperience', { name, content }))
+    }, (name, content) => platform!.call('plugins.exportExperience', { name, content }), database!, {
+      startLegacyMusic: (...args) => metadata.entities!.startLegacyMusic(...args),
+      legacyMusicStatus: (...args) => metadata.entities!.legacyMusicStatus(...args),
+      cancelLegacyMusic: (...args) => metadata.entities!.cancelLegacyMusic(...args)
+    })
   }
   if (plugins && config.plugins?.index) {
     pluginMarketplace = new CorePluginMarketplace({
@@ -1339,8 +1399,10 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     const inventory = JSON.stringify((plugins?.listProviders() ?? []).map((p) => [p.id, isPluginProviderEnabled(p.health), p.supportedMethods]))
     if (inventory !== providerInventory) {
       providerInventory = inventory
+      identificationInventoryRevision++
       imports?.rematch()
       metadata.refresh(true)
+      metadata.entities?.refreshIdentification()
       presentation.refresh()
     }
   })
@@ -1379,8 +1441,68 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
         provider.supportedMethods?.includes('searchSongs') &&
         isPluginProviderEnabled(provider.health)
     )
+  // Deployment opt-in is distinct from public-service eligibility and text licensing.
+  // No credentials, audio paths or library snapshots are sent by this adapter.
+  const entityMetadataPolicy = {
+    enabled: process.env.TWILIGHT_METADATA_ENABLED === '1',
+    publicServiceApproved: process.env.TWILIGHT_METADATA_PUBLIC_SERVICE_APPROVED === '1',
+    wikipediaText: process.env.TWILIGHT_METADATA_WIKIPEDIA_TEXT === '1',
+    contact: process.env.TWILIGHT_METADATA_CONTACT ?? 'https://github.com/Px-asen/Twilight_Echo'
+  }
+  const identificationPlatforms = () => (plugins?.listProviders() ?? []).map(provider => ({
+    id: provider.id,
+    enabled: isPluginProviderEnabled(provider.health),
+    supportedMethods: provider.supportedMethods ?? [],
+    configuration: JSON.stringify([identificationInventoryRevision, plugins?.providerIdentityContext(provider.id)])
+  }))
+  const identificationResponses = new IdentificationResponseCache()
+  const platformTextUsage = platformMetadataApprovals(process.env.TWILIGHT_METADATA_PLATFORM_USAGE)
+  const publicArtworkPolicy = { ...entityMetadataPolicy,
+    commonsImages: process.env.TWILIGHT_METADATA_COMMONS_IMAGES === '1',
+    caaUsage: artworkUsageApproval(process.env.TWILIGHT_METADATA_CAA_USAGE) }
+  plugins?.on('provider-context', (id: string) => {
+    identificationResponses.invalidate(`platform.${id}`)
+    metadata.entities?.refreshIdentification(false, `platform.${id}`)
+  })
+  const musicbrainzIdentification = new MusicBrainzIdentificationProvider(() => entityMetadataPolicy)
+  const legacyMusic = plugins ? createLegacyMusicLookupProvider({ plugins,
+    // Only an explicit deployment prohibition changes the existing manual
+    // capability; omitted automatic-enrichment opt-ins do not disable it.
+    disabled: operation => process.env.TWILIGHT_METADATA_ENABLED === '0' ? 'metadata_disabled' :
+      operation === 'introductions' && process.env.TWILIGHT_METADATA_WIKIPEDIA_TEXT === '0' ? 'wikipedia_text_disabled' : null
+  }) : undefined
   const metadata = new CoreMetadataService({
     database,
+    entities: {
+      backfillCredits: () => database!.explorationBackfillCredits(100),
+      database,
+      legacy: () => legacyMusic!,
+      provider: new MusicBrainzWikiProvider(() => entityMetadataPolicy),
+      artwork: async image => (await platform!.call('artwork.present', { cover: image.resource, coverSource: null,
+        ...(image.usage.expiresAt === undefined ? {} : { imageExpiresAt: image.usage.expiresAt }) })).cover,
+      enrichmentProviders: () => [new MusicBrainzDetailsProvider(() => entityMetadataPolicy), new PublicArtworkProvider(() => publicArtworkPolicy), ...identificationPlatforms().map(provider => new PlatformMetadataProvider(provider.id, {
+        inventory: identificationPlatforms,
+        configuration: () => plugins!.providerMetadataContext(provider.id),
+        usage: id => platformTextUsage[id] ?? null,
+        call: (id, method, externalId, signal) => plugins!.callProvider(id, method, [externalId], { signal }),
+        ...(provider.id === 'ncm' ? { sourcePage: (_: string, id: string) => `https://music.163.com/#/artist?id=${encodeURIComponent(id)}` } : {})
+      }))],
+      identificationProviders: () => [musicbrainzIdentification, ...identificationPlatforms().map(provider =>
+        new PlatformIdentificationProvider(provider.id, {
+          responses: identificationResponses,
+          inventory: identificationPlatforms,
+          search: (id, method, query, limit, offset, signal) =>
+            plugins!.callProvider(id, method, [query, limit, offset], { signal }),
+          albumIdentity: (id, albumId, signal) =>
+            plugins!.callProvider(id, 'fetchAlbumIdentity', [albumId], { signal })
+        }))],
+      policy: () => entityMetadataPolicy,
+      automation: () => settings.read().musicIdentification,
+      language: () => resolveLocale(settings.read().language, Intl.DateTimeFormat().resolvedOptions().locale) === 'en-US' ? 'en' : 'zh-Hans',
+      now: Date.now,
+      changed: () => application?.changed(),
+      failed: error => console.error('[core.metadata.entities]', error)
+    },
     provider: {
       searchSongs: async (query, limit = 30, offset = 0, signal) => {
         const results = await Promise.allSettled(
@@ -1449,15 +1571,55 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     resolveCover: (cover) => platform!.call('artwork.remotePreview', { cover }),
     failed: (error) => console.error('[core.remote]', error), now: Date.now
   })
+  ratings = new CoreMusicRatingsService({ database, now: Date.now,
+    changed: () => application?.changed() })
+  exploration = new CoreMusicExplorationService({ database, now: Date.now,
+    platformContexts: () => metadata.entities?.platformContexts() ?? {},
+    changed: () => application?.changed() })
+  focus = new CoreMusicFocusService({ database, playback, now: Date.now,
+    platformContexts: () => metadata.entities?.platformContexts() ?? {},
+    ensureHistory: async () => {
+      await history.ensure()
+      if (!history.state.value.ready || history.state.value.pending || history.state.value.error)
+        throw Object.assign(new Error('播放历史索引尚未就绪，请稍后重新查询'), { code: 'NOT_READY' })
+    }, changed: () => application?.changed() })
+  tags = new CoreMusicTagsService({ database, playback, now: Date.now,
+    changed: () => application?.changed() })
+  preferences = new CoreMusicPreferencesService({ database, now: Date.now,
+    changed: () => {
+      application?.changed()
+      return playlists.refreshPreferences()
+    } })
+  genres = new CoreGenresService({
+    database,
+    platformContexts: () => metadata.entities?.platformContexts() ?? {},
+    separators: () => settings.read().genreSeparators,
+    changed: () => application?.changed(),
+    failed: error => console.error('[core.genres]', error)
+  })
   catalog = new CoreCatalogService({
     database,
     playlists: { getRevision: () => playlists.getRevision(), sourceTracks: () => playlists.librarySourceTracks() },
     versions: recordingVersions,
-    changed: () => application?.changed(),
+    changed: () => { application?.changed(); metadata.entities?.refreshIdentification(); genres?.invalidate() },
     failed: error => console.error('[core.catalog]', error)
   })
   application = new CoreApplication({
     catalog,
+    genres,
+    ratings,
+    preferences,
+    tags,
+    focus,
+    exploration,
+    albums: new CoreAlbumBrowseService({ database,
+      platformContexts: () => metadata.entities?.platformContexts() ?? {},
+      observeMetadata: revision => genres?.observeMetadata(revision) }),
+    unifiedPlayback: new CoreUnifiedPlaybackService({ database, versions: recordingVersions, playback,
+      // The request's identity supplies the provider-authorized restorer in CoreApplication.
+      restore: async () => { throw Object.assign(new Error('Provider playback requires request authorization'), { code: 'FORBIDDEN' }) },
+      assertScope: (request, ids, signal) => new CoreCatalogPlaybackScope({ database: database!,
+        platformContexts: () => metadata.entities?.platformContexts() ?? {} }).allowed(request, ids, signal) }),
     opra: new OpraCatalog(join(config.root, 'opra', 'database_v1.jsonl')),
     revealAudioFile: (path) => platform!.call('downloads.reveal', { path }),
     playlistSources: new CorePlaylistSourceEdits({

@@ -341,7 +341,7 @@ test('opening an existing v9 library adds compact read indexes without changing 
   try {
     assert.deepEqual(reopened.getMetadata(), metadata)
     assert.deepEqual(reopened.getTracksByIds(['retained']), page)
-    assert.equal(reopened.sql.prepare('PRAGMA user_version').get()!.user_version, 12)
+    assert.equal(reopened.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
     for (const name of ['tracks_insertion', 'files_count'])
       assert.ok(
         reopened.sql.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name)

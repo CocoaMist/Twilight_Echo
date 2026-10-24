@@ -303,6 +303,61 @@ export interface AlbumSummary {
   isExplicit?: boolean
 }
 
+/** Optional, bounded identity evidence; independent of playback Track[] and text metadata.
+ * Keep in sync with src/shared/musicPlatformAlbum.ts. No paths, URLs or credentials. */
+/** Field permissions are capped by the host deployment's reviewed policy. */
+export interface MetadataUsage {
+  display: boolean
+  cache: boolean
+  crossSource: boolean
+  export: boolean
+  expiresAt?: number
+}
+export interface PlatformEntityMetadata {
+  schemaVersion: 1
+  provider: string
+  kind: 'artist' | 'release'
+  id: string
+  name: string
+  texts: Array<{
+    field: 'description' | 'introduction'
+    value: string
+    language: string
+    url: string
+    revision: string
+    attribution: string
+    license: string
+    licenseUrl: string
+    usage?: MetadataUsage
+  }>
+}
+export type PlatformMetadataResult =
+  | { status: 'ok'; metadata: PlatformEntityMetadata }
+  | { status: 'not_found' | 'not_provided' | 'unsupported' }
+
+export interface PlatformAlbumIdentity {
+  schemaVersion: 1
+  provider: string
+  id: string
+  title: string
+  artists: Array<{ name: string; id?: string }>
+  /** Independent service-reported total, null when unknown. Never tracks.length. */
+  trackCount: number | null
+  /** Entire track set retrieved; does not imply all comparison fields are known. */
+  complete: boolean
+  tracks: Array<{
+    id: string
+    title: string
+    artists: Array<{ name: string; id?: string }>
+    /** Original precision in seconds, null when unavailable. */
+    durationSeconds: number | null
+    /** Actual ordinals; never inferred from array order or defaulted to 1. */
+    disc: number | null
+    position: number | null
+    isrcs: string[]
+  }>
+}
+
 /** Public music charts, including the provider's compact song previews. */
 export interface ToplistSummary extends PlaylistSummary {
   description?: string
@@ -455,7 +510,7 @@ export interface TwilightMediaProviderRegistration {
     limit?: number,
     offset?: number,
     context?: TwilightProviderRequestContext
-  ): Promise<{ items: AlbumSummary[]; total: number }>
+  ): Promise<{ items: AlbumSummary[]; total: number; incomplete?: boolean }>
   searchPlaylists?(
     keywords: string,
     limit?: number,
@@ -624,6 +679,17 @@ export interface TwilightMediaProviderRegistration {
     artistId: string | number,
     context?: TwilightProviderRequestContext
   ): Promise<string>
+  /** Optional native-ID text details; up to 8 texts of 20,000 characters.
+   * Use und for unspecified language. Source links contain no credentials.
+   * Omitted usage needs host deployment approval, not an inferred license. */
+  fetchArtistMetadata?(
+    artistId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformMetadataResult>
+  fetchAlbumMetadata?(
+    albumId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformMetadataResult>
   fetchArtistFollowState?(
     artistId: string | number,
     context?: TwilightProviderRequestContext
@@ -632,6 +698,12 @@ export interface TwilightMediaProviderRegistration {
     albumId: string | number,
     context?: TwilightProviderRequestContext
   ): Promise<Track[]>
+  /** Optional identity capability (max 64 tracks/credits). Larger or partial sets
+   * must set complete=false. Missing names/credits stay empty; ordinals stay null. */
+  fetchAlbumIdentity?(
+    albumId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformAlbumIdentity>
   fetchArtistPlaylists?(
     artistId: string | number,
     context?: TwilightProviderRequestContext

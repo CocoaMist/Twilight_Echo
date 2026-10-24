@@ -8,6 +8,7 @@ import type { TrackData } from '../../shared/track.ts'
 import { libraryTrack } from './libraryTrack.ts'
 import { toPlaybackQueueSnapshot } from './queueSnapshots.ts'
 import { projectCoreError } from '../projections.ts'
+import { automaticPlaybackTracks, type AutomaticPlaybackAllowed } from './automaticPlayback.ts'
 
 export interface PersonalizedProviders {
   supportedMethods(providerId: string): readonly string[]
@@ -18,6 +19,7 @@ export interface PersonalizedProviders {
   ): Promise<unknown>
 }
 interface Options extends PersonalizedProviders {
+  automaticPlaybackAllowed?: AutomaticPlaybackAllowed
   queue(): CoreQueueReference | null
   append(queueId: string, tracks: TrackData[], current: () => boolean): Promise<number>
   now(): number
@@ -81,7 +83,8 @@ export class PersonalizedQueue {
     providerId: string,
     key: PersonalizedStreamKey,
     signal: AbortSignal,
-    fmFallback = false
+    fmFallback = false,
+    explicitId?: string
   ): Promise<TrackData[]> {
     const method = key === 'fm' || fmFallback ? 'fetchPersonalFm' : 'fetchPrivateContent'
     if (!this.options.supportedMethods(providerId).includes(method))
@@ -91,7 +94,7 @@ export class PersonalizedQueue {
     if (!Array.isArray(response))
       throw new Error('Provider returned an invalid recommendation batch')
     const seen = new Set<string>()
-    return response.flatMap((value) => {
+    const tracks = response.flatMap((value) => {
       if (
         !value ||
         typeof value !== 'object' ||
@@ -108,18 +111,20 @@ export class PersonalizedQueue {
       track.streamUrl = null
       return [track]
     })
+    return automaticPlaybackTracks(tracks, this.options.automaticPlaybackAllowed, signal, explicitId)
   }
   async initial(
     providerId: string,
     key: PersonalizedStreamKey,
-    signal: AbortSignal
+    signal: AbortSignal,
+    explicitId?: string
   ): Promise<TrackData[]> {
-    const tracks = await this.fetch(providerId, key, signal)
+    const tracks = await this.fetch(providerId, key, signal, false, explicitId)
     return tracks.length ||
       key !== 'radar' ||
       !this.options.supportedMethods(providerId).includes('fetchPersonalFm')
       ? tracks
-      : this.fetch(providerId, key, signal, true)
+      : this.fetch(providerId, key, signal, true, explicitId)
   }
   refill(explicit = false): Promise<number> {
     if (this.pending) return this.pending

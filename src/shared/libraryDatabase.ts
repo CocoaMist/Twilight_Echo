@@ -100,6 +100,8 @@ export interface LibraryQuery {
   limit?: number
 }
 export interface LibraryPage {
+  /** Parallel to tracks; derived references never enter source tags or snapshots. */
+  catalog?: { revision: number; tracks: Array<import('./musicCatalog.ts').CatalogTrackReferences | null> }
   aggregate?: {
     /** Parallel to tracks for recording-row queries; variants use entryIds. */
     rows: Array<{
@@ -138,6 +140,8 @@ export interface LibraryPlaylistSourceSummary {
   additionalProviders?: number
 }
 export interface LibraryCollectionSummary {
+  /** Bounded preview; catalog.query(context) provides the complete paginated set. */
+  catalog?: import('./musicCatalog.ts').CatalogReferences
   id: string
   name: string
   trackCount: number

@@ -260,7 +260,7 @@ export function createElectronCoreSupervisor(
       'artwork.present': createArtworkProjection({
         normalizeCachedCover: normalizeCachedCoverHandle,
         migrateBase64Cover,
-        grant: (source) => remoteMediaGrants.grant(source, 'image'),
+        grant: (source, expiresAt) => remoteMediaGrants.grant(source, 'image', expiresAt),
         resolve: (handle) => remoteMediaGrants.resolve(handle, 'image')
       }),
       'media.resolveAudio': async ({ handle }) => remoteMediaGrants.resolve(handle, 'audio'),

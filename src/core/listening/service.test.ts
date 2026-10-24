@@ -8,6 +8,8 @@ import type { TrackData } from '../../shared/track.ts'
 import { CoreStatisticsRepository } from './repository.ts'
 import { CoreStatisticsService } from './service.ts'
 import { createLibraryListeningProjection } from './libraryProjection.ts'
+import { listeningSourceIdentity } from '../../shared/listeningSourceIdentity.ts'
+import { buildLastPlayedBySource } from './model.ts'
 
 const local: TrackData = {
   id: 'local:cue',
@@ -124,6 +126,37 @@ async function fixture(t: test.TestContext) {
     }
   }
 }
+
+test('Focus history projection distinguishes equal raw provider IDs and keeps original raw sorting keys', async t => {
+  const f = await fixture(t)
+  f.observe({ ...provider, id: '42', source: 'ncm', title: 'NCM song' }, 'playing')
+  f.timers.advance(5_000)
+  const ncmAt = f.timers.now
+  f.observe({ ...provider, id: '42', source: 'other', title: 'Other provider song' }, 'playing')
+  f.timers.advance(5_000)
+  const otherAt = f.timers.now
+  await f.service.overview()
+  const snapshot = f.service.historySnapshot()
+  assert.equal(snapshot.get(listeningSourceIdentity('ncm', 'ncm:42')), ncmAt)
+  assert.equal(snapshot.get(listeningSourceIdentity('other', '42')), otherAt)
+  assert.equal(snapshot.get('42'), otherAt)
+  assert.equal(f.library.sql.prepare('SELECT last_played FROM library_history WHERE id=?').get(listeningSourceIdentity('ncm', '42'))!.last_played, ncmAt)
+  assert.equal(f.library.sql.prepare('SELECT last_played FROM library_history WHERE id=?').get(listeningSourceIdentity('other', '42'))!.last_played, otherAt)
+  assert.equal(snapshot.has(listeningSourceIdentity('unplayed', '42')), false)
+})
+
+test('Focus qualified history uses catalog local-path detection and normalized recorded provider identities', async t => {
+  const f = await fixture(t), id = 'D:\\Music\\legacy.flac'
+  f.observe({ ...local, id, source: undefined }, 'playing')
+  f.timers.advance(5_000)
+  await f.service.overview()
+  assert.equal(f.service.historySnapshot().get(listeningSourceIdentity('local', id)), f.timers.now)
+  const stats = await f.snapshot()
+  Object.values(stats.tracks)[0].sourceIds = [{ source: ' NCM ', trackId: 'ncm:42' }]
+  const qualified = buildLastPlayedBySource(stats)
+  assert.equal(qualified.get(listeningSourceIdentity('ncm', '42')), f.timers.now)
+  assert.equal(qualified.has(JSON.stringify(['focus-source-v1', 'D', id])), false)
+})
 
 test('one Core timer counts five-second ticks; duplicate state observations and reconnect-style reads cannot multiply listening', async (t) => {
   const f = await fixture(t)
@@ -272,7 +305,7 @@ test('history hydration projects the complete cross-source last-played index and
   const rows = f.library.sql.prepare('SELECT id,last_played FROM library_history ORDER BY id').all()
   assert.deepEqual(
     rows.map((row) => row.id),
-    [local.id, provider.id]
+    [listeningSourceIdentity('local', local.id), listeningSourceIdentity('provider', provider.id), local.id, provider.id].sort()
   )
   assert.ok(rows.every((row) => Number(row.last_played) > 0))
   await f.service.clear(null, f.service.getRevision())

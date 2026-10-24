@@ -51,6 +51,7 @@ import { PersonalizedQueue, type PersonalizedProviders } from './personalizedQue
 import type { CorePersonalizedStart, CorePersonalizedState } from '../../shared/corePersonalized.ts'
 import { shuffleArray } from '../../shared/shuffleArray.ts'
 import { HeartQueue, type HeartProviders } from './heartQueue.ts'
+import { automaticPlaybackMask, type AutomaticPlaybackAllowed } from './automaticPlayback.ts'
 import type { PreparedPlaybackSource, PlaybackSourceRecovery } from './sourceRecovery.ts'
 import type { SourceResources } from './sourceResources.ts'
 import type {
@@ -71,6 +72,10 @@ interface LoadContext {
   owner?: ReturnType<typeof createLibraryPlaybackController>
   recover?: TrackData
   allowRecovery?: boolean
+  prepared?: PreparedPlaybackSource
+  resourcesHeld?: boolean
+  automatic?: boolean
+  automaticOrigin?: string
 }
 
 export interface CorePlaybackEngine extends LibraryNativeQueueEngine {
@@ -131,6 +136,7 @@ export interface CorePlaybackSessionOptions {
   podcastPlaybackRate?(): number
   personalized?: PersonalizedProviders
   heart?: HeartProviders
+  automaticPlaybackAllowed?: AutomaticPlaybackAllowed
   /** Main must terminate the audio service if Core cannot confirm silence. */
   fatal(error: Error): void
 }
@@ -182,6 +188,7 @@ export class CorePlaybackSession {
   private heartBase: ReturnType<typeof createLibraryPlaybackController> | null = null
   private detachedHeartTrack = false
   private heartTransition = false
+  private automaticEnd: string | null = null
   private readonly listen = (info: PlaybackInfo) => {
     if (this.options.cast?.active()) return
     this.observed = { info, token: info.queueToken ?? this.options.engine.getQueueToken() }
@@ -205,6 +212,7 @@ export class CorePlaybackSession {
     this.personalized = options.personalized
       ? new PersonalizedQueue({
           ...options.personalized,
+          automaticPlaybackAllowed: options.automaticPlaybackAllowed,
           queue: () => {
             const queue = this.controller.snapshot.value
             return queue
@@ -225,6 +233,7 @@ export class CorePlaybackSession {
     this.heart = options.heart
       ? new HeartQueue({
           ...options.heart,
+          automaticPlaybackAllowed: options.automaticPlaybackAllowed,
           queue: () => this.queueReference(),
           track: () => this.currentTrack,
           append: (id, tracks, current) => this.extendPersonalized(id, tracks, current),
@@ -526,6 +535,7 @@ export class CorePlaybackSession {
     }).catch(() => {}) // failStopped already reports an unconfirmed Stop to main.
   }
   private async advanceCast(): Promise<void> {
+    if (this.automaticQueue()) return this.navigateAutomatic(1, undefined, true)
     const intent = this.beginPreparation(),
       signal = this.preview.signal
     try {
@@ -741,6 +751,8 @@ export class CorePlaybackSession {
     if (!this.observed) return
     // Observations, SQL cursor edits and native handoffs have one owner/lane.
     // Consume only the latest sample once per turn so transport can cut in.
+    let advance = false
+    const intent = this.intent
     this.observing = this.commit(async () => {
       const intent = this.intent
       const observed = this.observed
@@ -757,11 +769,28 @@ export class CorePlaybackSession {
       await this.acceptNative(info)
       if (observed.token !== this.options.engine.getQueueToken()) return
       this.info = info
-      await this.enforceAbLoop(intent)
+      const looped = await this.enforceAbLoop(intent)
+      const end = this.options.engine.getPlaybackEnd()
+      if (
+        !looped &&
+        this.automaticQueue() &&
+        info.state === 'stopped' &&
+        end &&
+        !this.options.sleepTimer?.triggered()
+      ) {
+        const key = `${end.intent}:${end.selection.queueToken}:${end.selection.index}`
+        if (this.automaticEnd !== key) {
+          this.automaticEnd = key
+          advance = true
+        }
+      }
       this.publish()
       if (this.options.now() - this.lastSavedAt >= 5000) this.scheduleSave()
       void this.maintainer?.tick()
     })
+      .then(async () => {
+        if (advance && intent === this.intent) await this.navigateAutomatic(1, undefined, true)
+      })
       .catch(async (error) => {
         this.revoke()
         try {
@@ -968,7 +997,7 @@ export class CorePlaybackSession {
         this.guard(intent, signal)
         return this.loadSource(window, intent, play, position, signal, context)
       }
-      await (this.options.resources ? this.options.resources.use(run) : run())
+      await (this.options.resources && !context.resourcesHeld ? this.options.resources.use(run) : run())
     } finally {
       this.finishPreparation(intent)
     }
@@ -984,19 +1013,53 @@ export class CorePlaybackSession {
     let { selection, adopt, prepare } = context
     const owner = context.owner ?? this.controller,
       staged = !!prepare
-    let prepared = context.recover
+    let prepared = context.prepared ?? (context.recover
       ? await this.recoverSource(context.recover, intent, signal)
-      : await this.resolve(window, intent, signal)
+      : await this.resolve(window, intent, signal))
     for (let attempt = 0; ; attempt++) {
       const { track, resolved } = prepared
+      if (context.automatic) {
+        const [allowed] = await automaticPlaybackMask(
+          [track],
+          this.options.automaticPlaybackAllowed,
+          signal
+        )
+        this.guard(intent, signal)
+        if (!allowed) throw new AutomaticPlaybackRejected()
+      }
       try {
         await this.transport(async () => {
           this.guard(intent, signal)
+          if (context.automatic && selection) {
+            const reference = this.controller.reference()
+            if (
+              reference?.id !== selection.expected.id ||
+              reference.entryId !== context.automaticOrigin
+            )
+              throw Object.assign(new Error('Automatic playback occurrence changed'), {
+                code: 'STALE_REVISION'
+              })
+            // A background recommendation append may finish during source IO.
+            // It keeps the selected occurrence and frozen order, so rebase only
+            // its revision; edits/selections revoke this playback intent.
+            selection.expected = reference
+            window.queue = { ...window.queue, revision: reference.revision }
+          }
           if (selection) this.assertReference(selection.expected)
           if (selection?.native) await this.fenceNative(selection.native)
           this.guard(intent, signal)
+          if (context.prepared) {
+            prepared.confirm?.()
+            if (!isSourceCurrent(resolved, this.options.now()))
+              throw new Error('Audio source expired before playback')
+          }
           await prepare?.()
           try {
+            this.guard(intent, signal)
+            prepared.confirm?.()
+            if (!isSourceCurrent(resolved, this.options.now()))
+              throw new Error('Audio source expired before playback')
+            await this.observeDepartingTrack(track)
             await this.repairSource(owner, window, track.queueEntryId!, prepared)
             if (selection)
               selection.expected = { ...selection.expected, revision: window.queue.revision }
@@ -1051,7 +1114,7 @@ export class CorePlaybackSession {
             } else {
               await this.applyTrackRate(previousTrack, track)
               await this.options.engine.setPlayMode(
-                this.mode === 'repeat' ? 'repeat' : 'sequential'
+                this.mode === 'repeat' && !this.automaticQueue() ? 'repeat' : 'sequential'
               )
               if (play) {
                 const result = await this.options.engine.play(
@@ -1122,6 +1185,9 @@ export class CorePlaybackSession {
       this.options.cast.resumeSampling()
       return
     }
+    // Recommendations stay in a one-item native window. A preloaded successor
+    // could start after a new ban without giving Core a preference-read boundary.
+    if (this.automaticQueue()) return
     if (
       !this.controller.reference() ||
       this.uncertain ||
@@ -1246,6 +1312,8 @@ export class CorePlaybackSession {
       mode?: PlayMode
       play?: boolean
       guard?: () => void
+      beforeAdopt?: (playing: boolean) => Promise<void>
+      onAdopt?: () => void
     } = {},
     signal?: AbortSignal
   ): Promise<void> {
@@ -1264,6 +1332,8 @@ export class CorePlaybackSession {
       order?: 'original' | 'shuffle'
       beforeAdopt?: (playing: boolean) => Promise<void>
       onAdopt?: () => void
+      preparedSource?: PreparedPlaybackSource
+      automatic?: boolean
     },
     intent: number,
     signal?: AbortSignal
@@ -1318,6 +1388,7 @@ export class CorePlaybackSession {
               await this.options.engine.pause()
               const info = await this.options.engine.getPlaybackInfo()
               if (info.state === 'playing') throw new Error('Native Pause was not acknowledged')
+              await this.observeDepartingTrack(candidate.track(window))
               await options.beforeAdopt?.(false)
               await this.clearAbLoop()
               this.guard(intent, signal)
@@ -1337,11 +1408,20 @@ export class CorePlaybackSession {
             await this.flush()
           } else {
             await this.load(window, intent, true, options.position ?? 0, signal, {
+              automatic: options.automatic,
               prepare: async () => {
                 await options.beforeAdopt?.(true)
                 adopt()
               },
-              owner: candidate
+              owner: candidate,
+              ...(options.preparedSource ? {
+                prepared: {
+                  ...options.preparedSource,
+                  track: { ...options.preparedSource.track, queueEntryId: window.items[0]?.queueEntryId }
+                },
+                resourcesHeld: true,
+                allowRecovery: false
+              } : {})
             })
           }
         },
@@ -1537,6 +1617,60 @@ export class CorePlaybackSession {
       intent,
       signal
     )
+  }
+  /** New unified operation: all source IO completes before staging one chosen
+   * queue. Preparation failures never mutate the live queue; native commit
+   * failures are not reasons to try another source. */
+  async fromUnifiedTrack<T>(
+    select: (
+      signal: AbortSignal,
+      prepare: (track: TrackData) => Promise<PreparedPlaybackSource>
+    ) => Promise<{ prepared: PreparedPlaybackSource | null; result: T }>,
+    signal?: AbortSignal,
+    beforeAdopt?: () => Promise<void>
+  ): Promise<T> {
+    const intent = this.beginPreparation()
+    const current = signal ? AbortSignal.any([this.preview.signal, signal]) : this.preview.signal
+    const run = async () => {
+      this.guard(intent, signal)
+      const selection = await select(current, async (track) => {
+        this.guard(intent, signal)
+        const prepared = await this.prepareSource({ ...track, sourceSelection: 'explicit' }, current)
+        this.guard(intent, signal)
+        prepared.confirm?.()
+        if (!isSourceCurrent(prepared.resolved, this.options.now()))
+          throw new Error('Audio source expired before playback')
+        return prepared
+      })
+      this.guard(intent, signal)
+      if (!selection.prepared) return selection.result
+      const prepared = selection.prepared
+      const snapshot: LibraryTrackRecord = { ...toPlaybackQueueSnapshot(prepared.track) }
+      await this.stagePages(async (append) => {
+        await append([{ id: snapshot.id,
+          ...(snapshot.source === 'local' ? { localSnapshot: snapshot } : { snapshot }) }])
+      }, {
+        preparedSource: prepared,
+        beforeAdopt: async () => {
+          await beforeAdopt?.()
+          this.guard(intent, signal)
+          prepared.confirm?.()
+          if (!isSourceCurrent(prepared.resolved, this.options.now()))
+            throw new Error('Audio source expired before playback')
+        }
+      }, intent, signal)
+      return selection.result
+    }
+    try {
+      // Cache maintenance may itself be waiting for source read leases.
+      // Wait for its session barrier before acquiring this operation's lease.
+      if (this.sourceBarrier) await this.sourceBarrier
+      this.guard(intent, signal)
+      return await (this.options.resources ? this.options.resources.use(run) : run())
+    } finally {
+      this.finishPreparation(intent)
+      if (intent === this.intent) this.startMaintenance()
+    }
   }
   private async applyTrackRate(previous: TrackData | null, track: TrackData | null): Promise<void> {
     if (this.options.cast?.active()) return
@@ -1854,7 +1988,97 @@ export class CorePlaybackSession {
     this.startMaintenance()
     this.publish()
   }
+  private automaticQueue(): boolean {
+    const heart = this.heart?.persisted()
+    return !!(
+      this.options.automaticPlaybackAllowed &&
+      (this.personalized?.state() ||
+        (heart?.baseQueue && heart.queueId === this.controller.reference()?.id))
+    )
+  }
+  /** A recommendation skip is not an explicit selection of a named song.
+   * Inspect at most 100 existing occurrences and request at most one refill. */
+  private async navigateAutomatic(
+    direction: 1 | -1,
+    signal?: AbortSignal,
+    natural = false
+  ): Promise<void> {
+    const intent = this.beginPreparation()
+    const current = AbortSignal.any([this.preview.signal, ...(signal ? [signal] : [])])
+    try {
+      const selection = await this.commit(async () => {
+        this.guard(intent, current)
+        const native = await this.nativeSelection()
+        return { native, reference: this.controller.reference() }
+      })
+      let reference = selection.reference
+      if (!reference) return
+      let cursor = reference.index,
+        budget = 100
+      const visited = new Set<string>()
+      if (!(natural && this.mode === 'repeat')) visited.add(reference.entryId)
+      for (let pass = 0; pass < 2 && budget > 0; pass++) {
+        const candidates: LibraryQueuePlaybackWindow['items'] = []
+        if (pass === 0 && natural && this.mode === 'repeat') {
+          const row = this.controller.window.value?.items[0]
+          if (row?.track) {
+            candidates.push(row)
+            visited.add(row.queueEntryId)
+            budget--
+          }
+        }
+        while (budget > 0) {
+          const row = await this.options.queues.readNeighbor(
+            reference.id,
+            reference.revision,
+            cursor,
+            direction,
+            !natural || this.mode === 'listLoop' || this.mode === 'shuffle'
+          )
+          this.guard(intent, current)
+          if (!row?.track || visited.has(row.queueEntryId)) break
+          visited.add(row.queueEntryId)
+          cursor = row.position
+          budget--
+          candidates.push(row)
+        }
+        const mask = await automaticPlaybackMask(
+          candidates.map((row) => libraryQueueTrack(row.track!, row.queueEntryId)),
+          this.options.automaticPlaybackAllowed,
+          current
+        )
+        this.guard(intent, current)
+        for (let index = 0; index < candidates.length; index++) {
+          if (!mask[index]) continue
+          try {
+            await this.load(this.targetWindow(candidates[index]), intent, true, 0, current, {
+              selection: { expected: reference, native: selection.native },
+              automatic: true,
+              automaticOrigin: reference.entryId
+            })
+            return
+          } catch (error) {
+            if (!(error instanceof AutomaticPlaybackRejected)) throw error
+            // A ban changed while resolving this source. It never reached native.
+          }
+        }
+        if (pass || direction < 0 || !budget) break
+        const owner = this.personalized?.state() ? this.personalized : this.heart
+        const added = await owner?.refill()
+        this.guard(intent, current)
+        reference = this.controller.reference()!
+        if (!added) break
+      }
+      this.error = 'No available tracks for automatic playback'
+      this.publish()
+      await this.flush()
+    } finally {
+      this.finishPreparation(intent)
+      if (intent === this.intent) this.startMaintenance()
+    }
+  }
   async navigate(direction: 1 | -1, signal?: AbortSignal): Promise<void> {
+    if (this.automaticQueue()) return this.navigateAutomatic(direction, signal)
     const intent = this.beginPreparation()
     try {
       const selection = await this.commit(async () => {
@@ -1925,6 +2149,32 @@ export class CorePlaybackSession {
       items: [target]
     }
   }
+  private async observeDepartingTrack(nextTrack: TrackData | null): Promise<void> {
+    const current = this.currentTrack
+    if (
+      !current ||
+      (current.id === nextTrack?.id && current.queueEntryId === nextTrack?.queueEntryId)
+    )
+      return
+    if (!this.restored && !this.uncertain) {
+      if (this.options.cast?.active()) {
+        if (this.options.cast.state().phase === 'ready')
+          this.acceptCast(await this.options.cast.read())
+      } else if (this.options.engine.getQueueToken()) {
+        const info = await this.options.engine.getPlaybackInfo()
+        const active = this.options.engine.getQueueSnapshot()[info.queueIndex]
+        if (
+          active &&
+          active.id === current.id &&
+          (!active.queueEntryId || active.queueEntryId === current.queueEntryId)
+        ) {
+          this.info = info
+        }
+      }
+    }
+    if (this.info)
+      this.options.observePlayback?.(current, { ...this.info, playMode: this.mode })
+  }
   private async nativeSelection(): Promise<NativeQueueSelection | null> {
     if (
       this.options.cast?.active() ||
@@ -1936,6 +2186,7 @@ export class CorePlaybackSession {
     const info = await this.options.engine.getPlaybackInfo()
     await this.acceptNative(info)
     this.info = info
+    this.options.observePlayback?.(this.currentTrack, { ...this.info, playMode: this.mode })
     const item = this.options.engine.getQueueSnapshot()[info.queueIndex]
     return item
       ? {
@@ -2493,7 +2744,7 @@ export class CorePlaybackSession {
     signal?: AbortSignal
   ): Promise<void> {
     const current = AbortSignal.any([this.preview.signal, ...(signal ? [signal] : [])])
-    const tracks = await owner.initial(command.providerId, command.key, current)
+    const tracks = await owner.initial(command.providerId, command.key, current, command.selectedId)
     this.guard(intent, current)
     const selected = command.selectedId
       ? tracks.find((track) => track.id === command.selectedId)
@@ -2515,6 +2766,7 @@ export class CorePlaybackSession {
       {
         mode: 'shuffle',
         play: command.play !== false,
+        automatic: !command.selectedId,
         onAdopt: () =>
           owner.attach({
             providerId: command.providerId,
@@ -2694,3 +2946,8 @@ function nativeStartFailure(result: AudioEnginePlayResult): Error {
   return result.superseded ? new Error(message) : new NativeSourceRejected(message)
 }
 class NativeSourceRejected extends Error {}
+class AutomaticPlaybackRejected extends Error {
+  constructor() {
+    super('Track is excluded from automatic playback')
+  }
+}

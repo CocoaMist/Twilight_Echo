@@ -70,6 +70,54 @@ function parseRequest(path) {
   return new URL(path, 'http://twilight.local')
 }
 
+test('native artist text preserves full source sections, unspecified language and anonymous request cancellation context', async () => {
+  const controller = new AbortController(), calls = []
+  const provider = await activateProvider(async (path, cookie, options) => {
+    const url = parseRequest(path); calls.push(url.pathname)
+    assert.equal(cookie, '')
+    assert.equal(options.signal, controller.signal)
+    assert.equal(url.searchParams.get('id'), '42')
+    if (url.pathname === '/artist/detail') return { code: 200, data: { artist: { id: 42, name: 'Artist' } } }
+    return { code: 200, briefDesc: '简介', introduction: [{ ti: '生平', txt: '正文' }] }
+  }, new Map())
+  try {
+    const result = await provider.fetchArtistMetadata(42, { signal: controller.signal })
+    assert.equal(result.status, 'ok')
+    assert.equal(result.metadata.id, '42')
+    assert.equal(result.metadata.texts[0].value, '简介\n\n生平\n正文')
+    assert.equal(result.metadata.texts[0].language, 'und')
+    assert.equal(result.metadata.texts[0].usage, undefined, 'API access does not grant caching/cross-source rights')
+    assert.deepEqual(calls, ['/artist/detail', '/artist/desc'])
+    assert.equal(typeof provider.fetchArtistIntro, 'function')
+  } finally { ncmProvider.deactivate() }
+})
+
+test('native album details contain platform release text, not playback tracks or a MusicBrainz pressing', async () => {
+  const provider = await activateProvider(async path => {
+    assert.equal(parseRequest(path).pathname, '/album')
+    return { code: 200, album: { id: 42, name: 'Album', description: '专辑正文', briefDesc: '短描述' }, songs: [song(7)] }
+  }, new Map())
+  try {
+    const result = await provider.fetchAlbumMetadata('42')
+    assert.equal(result.status, 'ok'); assert.equal(result.metadata.kind, 'release')
+    assert.equal(result.metadata.texts[0].value, '专辑正文')
+    assert.equal(result.metadata.texts[0].url, 'https://music.163.com/#/album?id=42')
+    assert.equal(result.metadata.tracks, undefined)
+  } finally { ncmProvider.deactivate() }
+})
+
+test('native metadata distinguishes absent text, missing identities, errors and mismatched response IDs', async () => {
+  let data = { code: 200, album: { id: 42, name: 'Album' } }
+  const provider = await activateProvider(async () => data, new Map())
+  try {
+    assert.deepEqual(await provider.fetchAlbumMetadata('42'), { status: 'not_provided' })
+    data = { code: 404 }; assert.deepEqual(await provider.fetchAlbumMetadata('42'), { status: 'not_found' })
+    data = { code: 503 }; await assert.rejects(provider.fetchAlbumMetadata('42'))
+    data = { code: 200, album: { id: 43, name: 'Album', description: 'Wrong album' } }
+    await assert.rejects(provider.fetchAlbumMetadata('42'), /身份不一致/)
+  } finally { ncmProvider.deactivate() }
+})
+
 test('readPlaylistImportPage preserves repeated IDs and missing songs across complete pages',async()=>{
   const requests=[]
   const provider=await activateProvider(async path=>{
@@ -166,6 +214,48 @@ test('album search is anonymous-capable and preserves totals, artist credits and
   }
 })
 
+for (const method of ['searchSongs', 'searchArtists', 'fetchArtistIntro']) {
+  test(`${method} forwards active cancellation to the actual HTTP exit`, async () => {
+    const controller = new AbortController()
+    let entered
+    const ready = new Promise(resolve => { entered = resolve })
+    const provider = await activateProvider(async (_path, _cookie, options) => {
+      assert.equal(options.signal, controller.signal)
+      entered()
+      return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+    })
+    try {
+      const invoke = () => method === 'fetchArtistIntro'
+        ? provider[method](42, { signal: controller.signal })
+        : provider[method]('Artist', 10, 0, { signal: controller.signal })
+      const pending = invoke()
+      await ready
+      controller.abort(new Error('cancelled identification request'))
+      await assert.rejects(pending, /cancelled identification request/)
+      await assert.rejects(invoke(), /cancelled identification request/)
+    } finally {
+      ncmProvider.deactivate()
+    }
+  })
+}
+
+test('song and artist searches distinguish failed responses from an empty result', async () => {
+  let response = { code: 200, result: {} }
+  const provider = await activateProvider(async () => response)
+  try {
+    for (const method of ['searchSongs', 'searchArtists']) {
+      assert.deepEqual(await provider[method]('Artist'), { items: [], total: 0 })
+      response = { code: 403, message: 'not allowed' }
+      await assert.rejects(provider[method]('Artist'))
+      response = { code: 200, result: { songs: {}, artists: {} } }
+      await assert.rejects(provider[method]('Artist'), /无效/)
+      response = { code: 200, result: {} }
+    }
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
 test('album search distinguishes empty pages from invalid or failed responses', async () => {
   let response = { code: 200, result: { albumCount: 0 } }
   const provider = await activateProvider(async () => response, new Map())
@@ -208,6 +298,123 @@ test('album tracks can be opened after anonymous search without changing their o
   } finally {
     ncmProvider.deactivate()
   }
+})
+
+function identityAlbumResponse() {
+  return {
+    code: 200,
+    album: { id: 123, name: 'Album', size: 2, artists: [{ id: 7, name: 'Artist' }] },
+    // Response order is deliberately different from service track ordinals.
+    songs: [2, 1].map(n => ({
+      id: 100 + n, name: `Song ${n}`, ar: [{ id: 7, name: 'Artist' }],
+      al: { id: 123, name: 'Album' }, cd: '01', no: n, dt: 200250
+    }))
+  }
+}
+
+test('album identity preserves independent counts, structured credits, actual order and original precision anonymously', async () => {
+  const controller = new AbortController()
+  const provider = await activateProvider(async (path, cookie, options) => {
+    assert.equal(parseRequest(path).pathname, '/album')
+    assert.equal(parseRequest(path).searchParams.get('id'), '123')
+    assert.ok(!cookie)
+    assert.equal(options.signal, controller.signal)
+    return identityAlbumResponse()
+  }, new Map())
+  try {
+    const result = await provider.fetchAlbumIdentity(123, { signal: controller.signal })
+    assert.equal(result.schemaVersion, 1)
+    assert.equal(result.id, '123')
+    assert.equal(result.provider, 'ncm')
+    assert.equal(result.trackCount, 2)
+    assert.equal(result.complete, true)
+    assert.deepEqual(result.artists, [{ id: '7', name: 'Artist' }])
+    assert.deepEqual(result.tracks.map(t => [t.id, t.disc, t.position, t.durationSeconds]),
+      [['102', 1, 2, 200.25], ['101', 1, 1, 200.25]])
+    assert.ok(result.tracks.every(t => !('filePath' in t) && !('streamUrl' in t)))
+    assert.deepEqual((await provider.fetchAlbumTracks(123, { signal: controller.signal })).map(t => t.id), ['ncm:102', 'ncm:101'])
+  } finally { ncmProvider.deactivate() }
+})
+
+for (const variant of ['unknown_count', 'conflicting_counts', 'missing_track', 'duplicate', 'wrong_track_album', 'oversize']) {
+  test(`album identity ${variant} cannot claim complete retrieval`, async () => {
+    const response = identityAlbumResponse()
+    if (variant === 'unknown_count') delete response.album.size
+    if (variant === 'conflicting_counts') response.album.songCount = 3
+    if (variant === 'missing_track') response.songs.pop()
+    if (variant === 'duplicate') response.songs[1] = response.songs[0]
+    if (variant === 'wrong_track_album') response.songs[0].al.id = 456
+    if (variant === 'oversize') {
+      response.album.size = 65
+      response.songs = Array.from({ length: 65 }, (_, i) => ({ ...response.songs[0], id: 200 + i, no: i + 1 }))
+    }
+    const provider = await activateProvider(async () => response)
+    try {
+      const result = await provider.fetchAlbumIdentity(123)
+      assert.equal(result.complete, false)
+      assert.ok(result.tracks.length <= 64)
+      if (variant === 'unknown_count') assert.equal(result.trackCount, null)
+    } finally { ncmProvider.deactivate() }
+  })
+}
+
+test('missing album ordinals, duration and nameless credits stay unknown instead of being guessed or dropped', async () => {
+  const response = identityAlbumResponse()
+  delete response.songs[0].cd; delete response.songs[0].no; delete response.songs[0].dt
+  response.songs[0].ar.push({ id: 8 })
+  const provider = await activateProvider(async () => response)
+  try {
+    const result = await provider.fetchAlbumIdentity(123)
+    assert.equal(result.complete, true) // retrieved, but not comparable
+    assert.equal(result.tracks[0].disc, null)
+    assert.equal(result.tracks[0].position, null)
+    assert.equal(result.tracks[0].durationSeconds, null)
+    assert.deepEqual(result.tracks[0].artists, [{ name: 'Artist', id: '7' }, { name: '', id: '8' }])
+  } finally { ncmProvider.deactivate() }
+})
+
+test('malformed album responses and wrong identities are errors, not successful empty albums', async () => {
+  let response
+  const provider = await activateProvider(async () => response)
+  try {
+    for (response of [{ code: 403 }, { code: 200 }, { album: { id: 123 } },
+      { ...identityAlbumResponse(), album: { id: 456 } },
+      { ...identityAlbumResponse(), songs: [null] }]) {
+      await assert.rejects(provider.fetchAlbumIdentity(123))
+    }
+    response = { code: 200, data: identityAlbumResponse() }
+    assert.equal((await provider.fetchAlbumIdentity(123)).complete, true)
+  } finally { ncmProvider.deactivate() }
+})
+
+test('album search marks filtered rows and unknown service totals incomplete for identity consumers', async () => {
+  let response = { code: 200, result: { albums: [album(1)] } }
+  const provider = await activateProvider(async () => response)
+  try {
+    assert.equal((await provider.searchAlbums('Album')).incomplete, true)
+    response = { code: 200, result: { albums: [null, album(1)], albumCount: 1 } }
+    assert.equal((await provider.searchAlbums('Album')).incomplete, true)
+    response = { code: 200, result: { albums: [{ ...album(1), id: '1e3' }], albumCount: 1 } }
+    assert.equal((await provider.searchAlbums('Album')).incomplete, true)
+  } finally { ncmProvider.deactivate() }
+})
+
+test('album identity forwards active cancellation and rejects pre-cancelled requests', async () => {
+  const controller = new AbortController()
+  let entered
+  const ready = new Promise(resolve => { entered = resolve })
+  const provider = await activateProvider(async (_path, _cookie, options) => {
+    assert.equal(options.signal, controller.signal)
+    entered()
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+  })
+  try {
+    const pending = provider.fetchAlbumIdentity(123, { signal: controller.signal })
+    await ready
+    controller.abort(new Error('cancel album identity'))
+    await assert.rejects(pending, /cancel album identity/)
+    await assert.rejects(provider.fetchAlbumIdentity(123, { signal: controller.signal }), /cancel album identity/)
+  } finally { ncmProvider.deactivate() }
 })
 
 test('public toplists normalize previews, exclude invalid entries and cache until refreshed', async () => {

@@ -102,7 +102,7 @@ export interface CorePlatformOperations extends CoreModelPackPlatformOperations 
   'artwork.normalizeCachedCover': { input: { handle: string }; output: string }
   'artwork.remotePreview': { input: { cover: string | null }; output: string | null }
   'artwork.present': {
-    input: { cover: string | null; coverSource: string | null }
+    input: { cover: string | null; coverSource: string | null; imageExpiresAt?: number }
     output: Pick<CorePlayerPresentation, 'cover' | 'coverSource'>
   }
   'media.resolveAudio': { input: { handle: string }; output: { source: string } }
@@ -170,7 +170,8 @@ export function validCorePlatformPayload(request: CorePlatformRequest): boolean 
     case 'artwork.present': {
       const value = payload as CorePlatformOperations['artwork.present']['input']
       return (
-        Object.keys(payload).length === 2 &&
+        Object.keys(payload).every(k => ['cover','coverSource','imageExpiresAt'].includes(k)) &&
+        (value.imageExpiresAt === undefined || (Number.isSafeInteger(value.imageExpiresAt) && value.imageExpiresAt > 0)) &&
         [value.cover, value.coverSource].every(
           (field) =>
             field === null ||

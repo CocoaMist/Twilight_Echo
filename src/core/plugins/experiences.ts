@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises'
 import { dirname, relative, resolve } from 'node:path'
@@ -8,8 +7,14 @@ import { normalizeExperiences, type InstalledExperience } from '../../shared/plu
 import { resolvePluginFile } from './packageSecurity.ts'
 import type { TwilightPluginManager } from './manager.ts'
 import { createExperienceDocuments } from './experienceDocuments.ts'
-import { createExperienceMusic } from './experienceMusic.ts'
+import { createExperienceMusic, type ExperienceMusicAlbum } from './experienceMusic.ts'
 import { libraryTrack } from '../playback/libraryTrack.ts'
+import {
+  createLegacyMusicAuthority,
+  legacyExperienceAlbumId,
+  type LegacyMusicAuthorityDatabase
+} from './legacyMusicAuthority.ts'
+import type { LegacyMusicTaskClient } from '../../shared/legacyMusicTasks.ts'
 
 /** Package authorization and long-running metadata jobs survive every UI window. */
 export class CorePluginExperiences {
@@ -24,14 +29,21 @@ export class CorePluginExperiences {
     plugins: Pick<TwilightPluginManager, 'list' | 'listExtensions'>,
     database: Pick<LibraryDatabaseApi, 'queryCollections' | 'queryTracks'>,
     isScanning: () => boolean,
-    exportFile: (name: string, content: string) => Promise<{ saved: boolean }>
+    exportFile: (name: string, content: string) => Promise<{ saved: boolean }>,
+    metadataDatabase?: LegacyMusicAuthorityDatabase,
+    tasks?: LegacyMusicTaskClient
   ) {
     this.plugins = plugins
     this.database = database
     this.isScanning = isScanning
     this.exportFile = exportFile
-    this.document = createExperienceDocuments(plugins)
-    this.operate = createExperienceMusic(plugins, this.document)
+    this.document = createExperienceDocuments(
+      plugins,
+      metadataDatabase
+        ? createLegacyMusicAuthority(metadataDatabase, () => isScanning() || this.operate?.running())
+        : undefined
+    )
+    this.operate = createExperienceMusic(plugins, this.document, tasks)
   }
   async list(): Promise<InstalledExperience[]> {
     return (await this.plugins.list())
@@ -127,13 +139,13 @@ export class CorePluginExperiences {
     await this.flush()
   }
   async music(pluginId: string, operation: string, args: Record<string, unknown>) {
-    if (operation !== 'status' && this.isScanning())
+    if (operation !== 'status' && operation !== 'cancel' && this.isScanning())
       throw new Error('曲库正在扫描，请完成后重试资料操作')
-    const albums = operation === 'status' ? [] : await this.albums()
+    const albums = ['status', 'inventory', 'history', 'history.read', 'restore', 'cancel', 'provenance.list', 'provenance.read', 'provenance.review'].includes(operation) ? [] : await this.albums()
     return this.operate(pluginId, operation, albums, args)
   }
-  private async albums(): Promise<MusicAlbum[]> {
-    const albums: MusicAlbum[] = []
+  private async albums(): Promise<ExperienceMusicAlbum[]> {
+    const albums: ExperienceMusicAlbum[] = []
     let offset = 0,
       revision: number | undefined
     for (;;) {
@@ -144,7 +156,7 @@ export class CorePluginExperiences {
       })
       revision = page.revision
       for (const summary of page.items) {
-        const id = `album-${createHash('sha256').update(summary.id).digest('hex')}`
+        const id = legacyExperienceAlbumId(summary.id)
         const tracks: MusicAlbum['tracks'] = []
         let firstGenre: string | undefined
         let trackOffset = 0
@@ -184,6 +196,8 @@ export class CorePluginExperiences {
         }
         albums.push({
           id,
+          collectionId: summary.id,
+          contentRevision: revision,
           title: summary.name,
           artist: summary.artist ?? '',
           year: summary.releaseDate ? Number(summary.releaseDate.slice(0, 4)) : undefined,

@@ -13,6 +13,8 @@ import {
   recordListeningTrackDay
 } from '../../shared/listeningStatsHistory.ts'
 import { cloneTrackForPlaybackSession } from '../playback/sessionTrack.ts'
+import { listeningSourceIdentity } from '../../shared/listeningSourceIdentity.ts'
+import { getTrackSource as getCatalogTrackSource } from '../../shared/trackSourceIdentity.ts'
 
 export const LISTENING_TICK_SECONDS = 5
 export const COMPLETION_RATIO = 0.9
@@ -268,6 +270,21 @@ export function buildLastPlayedByTrackId(
   for (const stat of Object.values(stats.tracks)) {
     if (stat.track?.id) result.set(stat.track.id, stat.lastPlayed)
     for (const sourceId of stat.sourceIds ?? []) result.set(sourceId.trackId, stat.lastPlayed)
+  }
+  return result
+}
+
+/** Exact recorded sources only; no title lookup and no cross-provider raw-ID guess. */
+export function buildLastPlayedBySource(stats: Pick<ListeningStats, 'tracks'>): ReadonlyMap<string, number> {
+  const result = new Map<string, number>()
+  const add = (provider: string, id: string, at: number) => {
+    if (!provider || !id || !Number.isFinite(at) || at <= 0) return
+    const key = listeningSourceIdentity(provider, id)
+    result.set(key, Math.max(result.get(key) ?? 0, at))
+  }
+  for (const stat of Object.values(stats.tracks)) {
+    if (stat.track?.id) add(getCatalogTrackSource(stat.track), stat.track.id, stat.lastPlayed)
+    for (const source of stat.sourceIds ?? []) add(source.source, source.trackId, stat.lastPlayed)
   }
   return result
 }

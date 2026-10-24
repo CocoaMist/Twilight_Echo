@@ -505,7 +505,8 @@ export function createPlaylistPageCommands(options: {
   async function setFavoriteTrackPages(
     produce: PlaylistTrackPageProducer,
     favorite: boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    exactAdditions?: ReadonlySet<string>
   ): Promise<number> {
     const { base, current } = captureFavorites(signal)
     const index = recordingIndex(base)
@@ -519,7 +520,7 @@ export function createPlaylistPageCommands(options: {
         for (const track of page) {
           validateTrack(track)
           if (favorite) {
-            if (index.matches(track)) continue
+            if (index.ids.has(track.id) || (!exactAdditions?.has(track.id) && index.matches(track))) continue
             const snapshot = toPlaylistTrackSnapshot(track)
             additions.set(track.id, snapshot)
             index.add(track.id, snapshot)
@@ -559,7 +560,7 @@ export function createPlaylistPageCommands(options: {
         }
     let added = 0
     for (const snapshot of additions.values()) {
-      if (latestIndex.matches(snapshot)) continue
+      if (latestIndex.ids.has(snapshot.id) || (!exactAdditions?.has(snapshot.id) && latestIndex.matches(snapshot))) continue
       latestIndex.add(snapshot.id, snapshot)
       next.trackIds.push(snapshot.id)
       putSnapshot(next.trackSnapshots!, snapshot.id, snapshot)

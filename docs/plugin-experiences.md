@@ -45,6 +45,41 @@ metadata/import/export operations have larger, method-specific envelopes in
 `experienceRequestLimit`; arbitrary large requests remain denied. Private preferences
 are bounded to 64 KiB and written atomically in the plugin data directory.
 
+## Music metadata and recovery
+
+`music.metadata.read / write` retain the 16 MiB, revision-fenced document contract.
+In the production Core, the first eligible read migrates the original IDs and
+payloads into the music library SQLite. After publication that database is the
+only writable authority; the original JSON and versioned backups are recovery
+snapshots. UI preferences remain separate.
+
+`music.metadata.operate` retains task, preview, import and reconcile. It also
+accepts these `operation` values with arguments in `body`:
+
+- `inventory`: `{ offset, limit }` returns original payloads, source bindings and
+  bound/unassigned/conflict dispositions. These are source assignments, not
+  confirmed shared music identities.
+- `history`: `{ offset, limit }` returns retained document revisions.
+- `history.read`: `{ revision }` returns that historical document or `null`.
+- `restore`: `{ revision, expectedRevision }` restores the retained document and
+  source bindings as a new revision, preserving the previous state in history.
+- `cancel`: `{ operation: 'introductions' | 'credits' | 'enrich' }` cancels the
+  latest batch for that lookup, including an active request, without clearing
+  completed metadata. Cancellation remains available during a library scan.
+
+These operations require the experience's existing `library:write` permission;
+inventory/history pages are capped at 200. Read history and compare it with the
+current document before restoring; a revision conflict requires a fresh read.
+Production introductions/credits/enrich now use the Core's single persistent
+metadata worker. Published batches survive restarts; incomplete submissions are
+abandoned without executing. Existing selection, force and status fields remain
+available. Status also reports batchId, needsReview, blocked, retrying, cancelled
+and nextAttemptAt. A partial result may count as updated while awaiting retry.
+The existing network permission is still required for queries. Explicit source
+prohibitions apply, but the new automatic-identification opt-in is not a new
+prerequisite for these manual operations. Implementation and acceptance gaps are recorded in
+[M2.4](D:/Project/Twilight_Echo/docs/unified-music-library-m2.4.md).
+
 The host owns the playback engine and queue. Opening, closing or replacing a
 view must not implicitly stop playback. The sample Rhine experience fetches
 album summaries in pages and loads track details on demand.

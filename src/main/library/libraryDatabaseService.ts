@@ -28,6 +28,13 @@ let serial = Promise.resolve()
 let maintenanceScheduled = false
 let maintenanceTimer: NodeJS.Timeout | undefined
 let publishedRevision: number | null = null
+let publishedGenresRevision: number | null = null
+let publishedClassificationMetadataRevision: number | null = null
+let publishedRatingsRevision: number | null = null
+let publishedPreferencesRevision: number | null = null
+let publishedTagsToken: string | null = null
+let publishedExplorationState: string | null = null
+let publishedFocusState: string | null = null
 type Work = {
   request: LibraryDatabaseWorkerRequest
   playlistToken?: symbol
@@ -290,9 +297,50 @@ function enqueue(work: Work): void {
     .then(() => {
       if (!database || closing) return
       const revision = database.getContentRevision()
-      if (revision === publishedRevision) return
-      publishedRevision = revision
-      servicePort.postMessage({ kind: 'library-changed', revision })
+      if (revision !== publishedRevision) {
+        publishedRevision = revision
+        servicePort.postMessage({ kind: 'library-changed', revision })
+      }
+      const genresRevision = database.getGenresRevision()
+      const ratingsRevision = database.getRatingsRevision()
+      if (ratingsRevision !== publishedRatingsRevision) {
+        publishedRatingsRevision = ratingsRevision
+        servicePort.postMessage({ kind: 'ratings-changed', revision: ratingsRevision })
+      }
+      const preferencesRevision = database.getPreferencesRevision()
+      if (preferencesRevision !== publishedPreferencesRevision) {
+        publishedPreferencesRevision = preferencesRevision
+        servicePort.postMessage({ kind: 'preferences-changed', revision: preferencesRevision })
+      }
+      const explorationState = database.explorationState()
+      const serializedExplorationState = JSON.stringify(explorationState)
+      if (serializedExplorationState !== publishedExplorationState) {
+        publishedExplorationState = serializedExplorationState
+        servicePort.postMessage({ kind: 'exploration-changed', state: explorationState })
+      }
+      const focusState = database.focusState()
+      const serializedFocusState = JSON.stringify(focusState)
+      if (serializedFocusState !== publishedFocusState) {
+        publishedFocusState = serializedFocusState
+        servicePort.postMessage({ kind: 'focus-changed', state: focusState })
+      }
+      const tagsToken = database.tagsState()
+      const serializedTagsToken = JSON.stringify(tagsToken)
+      if (serializedTagsToken !== publishedTagsToken) {
+        publishedTagsToken = serializedTagsToken
+        servicePort.postMessage({ kind: 'tags-changed', token: tagsToken })
+      }
+      if (genresRevision !== publishedGenresRevision) {
+        publishedGenresRevision = genresRevision
+        servicePort.postMessage({ kind: 'genres-changed', revision: genresRevision })
+      }
+      const metadataRevision = database.getClassificationMetadataRevision()
+      if (metadataRevision !== publishedClassificationMetadataRevision) {
+        publishedClassificationMetadataRevision = metadataRevision
+        servicePort.postMessage({ kind: 'classification-metadata-changed', revision: metadataRevision })
+      }
+      if (work.request.kind === 'call' && ['legacyMusicPublish', 'legacyMusicEdit', 'legacyMusicRestore'].includes(work.request.method))
+        servicePort.postMessage({ kind: 'genres-invalidated' })
     })
     .then(scheduleMaintenance)
     .catch((error) => {

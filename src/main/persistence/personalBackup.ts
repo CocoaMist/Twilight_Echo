@@ -12,11 +12,16 @@ export const {
   previewRestore,
   applyPendingPersonalRestore,
   createPersonalBackupFromDatabase,
+  createPersonalBackupV1FromDatabase,
   previewRestoreFromDatabase,
   stagePersonalRestoreFromDatabase,
   applyPendingPersonalRestoreFromDatabase,
   readRendererRestore,
   acknowledgeRendererRestore,
+  deferStalePersonalRestore,
+  personalRestoreNeedsReview,
+  readPersonalRestoreReview,
+  acknowledgePersonalRestoreReview,
   readBackupFile,
   writePersonalBackupFile
 } = repository

@@ -2,6 +2,19 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createArtworkProjection } from './artworkProjection.ts'
 
+test('metadata artwork projection carries absolute permission expiry to the original grant service', async () => {
+  let expires: number | undefined
+  const project = createArtworkProjection({ normalizeCachedCover: async handle => handle,
+    migrateBase64Cover: () => null, resolve: () => ({ source: 'https://cover.example/a.jpg', expiresAt: 1500 }),
+    grant: (_source, expiresAt) => { expires = expiresAt; return 'twilight-media://image/expiring' }
+  })
+  assert.deepEqual(await project({ cover: 'https://cover.example/a.jpg', coverSource: null, imageExpiresAt: 2000 }, new AbortController().signal),
+    { cover: 'twilight-media://image/expiring', coverSource: null })
+  assert.equal(expires, 2000)
+  await project({ cover: 'twilight-media://image/expiring', coverSource: null }, new AbortController().signal)
+  assert.equal(expires, 1500, 're-granting an existing image cannot discard its permission deadline')
+})
+
 test('Core artwork projects cache handles and re-grants durable or session images without exposing origins', async () => {
   const sources: string[] = []
   const project = createArtworkProjection({

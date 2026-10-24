@@ -45,8 +45,11 @@ export type TwilightMediaProviderMethod =
   | 'fetchSavedAlbums'
   | 'fetchSavedArtists'
   | 'fetchArtistIntro'
+  | 'fetchArtistMetadata'
+  | 'fetchAlbumMetadata'
   | 'fetchArtistFollowState'
   | 'fetchAlbumTracks'
+  | 'fetchAlbumIdentity'
   | 'fetchArtistPlaylists'
   | 'fetchUserPlaylistsByUid'
   | 'fetchUserFollows'
@@ -110,8 +113,11 @@ export const TWILIGHT_MEDIA_PROVIDER_METHODS = [
   'fetchSavedAlbums',
   'fetchSavedArtists',
   'fetchArtistIntro',
+  'fetchArtistMetadata',
+  'fetchAlbumMetadata',
   'fetchArtistFollowState',
   'fetchAlbumTracks',
+  'fetchAlbumIdentity',
   'fetchArtistPlaylists',
   'fetchUserPlaylistsByUid',
   'fetchUserFollows',

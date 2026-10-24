@@ -2,8 +2,10 @@ import type { LocalMusicLibraryDocument } from './localLibrary.ts'
 import type { LibraryMetadata } from './libraryDatabase.ts'
 import type { LibraryPlaybackQueueReference } from './playbackSession.ts'
 import type { PersonalBackupPreview, PersonalRestoreOptions } from './personalBackup.ts'
+import type { MusicPreferencesDatabaseApi } from './musicPreferences.ts'
+import type { MusicPersonalBackupDatabaseApi } from './musicPersonalBackup.ts'
 
-export interface PersonalLibraryDatabase {
+export interface PersonalLibraryDatabase extends Partial<Pick<MusicPreferencesDatabaseApi, 'preferencesPlaylistsLoad' | 'preferencesPlaylistsRestore'>>, Partial<MusicPersonalBackupDatabaseApi> {
   exportDocument(options?: {
     maxBytes?: number
     redactPrivateData?: boolean

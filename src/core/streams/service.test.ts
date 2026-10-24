@@ -332,18 +332,39 @@ test('episode departure persists its final observation, and native EOF records c
     trackTimeMs: 0,
     queueTimeMs: 0
   })
-  f.service.observe(f.track('one'), {
-    state: 'playing',
-    position: 30,
-    naturalBoundaries: boundaries(0)
-  })
+  f.service.observe(
+    { ...f.track('one'), queueEntryId: 'occ-1' },
+    {
+      state: 'playing',
+      position: 30,
+      naturalBoundaries: boundaries(0)
+    }
+  )
+  f.service.observe(
+    { ...f.track('one'), queueEntryId: 'occ-2' },
+    {
+      state: 'playing',
+      position: 0,
+      naturalBoundaries: boundaries(0)
+    }
+  )
+  await f.service.flush()
+  assert.equal(f.episodes('one').items[0].progressSeconds, 30)
+  f.service.observe(
+    { ...f.track('one'), queueEntryId: 'occ-2' },
+    {
+      state: 'playing',
+      position: 47,
+      naturalBoundaries: boundaries(0)
+    }
+  )
   f.service.observe(f.track('two'), {
     state: 'playing',
     position: 20,
     naturalBoundaries: boundaries(0)
   })
   await f.service.flush()
-  assert.equal(f.episodes('one').items[0].progressSeconds, 30)
+  assert.equal(f.episodes('one').items[0].progressSeconds, 47)
   f.service.observe(null, { state: 'stopped', position: 0, naturalBoundaries: boundaries(1) })
   await f.service.flush()
   assert.equal(f.episodes('two').items[0].progressSeconds, 120)

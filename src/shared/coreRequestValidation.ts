@@ -1,5 +1,18 @@
 import { validCoreDspPayload } from './coreDsp.ts'
+import { EXPERIENCE_MUSIC_OPERATIONS } from './pluginExperience.ts'
 import { validCatalogPayload } from './musicCatalog.ts'
+import { validGenresPayload } from './musicGenres.ts'
+import { validGenreBrowsePayload } from './musicGenreBrowse.ts'
+import { validAlbumBrowsePayload } from './musicAlbumBrowse.ts'
+import { validUnifiedPlaybackPayload } from './musicUnifiedPlayback.ts'
+import { validEntityMetadataPayload } from './entityMetadata.ts'
+import { validMetadataTasksPayload } from './entityMetadataTasks.ts'
+import { validIdentificationPayload } from './musicIdentification.ts'
+import { validMusicRatingsPayload } from './musicRatings.ts'
+import { validMusicPreferencesPayload } from './musicPreferences.ts'
+import { validMusicTagsPayload } from './musicTags.ts'
+import { validMusicFocusPayload } from './musicFocus.ts'
+import { validMusicExplorationPayload } from './musicExploration.ts'
 import { validCoreRemotePayload } from './coreRemote.ts'
 import { validCoreAudioDiagnosticsPayload } from './coreAudioDiagnostics.ts'
 import { validCoreLibraryReadPayload } from './coreLibrary.ts'
@@ -8,7 +21,7 @@ import { trackCueRangePropertyIsValid } from './cue.ts'
 import { validCoreSettingsBackupPayload } from './coreSettingsBackup.ts'
 import { validCoreThemePayload } from './coreThemes.ts'
 import { CORE_SPECIALIZED_SETTINGS } from './coreSettings.ts'
-import { PERSONAL_DOMAINS } from './personalBackup.ts'
+import { PERSONAL_DOMAINS, validPersonalExportOptions } from './personalBackup.ts'
 import { LIBRARY_PAGE_SIZE, LIBRARY_MAX_PAGE_SIZE } from './libraryDatabase.ts'
 import { validCoreAudioPayload } from './coreAudio.ts'
 import {
@@ -617,9 +630,12 @@ export function validCorePayload(name: CoreOperation, payload: unknown): boolean
     case 'analysis.loudness.status':
       return Object.keys(p).length === 0
     case 'backup.export':
+      return validPersonalExportOptions(p)
     case 'backup.preview':
+    case 'backup.recover':
     case 'backup.chooseFolder':
       return Object.keys(p).length === 0
+    case 'backup.repreview':
     case 'backup.stage': {
       const options = p.options
       return (
@@ -631,6 +647,7 @@ export function validCorePayload(name: CoreOperation, payload: unknown): boolean
         Array.isArray(options.domains) &&
         options.domains.length > 0 &&
         options.domains.length <= PERSONAL_DOMAINS.length &&
+        new Set(options.domains).size === options.domains.length &&
         options.domains.every((domain) => oneOf(domain, PERSONAL_DOMAINS)) &&
         Array.isArray(options.mappings) &&
         options.mappings.length <= 100 &&
@@ -1342,6 +1359,88 @@ export function validCorePayload(name: CoreOperation, payload: unknown): boolean
         optional(p.variantRow, (s) => typeof s === 'string' && /^(0|[1-9]\d{0,6})$/.test(s)) &&
         !(p.sourceCounts === true && p.variantRow !== undefined)
       )
+    case 'identification.start':
+    case 'identification.status':
+    case 'identification.detail':
+    case 'identification.candidates':
+    case 'identification.history':
+    case 'identification.restorePreview':
+    case 'identification.restore':
+    case 'identification.inbox':
+    case 'identification.preview':
+    case 'identification.decide':
+    case 'identification.detach':
+      return validIdentificationPayload(name, p)
+    case 'metadata.entity.sources':
+    case 'metadata.entity.requery':
+    case 'metadata.entity.tasks':
+    case 'metadata.entity.demands':
+      return validMetadataTasksPayload(name, p)
+    case 'metadata.entity.policy':
+    case 'metadata.entity.detail':
+    case 'metadata.entity.jobs':
+    case 'metadata.entity.credits':
+    case 'metadata.entity.resolve':
+    case 'metadata.entity.enrich':
+    case 'metadata.entity.decide':
+    case 'metadata.entity.detach':
+    case 'metadata.entity.override':
+    case 'metadata.entity.sourcePreference':
+    case 'metadata.entity.artworkOverride':
+    case 'metadata.entity.cancel':
+      return validEntityMetadataPayload(name, p)
+    case 'genres.browse':
+    case 'genres.members':
+    case 'genres.facets':
+      return validGenreBrowsePayload(name, p)
+    case 'genres.tree':
+    case 'genres.unmapped':
+    case 'genres.evidence':
+    case 'genres.edit':
+    case 'genres.map':
+    case 'genres.override':
+      return validGenresPayload(name, p)
+    case 'ratings.detail':
+    case 'ratings.targets':
+    case 'ratings.history':
+    case 'ratings.set':
+      return validMusicRatingsPayload(name, p)
+    case 'preferences.detail':
+    case 'preferences.targets':
+    case 'preferences.history':
+    case 'preferences.set':
+      return validMusicPreferencesPayload(name, p)
+    case 'exploration.query':
+    case 'exploration.lookup':
+    case 'exploration.detail':
+    case 'exploration.relations':
+    case 'exploration.participation':
+    case 'exploration.performance.save':
+    case 'exploration.performance.delete': return validMusicExplorationPayload(name, p)
+    case 'focus.query':
+    case 'focus.play.status':
+    case 'focus.facets':
+    case 'focus.saved.list':
+    case 'focus.saved.create':
+    case 'focus.saved.rename':
+    case 'focus.saved.update':
+    case 'focus.saved.delete':
+    case 'focus.play': return validMusicFocusPayload(name, p)
+    case 'tags.list':
+    case 'tags.entity':
+    case 'tags.members':
+    case 'tags.recordings':
+    case 'tags.create':
+    case 'tags.rename':
+    case 'tags.delete':
+    case 'tags.member.set':
+    case 'tags.play':
+      return validMusicTagsPayload(name, p)
+    case 'albums.browse':
+    case 'albums.sources':
+      return validAlbumBrowsePayload(name, p)
+    case 'catalog.playUnified':
+      return validUnifiedPlaybackPayload(p)
     case 'catalog.query':
     case 'catalog.detail':
     case 'catalog.sources':
@@ -1513,7 +1612,7 @@ export function validCorePayload(name: CoreOperation, payload: unknown): boolean
     case 'extensions.document.edit':
       return keys(p, ['id', 'update']) && pluginId(p.id) && record(p.update) && keys(p.update, ['revision', 'value']) && uint(p.update.revision) && record(p.update.value) && isBoundedCoreJson(p.update.value, 16 * 1024 * 1024)
     case 'extensions.music':
-      return keys(p, ['id', 'operation', 'args']) && pluginId(p.id) && oneOf(p.operation, ['status', 'task', 'preview', 'import', 'reconcile', 'introductions', 'credits', 'enrich']) && record(p.args) && isBoundedCoreJson(p.args, 16 * 1024 * 1024)
+      return keys(p, ['id', 'operation', 'args']) && pluginId(p.id) && oneOf(p.operation, EXPERIENCE_MUSIC_OPERATIONS) && record(p.args) && isBoundedCoreJson(p.args, 16 * 1024 * 1024)
     case 'extensions.export':
       return keys(p, ['id', 'name', 'content']) && pluginId(p.id) && typeof p.name === 'string' && /^[a-zA-Z0-9_.-]{1,100}\.(md|json|txt)$/.test(p.name) && typeof p.content === 'string' && new TextEncoder().encode(p.content).length <= 4 * 1024 * 1024
     case 'extensions.execute':

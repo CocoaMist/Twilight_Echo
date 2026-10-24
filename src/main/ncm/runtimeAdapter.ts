@@ -1,17 +1,45 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Agent } from 'undici'
-import { NcmApiService, NCM_API_HOST } from '../../core/providers/ncmApi.ts'
+import { Agent, request, type Dispatcher } from 'undici'
+import {
+  NcmApiService,
+  NCM_API_HOST,
+  type NcmApiServiceOptions
+} from '../../core/providers/ncmApi.ts'
 
-/** Node/package adapter shared by the legacy main entry and the utility Core. */
-export function createNcmApiRuntime(): NcmApiService {
-  const agent = new Agent({
+/** The OS may assign a valid loopback port (such as 6000) blocked by Fetch. */
+export function createNcmLoopbackTransport(
+  dispatcher: Dispatcher = new Agent({
     connections: 8,
     keepAliveTimeout: 60_000,
     keepAliveMaxTimeout: 120_000
   })
+): Required<Pick<NcmApiServiceOptions, 'fetch' | 'closeTransport'>> {
+  return {
+    fetch: async (url, init) => {
+      const response = await request(url, {
+        signal: init.signal,
+        headers: init.headers,
+        dispatcher,
+        maxRedirections: 20
+      })
+      const headers = new Headers()
+      for (const [name, value] of Object.entries(response.headers)) {
+        if (Array.isArray(value)) {
+          for (const item of value) headers.append(name, item)
+        } else if (value !== undefined) headers.set(name, value)
+      }
+      return { status: response.statusCode, headers, text: () => response.body.text() }
+    },
+    closeTransport: () => dispatcher.close()
+  }
+}
+
+/** Node/package adapter shared by the legacy main entry and the utility Core. */
+export function createNcmApiRuntime(): NcmApiService {
   return new NcmApiService({
+    ...createNcmLoopbackTransport(),
     startServer: async () => {
       const tokenPath = join(tmpdir(), 'anonymous_token')
       if (!existsSync(tokenPath)) writeFileSync(tokenPath, '', 'utf8')
@@ -24,8 +52,6 @@ export function createNcmApiRuntime(): NcmApiService {
       })
       if (!api.server) throw new Error('NetEase API server did not return a listener')
       return api.server
-    },
-    fetch: (url, init) => fetch(url, { ...init, dispatcher: agent } as RequestInit),
-    closeTransport: () => agent.close()
+    }
   })
 }

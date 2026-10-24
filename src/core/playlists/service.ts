@@ -43,6 +43,7 @@ import {
   type PlaylistFileFormat
 } from '../../shared/playlistLifecycle.ts'
 import { projectCoreError } from '../projections.ts'
+import type { MusicPreferenceState } from '../../shared/musicPreferences.ts'
 
 export interface CorePlaylistServiceOptions {
   runtime: PlaylistRuntime
@@ -53,6 +54,7 @@ export interface CorePlaylistServiceOptions {
   versions: CorePlaylistViewOptions['versions']
   /** Only JSON-library mode supplies the complete legacy library snapshot. */
   loadJsonLibrary?: () => Promise<{ revision: number; tracks: TrackData[] }>
+  preferencesTrackStates?(tracks: TrackData[]): Promise<Array<MusicPreferenceState | null>>
   findRelocationsInFolder?(
     missing: readonly TrackData[],
     folder: string
@@ -140,7 +142,9 @@ export class CorePlaylistService {
   async favorites(revision: number, tracks: TrackData[]) {
     await this.tail.catch(() => undefined)
     this.fence(revision)
-    return { revision, contains: tracks.map(track => this.controller.isFavoriteTrack(track)) }
+    const states = await this.options.preferencesTrackStates?.(tracks)
+    this.fence(revision)
+    return { revision, contains: tracks.map((track, index) => states?.[index] == null ? this.controller.isFavoriteTrack(track) : states[index] === 'favorite') }
   }
   *sourceTracks(): Iterable<TrackData> {
     for (const playlist of this.committed) {
@@ -191,12 +195,17 @@ export class CorePlaylistService {
       signal?.throwIfAborted()
       this.fence(revision)
       const c = this.controller
+      const exactFavoriteIds = new Set<string>()
       const tracks: PlaylistTrackPageProducer = async (append) =>
         produce(async (items) => {
           const resolved = items.map((item) => {
             if (!item.track) throw new Error('歌单添加操作缺少曲目身份')
             return item.track
           })
+          if (edit.kind === 'favorite' && edit.favorite) {
+            const states = await this.options.preferencesTrackStates?.(resolved)
+            resolved.forEach((track, i) => { if (states?.[i] === 'ban' || states?.[i] === 'none') exactFavoriteIds.add(track.id) })
+          }
           await append(resolved)
         })
       const ids: import('../../shared/playlists.ts').PlaylistTrackIdPageProducer = async (append) =>
@@ -223,7 +232,7 @@ export class CorePlaylistService {
           result = await c.reorderPlaylistTrackIdPagesById(edit.id, ids, edit.target, signal)
           break
         case 'favorite':
-          result = await c.setFavoriteTrackPages(tracks, edit.favorite, signal)
+          result = await c.setFavoriteTrackPages(tracks, edit.favorite, signal, exactFavoriteIds)
           break
       }
       await this.flush()
@@ -232,13 +241,16 @@ export class CorePlaylistService {
   }
   async isFavorite(track: TrackData): Promise<boolean> {
     await this.tail.catch(() => undefined)
-    return this.controller.isFavoriteTrack(track)
+    const state = (await this.options.preferencesTrackStates?.([track]))?.[0]
+    return state == null ? this.controller.isFavoriteTrack(track) : state === 'favorite'
   }
   toggleFavorite(track: TrackData, assertCurrent: () => void): Promise<boolean> {
     return this.enqueue(async () => {
       assertCurrent()
-      const liked = !this.controller.isFavoriteTrack(track)
-      this.controller.setFavoriteTracks([track], liked)
+      const state = (await this.options.preferencesTrackStates?.([track]))?.[0]
+      assertCurrent()
+      const liked = !(state == null ? this.controller.isFavoriteTrack(track) : state === 'favorite')
+      this.controller.setFavoriteTracks([track], liked, liked && state != null ? new Set([track.id]) : undefined)
       await this.flush()
       return liked
     })
@@ -360,15 +372,19 @@ export class CorePlaylistService {
           command.target.overwrite
         )
         const saved = this.playlists.value.find((p) => p.id === id)!.imported!
-        const buckets = new Map<string, ImportedPlaylistEntry[]>()
+        const buckets = new Map<string, { entries: ImportedPlaylistEntry[]; next: number }>()
         for (const entry of imported.entries) {
           const key = importSongKey(entry.original),
-            entries = buckets.get(key) ?? []
-          entries.push(entry)
-          buckets.set(key, entries)
+            bucket = buckets.get(key)
+          if (bucket) bucket.entries.push(entry)
+          else buckets.set(key, { entries: [entry], next: 0 })
         }
         for (const entry of saved.entries) {
-          const matched = buckets.get(importSongKey(entry.original))?.shift()
+          const bucket = buckets.get(importSongKey(entry.original))
+          const matched =
+            bucket && bucket.next < bucket.entries.length
+              ? bucket.entries[bucket.next++]
+              : undefined
           if (matched?.manualBinding) c.bindExternalEntry(id, entry.entryId, matched.manualBinding)
           if (matched && (matched.manualBinding || entry.resolution.state === 'pending'))
             c.applyExternalResolution(
@@ -384,11 +400,25 @@ export class CorePlaylistService {
       return { id, revision: this.getRevision() }
     })
   }
-  async initialize(): Promise<void> {
-    await this.controller.loadPlaylists()
-    await this.flush()
-    this.committed = this.controller.clonePlaylistSnapshot()
-    this.revision = this.controller.getRevision()
+  initialize(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.controller.loadPlaylists()
+      await this.flush()
+      this.committed = this.controller.clonePlaylistSnapshot()
+      this.revision = this.controller.getRevision()
+    })
+  }
+  /** Public read dispatch waits for a just-published preference refresh before using cached pages. */
+  async waitForPending(): Promise<void> { await this.tail }
+  /** A preference/identity transaction can change the default list outside a playlist gesture. */
+  refreshPreferences(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.flush()
+      await this.controller.loadPlaylists()
+      this.committed = this.controller.clonePlaylistSnapshot()
+      this.revision = this.controller.getRevision()
+      this.options.changed()
+    })
   }
   private fence(revision: number): void {
     if (revision !== this.getRevision())
@@ -691,7 +721,11 @@ export class CorePlaylistService {
           )
           break
         case 'favorite':
-          result = c.setFavoriteTracks(edit.tracks, edit.favorite)
+          {
+            const states = await this.options.preferencesTrackStates?.(edit.tracks)
+            const exact = states ? new Set(edit.tracks.filter((_, i) => states[i] === 'ban' || states[i] === 'none').map(t => t.id)) : undefined
+            result = c.setFavoriteTracks(edit.tracks, edit.favorite, exact)
+          }
           break
       }
       await this.flush()

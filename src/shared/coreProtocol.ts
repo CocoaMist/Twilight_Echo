@@ -177,6 +177,10 @@ import type {
 
 import type { CatalogQuery, CatalogPage, CatalogSourceQuery, CatalogSourcePage,
   CatalogDetail, CatalogServiceStatus } from './musicCatalog.ts'
+import type { EntityMetadataResolve, EntityMetadataDemand, EntityMetadataDecision, EntityMetadataOverride,
+  EntityMetadataJobsQuery, EntityMetadataJob, EntityMetadataLanguage, EntityMetadataDetail, EntityMetadataPolicyView } from './entityMetadata.ts'
+import type { MusicIdentityDetail, IdentificationCandidatesQuery, IdentificationCandidate, IdentificationStart,
+  IdentificationDecision, IdentificationReview, IdentificationPreview } from './musicIdentification.ts'
 
 export const CORE_PROTOCOL_VERSION = 1
 export type CoreEpoch = string
@@ -222,6 +226,16 @@ export interface CoreQueueReference {
 export interface CoreSnapshot {
   libraryRevision: number | null
   catalogRevision?: number | null
+  genresRevision?: number | null
+  classificationMetadataRevision?: number | null
+  ratingsRevision?: number | null
+  preferencesRevision?: number | null
+  tagsRevision?: number | null
+  tagsLinkRevision?: number | null
+  focusRevision?: number | null
+  focusHistoryRevision?: number | null
+  explorationRevision?: number | null
+  entityMetadataRevision?: number | null
   pluginsRevision: number | null
   isStreamBuffering: boolean
   loading: boolean
@@ -248,6 +262,7 @@ export interface CoreSnapshot {
   versionsRevision: number | null
   audioRevision: number | null
   settingsRevision: number | null
+  personalBackupRecovery?: boolean | null
   sleepTimer: CoreSleepTimerState | null
   bookmarksRevision: number | null
   lyricsRevision: number | null
@@ -263,6 +278,36 @@ export interface CoreSnapshot {
 }
 
 export interface CoreCommands extends CorePlaylistCommands, CoreRemoteCommands {
+  'ratings.set': import('./musicRatings.ts').MusicRatingsSet
+  'preferences.set': import('./musicPreferences.ts').MusicPreferencesSet
+  'tags.create': import('./musicTags.ts').MusicTagsCreate
+  'tags.rename': import('./musicTags.ts').MusicTagsRename
+  'tags.delete': import('./musicTags.ts').MusicTagsDelete
+  'tags.member.set': import('./musicTags.ts').MusicTagsMemberSet
+  'tags.play': import('./musicTags.ts').MusicTagsPlay
+  'focus.play': import('./musicFocus.ts').MusicFocusPlay
+  'focus.saved.create': import('./musicFocus.ts').MusicFocusCreate
+  'focus.saved.rename': import('./musicFocus.ts').MusicFocusRename
+  'focus.saved.update': import('./musicFocus.ts').MusicFocusUpdate
+  'focus.saved.delete': import('./musicFocus.ts').MusicFocusDelete
+  'exploration.performance.save': import('./musicExploration.ts').MusicExplorationPerformanceSave
+  'exploration.performance.delete': import('./musicExploration.ts').MusicExplorationPerformanceDelete
+  'genres.edit': import('./musicGenres.ts').GenreEdit
+  'genres.map': import('./musicGenres.ts').GenreMap
+  'genres.override': import('./musicGenres.ts').GenreOverride
+  'identification.restore': import('./musicIdentification.ts').IdentificationHistoryReview
+  'metadata.entity.requery': import('./entityMetadataTasks.ts').MetadataTaskRequery
+  'identification.start': IdentificationStart
+  'metadata.entity.resolve': EntityMetadataResolve
+  'identification.decide': IdentificationDecision
+  'identification.detach': { linkId: string; revision: number }
+  'metadata.entity.enrich': EntityMetadataDemand
+  'metadata.entity.decide': EntityMetadataDecision
+  'metadata.entity.detach': { entityId: string; revision: number }
+  'metadata.entity.override': EntityMetadataOverride
+  'metadata.entity.sourcePreference': import('./entityMetadata.ts').EntityMetadataSourcePreference
+  'metadata.entity.artworkOverride': import('./entityMetadata.ts').EntityMetadataArtworkOverride
+  'metadata.entity.cancel': { jobId: string; batchId: string; generation?: number }
   'opra.refresh': Record<string, never>
   'themes.edit': CoreThemeOperations['themes.edit']['input']
   'themes.import': CoreThemeOperations['themes.import']['input']
@@ -288,8 +333,10 @@ export interface CoreCommands extends CorePlaylistCommands, CoreRemoteCommands {
   'library.loudness.clear': { id: string }
   'analysis.request': { kind: 'bpm' | 'loudness'; id: string; version: number }
   'analysis.cache.clear': { kind: 'bpm' | 'loudness' }
-  'backup.export': Record<string, never>
+  'backup.export': import('./personalBackup.ts').PersonalBackupExportOptions
   'backup.preview': Record<string, never>
+  'backup.recover': Record<string, never>
+  'backup.repreview': CorePersonalRestore
   'backup.chooseFolder': Record<string, never>
   'backup.stage': CorePersonalRestore
   'library.duplicates.start': Record<string, never>
@@ -368,6 +415,7 @@ export interface CoreCommands extends CorePlaylistCommands, CoreRemoteCommands {
   'catalog.refresh': Record<string, never>
   'catalog.cancel': Record<string, never>
   'catalog.play': { sourceId: string; revision: number }
+  'catalog.playUnified': import('./musicUnifiedPlayback.ts').UnifiedPlaybackRequest
   'playlists.edit': CorePlaylistMutation
   'providers.call': CoreProviderCall
   'plugins.enable': { id: string }
@@ -381,7 +429,7 @@ export interface CoreCommands extends CorePlaylistCommands, CoreRemoteCommands {
   'plugins.installSource': { path: string }
   'extensions.preferences.edit': { id: string; value: Record<string, unknown> }
   'extensions.document.edit': { id: string; update: CoreExperienceDocument }
-  'extensions.music': { id: string; operation: 'status' | 'task' | 'preview' | 'import' | 'reconcile' | 'introductions' | 'credits' | 'enrich'; args: Record<string, unknown> }
+  'extensions.music': { id: string; operation: import('./pluginExperience.ts').ExperienceMusicOperation; args: Record<string, unknown> }
   'extensions.export': { id: string; name: string; content: string }
   'extensions.execute': { command: string; args: unknown[] }
   'statistics.clear': CoreStatisticsClear
@@ -443,6 +491,31 @@ export interface CoreQueries
     CorePlaylistQueries,
     CoreRemoteQueries,
     Pick<CoreThemeOperations, 'themes.list' | 'themes.bootstrap'> {
+  'ratings.detail': { input: { entityId: string }; output: import('./musicRatings.ts').MusicRatingsDetail }
+  'ratings.targets': { input: import('./musicRatings.ts').MusicRatingsTargetsQuery; output: import('./musicRatings.ts').MusicRatingsTargetsPage }
+  'ratings.history': { input: import('./musicRatings.ts').MusicRatingsHistoryQuery; output: import('./musicRatings.ts').MusicRatingsHistoryPage }
+  'preferences.detail': { input: { entityId: string }; output: import('./musicPreferences.ts').MusicPreferencesDetail }
+  'preferences.targets': { input: import('./musicPreferences.ts').MusicPreferencesTargetsQuery; output: import('./musicPreferences.ts').MusicPreferencesTargetsPage }
+  'preferences.history': { input: import('./musicPreferences.ts').MusicPreferencesHistoryQuery; output: import('./musicPreferences.ts').MusicPreferencesHistoryPage }
+  'focus.query': { input: import('./musicFocus.ts').MusicFocusPageQuery; output: import('./musicFocus.ts').MusicFocusPage }
+  'exploration.query': { input: import('./musicExploration.ts').MusicExplorationQuery; output: import('./musicExploration.ts').MusicExplorationPage }
+  'exploration.lookup': { input: import('./musicExploration.ts').MusicExplorationLookupQuery; output: import('./musicExploration.ts').MusicExplorationDetail }
+  'exploration.detail': { input: import('./musicExploration.ts').MusicExplorationDetailQuery; output: import('./musicExploration.ts').MusicExplorationDetail }
+  'exploration.relations': { input: import('./musicExploration.ts').MusicExplorationRelationsQuery; output: import('./musicExploration.ts').MusicExplorationRelationsPage }
+  'exploration.participation': { input: import('./musicExploration.ts').MusicExplorationParticipationQuery; output: import('./musicExploration.ts').MusicExplorationRelationsPage }
+  'focus.play.status': { input: import('./musicFocus.ts').MusicFocusPlayStatusQuery; output: import('./musicFocus.ts').MusicFocusPlayStatus }
+  'focus.facets': { input: import('./musicFocus.ts').MusicFocusFacetsQuery; output: import('./musicFocus.ts').MusicFocusFacetsPage }
+  'focus.saved.list': { input: import('./musicFocus.ts').MusicFocusSavedListQuery; output: import('./musicFocus.ts').MusicFocusSavedPage }
+  'tags.list': { input: import('./musicTags.ts').MusicTagsListQuery; output: import('./musicTags.ts').MusicTagsListPage }
+  'tags.entity': { input: import('./musicTags.ts').MusicTagsEntityQuery; output: import('./musicTags.ts').MusicTagsEntityPage }
+  'tags.members': { input: import('./musicTags.ts').MusicTagsMembersQuery; output: import('./musicTags.ts').MusicTagsMembersPage }
+  'tags.recordings': { input: import('./musicTags.ts').MusicTagsMembersQuery; output: import('./musicTags.ts').MusicTagsRecordingsPage }
+  'genres.tree': { input: import('./musicGenres.ts').GenreQuery; output: import('./musicGenres.ts').GenrePage }
+  'genres.browse': { input: import('./musicGenreBrowse.ts').GenreBrowseQuery; output: import('./musicGenreBrowse.ts').GenreBrowsePage }
+  'genres.members': { input: import('./musicGenreBrowse.ts').GenreMembersQuery; output: import('./musicGenreBrowse.ts').GenreMembersPage }
+  'genres.facets': { input: import('./musicGenreBrowse.ts').GenreFacetsQuery; output: import('./musicGenreBrowse.ts').GenreFacetsPage }
+  'genres.unmapped': { input: import('./musicGenres.ts').GenreUnmappedQuery; output: import('./musicGenres.ts').GenreUnmappedPage }
+  'genres.evidence': { input: import('./musicGenres.ts').GenreEvidenceQuery; output: import('./musicGenres.ts').GenreEvidencePage }
   'opra.search': { input: { query: string }; output: OpraProfile[] }
   'opra.profile': { input: { id: string }; output: OpraProfile | null }
   'opra.status': { input: Record<string, never>; output: OpraCatalogStatus }
@@ -576,7 +649,23 @@ export interface CoreQueries
   'imports.status': { input: { id: string }; output: CoreImportProgress | null }
   'playlists.view': { input: CorePlaylistViewQuery; output: CorePlaylistViewPage }
   'versions.page': { input: CoreVersionsQuery; output: CoreVersionsPage }
+  'identification.history': { input: import('./musicIdentification.ts').IdentificationHistoryQuery; output: import('./musicIdentification.ts').IdentificationHistoryPage }
+  'identification.restorePreview': { input: import('./musicIdentification.ts').IdentificationHistoryReview; output: import('./musicIdentification.ts').IdentificationRestorePreview }
+  'metadata.entity.sources': { input: import('./entityMetadataTasks.ts').MetadataTaskSourcesQuery; output: import('./entityMetadataTasks.ts').MetadataTaskSourcesPage }
+  'metadata.entity.policy': { input: Record<string, never>; output: EntityMetadataPolicyView }
+  'identification.status': { input: Record<string, never>; output: import('./musicIdentificationSchedule.ts').IdentificationScheduleStatus }
+  'identification.detail': { input: { entityId: string }; output: MusicIdentityDetail }
+  'identification.candidates': { input: IdentificationCandidatesQuery; output: { total: number; items: IdentificationCandidate[] } }
+  'identification.inbox': { input: import('./musicIdentification.ts').IdentificationInboxQuery; output: import('./musicIdentification.ts').IdentificationInboxPage }
+  'identification.preview': { input: IdentificationReview; output: IdentificationPreview }
+  'metadata.entity.detail': { input: { entityId: string; language: EntityMetadataLanguage; sourceProvider?: string }; output: EntityMetadataDetail }
+  'metadata.entity.jobs': { input: EntityMetadataJobsQuery; output: { total: number; items: EntityMetadataJob[] } }
+  'metadata.entity.tasks': { input: import('./entityMetadataTasks.ts').MetadataTasksQuery; output: import('./entityMetadataTasks.ts').MetadataTasksPage }
+  'metadata.entity.demands': { input: import('./entityMetadataTasks.ts').MetadataTaskDemandsQuery; output: import('./entityMetadataTasks.ts').MetadataTaskDemandsPage }
+  'metadata.entity.credits': { input: import('./musicCredits.ts').MusicCreditsQuery; output: import('./musicCredits.ts').MusicCreditsPage }
   'catalog.query': { input: CatalogQuery; output: CatalogPage }
+  'albums.browse': { input: import('./musicAlbumBrowse.ts').AlbumBrowseQuery; output: import('./musicAlbumBrowse.ts').AlbumBrowsePage }
+  'albums.sources': { input: import('./musicAlbumBrowse.ts').AlbumSourcesQuery; output: import('./musicAlbumBrowse.ts').AlbumSourcesPage }
   'catalog.detail': { input: { id: string; revision?: number }; output: CatalogDetail }
   'catalog.sources': { input: CatalogSourceQuery; output: CatalogSourcePage }
   'catalog.status': { input: Record<string, never>; output: CatalogServiceStatus }
@@ -722,6 +811,8 @@ const OPERATIONS: Record<
   'analysis.cache.size': { kind: 'query', permission: 'settings:read' },
   'analysis.loudness.status': { kind: 'query', permission: 'settings:read' },
   'backup.preview': { kind: 'command', permission: 'settings:write' },
+  'backup.recover': { kind: 'command', permission: 'settings:write' },
+  'backup.repreview': { kind: 'command', permission: 'settings:write' },
   'backup.chooseFolder': { kind: 'command', permission: 'settings:write' },
   'backup.stage': { kind: 'command', permission: 'settings:write' },
   'library.duplicates.start': { kind: 'command', permission: 'library:read' },
@@ -853,9 +944,81 @@ const OPERATIONS: Record<
   'imports.cancel': { kind: 'command', permission: 'library:write' },
   'imports.status': { kind: 'query', permission: 'library:read' },
   'versions.edit': { kind: 'command', permission: 'library:write' },
+  'identification.history': { kind: 'query', permission: 'library:read' },
+  'identification.restorePreview': { kind: 'query', permission: 'library:read' },
+  'identification.restore': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.sources': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.requery': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.resolve': { kind: 'command', permission: 'library:write' },
+  'identification.start': { kind: 'command', permission: 'library:write' },
+  'identification.status': { kind: 'query', permission: 'library:read' },
+  'identification.decide': { kind: 'command', permission: 'library:write' },
+  'identification.detach': { kind: 'command', permission: 'library:write' },
+  'identification.detail': { kind: 'query', permission: 'library:read' },
+  'identification.candidates': { kind: 'query', permission: 'library:read' },
+  'identification.inbox': { kind: 'query', permission: 'library:read' },
+  'identification.preview': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.enrich': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.decide': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.detach': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.override': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.sourcePreference': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.artworkOverride': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.cancel': { kind: 'command', permission: 'library:write' },
+  'metadata.entity.policy': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.detail': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.jobs': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.tasks': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.demands': { kind: 'query', permission: 'library:read' },
+  'metadata.entity.credits': { kind: 'query', permission: 'library:read' },
   'catalog.refresh': { kind: 'command', permission: 'library:write' },
   'catalog.cancel': { kind: 'command', permission: 'library:write' },
   'catalog.play': { kind: 'command', permission: 'playback:write' },
+  'catalog.playUnified': { kind: 'command', permission: 'playback:write' },
+  'albums.browse': { kind: 'query', permission: 'library:read' },
+  'ratings.detail': { kind: 'query', permission: 'library:read' },
+  'ratings.targets': { kind: 'query', permission: 'library:read' },
+  'ratings.history': { kind: 'query', permission: 'library:read' },
+  'ratings.set': { kind: 'command', permission: 'library:write' },
+  'preferences.detail': { kind: 'query', permission: 'library:read' },
+  'preferences.targets': { kind: 'query', permission: 'library:read' },
+  'preferences.history': { kind: 'query', permission: 'library:read' },
+  'preferences.set': { kind: 'command', permission: 'library:write' },
+  'tags.list': { kind: 'query', permission: 'library:read' },
+  'tags.entity': { kind: 'query', permission: 'library:read' },
+  'tags.members': { kind: 'query', permission: 'library:read' },
+  'tags.recordings': { kind: 'query', permission: 'library:read' },
+  'tags.create': { kind: 'command', permission: 'library:write' },
+  'tags.rename': { kind: 'command', permission: 'library:write' },
+  'tags.delete': { kind: 'command', permission: 'library:write' },
+  'tags.member.set': { kind: 'command', permission: 'library:write' },
+  'tags.play': { kind: 'command', permission: 'playback:write' },
+  'focus.query': { kind: 'query', permission: 'library:read' },
+  'exploration.query': { kind: 'query', permission: 'library:read' },
+  'exploration.lookup': { kind: 'query', permission: 'library:read' },
+  'exploration.detail': { kind: 'query', permission: 'library:read' },
+  'exploration.relations': { kind: 'query', permission: 'library:read' },
+  'exploration.participation': { kind: 'query', permission: 'library:read' },
+  'exploration.performance.save': { kind: 'command', permission: 'library:write' },
+  'exploration.performance.delete': { kind: 'command', permission: 'library:write' },
+  'focus.play.status': { kind: 'query', permission: 'playback:read' },
+  'focus.facets': { kind: 'query', permission: 'library:read' },
+  'focus.saved.list': { kind: 'query', permission: 'library:read' },
+  'focus.saved.create': { kind: 'command', permission: 'library:write' },
+  'focus.saved.rename': { kind: 'command', permission: 'library:write' },
+  'focus.saved.update': { kind: 'command', permission: 'library:write' },
+  'focus.saved.delete': { kind: 'command', permission: 'library:write' },
+  'focus.play': { kind: 'command', permission: 'playback:write' },
+  'albums.sources': { kind: 'query', permission: 'library:read' },
+  'genres.tree': { kind: 'query', permission: 'library:read' },
+  'genres.browse': { kind: 'query', permission: 'library:read' },
+  'genres.members': { kind: 'query', permission: 'library:read' },
+  'genres.facets': { kind: 'query', permission: 'library:read' },
+  'genres.unmapped': { kind: 'query', permission: 'library:read' },
+  'genres.evidence': { kind: 'query', permission: 'library:read' },
+  'genres.edit': { kind: 'command', permission: 'library:write' },
+  'genres.map': { kind: 'command', permission: 'library:write' },
+  'genres.override': { kind: 'command', permission: 'library:write' },
   'catalog.query': { kind: 'query', permission: 'library:read' },
   'catalog.detail': { kind: 'query', permission: 'library:read' },
   'catalog.sources': { kind: 'query', permission: 'library:read' },

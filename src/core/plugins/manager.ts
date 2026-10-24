@@ -280,6 +280,7 @@ export class TwilightPluginManager extends EventEmitter {
   private readonly logWriteChains = new Map<string, Promise<void>>()
   private readonly logSizes = new Map<string, number>()
   private readonly providerHealth = new Map<string, ProviderHealthRecord>()
+  private readonly identityContexts = new Map<string, number>()
   private readonly stopOperations = new Map<string, Promise<void>>()
   private readonly internalNcmRequests = new Map<string, AbortController>()
   private readonly qishuiAuth = new QishuiAuthBridge()
@@ -695,6 +696,28 @@ export class TwilightPluginManager extends EventEmitter {
     }))
   }
 
+  /** Opaque session context; never derives a key from cookies or other credentials. */
+  providerIdentityContext(providerId: string): string {
+    const owner = this.contributingPlugins().findLast(p => p.providers.some(p => p.id === providerId))
+    return owner ? JSON.stringify([owner.descriptor.id, owner.descriptor.version,
+      this.identityContexts.get(owner.descriptor.id) ?? 0]) : 'unavailable'
+  }
+
+  /** Persistent text caches use the stored account/config epoch; RPC sharing
+   * still uses providerIdentityContext's in-session registration revision. */
+  providerMetadataContext(providerId: string): string {
+    const owner = this.contributingPlugins().findLast(p => p.providers.some(provider => provider.id === providerId))
+    return owner ? JSON.stringify([owner.descriptor.id, owner.descriptor.version,
+      this.settings.identityContext(owner.descriptor.paths.dataDir)]) : 'unavailable'
+  }
+
+  private identityContextChanged(pluginId: string): void {
+    this.identityContexts.set(pluginId, (this.identityContexts.get(pluginId) ?? 0) + 1)
+    for (const plugin of this.contributingPlugins())
+      if (plugin.descriptor.id === pluginId)
+        for (const provider of plugin.providers) this.emit('provider-context', provider.id)
+  }
+
   /** Running plugins plus hibernated ones, so contributions survive host sleep. */
   private contributingPlugins(): Array<RunningPlugin | HibernatedPlugin> {
     return [
@@ -792,7 +815,11 @@ export class TwilightPluginManager extends EventEmitter {
     this.hostIdle?.touch(running.descriptor.id)
     const requestId = randomUUID()
     const idempotencyKey = resolveProviderIdempotencyKey(method, options.idempotencyKey)
-    return this.rpcCalls.request<unknown, ProviderRpcMetadata>({
+    const changesContext = ['logout', 'openOfficialLogin', 'loginByPhonePassword',
+      'loginByPhoneCaptcha', 'loginByEmailPassword', 'loginWithServer', 'getQrLogin',
+      'checkQrLogin'].includes(method)
+    if (changesContext) this.identityContextChanged(running.descriptor.id)
+    const result = this.rpcCalls.request<unknown, ProviderRpcMetadata>({
       requestId,
       pluginId: running.descriptor.id,
       kind: 'provider',
@@ -854,6 +881,7 @@ export class TwilightPluginManager extends EventEmitter {
           }
         : {})
     })
+    return changesContext ? result.finally(() => this.identityContextChanged(running.descriptor.id)) : result
   }
 
   async destroy(): Promise<void> {
@@ -1487,10 +1515,13 @@ export class TwilightPluginManager extends EventEmitter {
         let value: unknown
         if (message.method === 'get' && (key === undefined || typeof key === 'string'))
           value = await this.settings.get(storagePath, key)
-        else if (message.method === 'set' && typeof key === 'string')
-          await this.settings.set(storagePath, key, message.args[1])
-        else if (message.method === 'delete' && typeof key === 'string')
-          await this.settings.delete(storagePath, key)
+        else if (['set', 'delete'].includes(message.method) && typeof key === 'string') {
+          this.identityContextChanged(id)
+          try {
+            if (message.method === 'set') await this.settings.set(storagePath, key, message.args[1])
+            else await this.settings.delete(storagePath, key)
+          } finally { this.identityContextChanged(id) }
+        }
         else throw new Error('未知插件设置操作')
         return { kind: 'api-result', requestId: message.requestId, ok: true, value }
       }
@@ -1656,6 +1687,7 @@ export class TwilightPluginManager extends EventEmitter {
     const existingIndex = running.providers.findIndex((candidate) => candidate.id === providerId)
     if (existingIndex >= 0) running.providers[existingIndex] = provider
     else running.providers.push(provider)
+    this.identityContextChanged(pluginId)
     this.emit('changed')
     return provider
   }
@@ -1776,10 +1808,14 @@ export class TwilightPluginManager extends EventEmitter {
     if (message.method === 'qishuiCheckQrLogin') {
       const key = message.args[0]
       if (typeof key !== 'string') throw new Error('汽水二维码密钥必须是字符串')
-      return this.qishuiAuth.checkQrLogin(versionRoot, key)
+      this.identityContextChanged(pluginId)
+      try { return await this.qishuiAuth.checkQrLogin(versionRoot, key) }
+      finally { this.identityContextChanged(pluginId) }
     }
     if (message.method === 'qishuiClear') {
-      await this.qishuiAuth.clear(versionRoot)
+      this.identityContextChanged(pluginId)
+      try { await this.qishuiAuth.clear(versionRoot) }
+      finally { this.identityContextChanged(pluginId) }
       return null
     }
     throw new Error('未知汽水音乐安全登录 API')

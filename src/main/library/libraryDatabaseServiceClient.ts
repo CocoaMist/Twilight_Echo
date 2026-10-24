@@ -35,6 +35,14 @@ export interface DatabaseUtilityProcess {
 }
 export interface DatabaseServiceOptions {
   changed?(revision: number): void
+  genresChanged?(revision: number): void
+  classificationMetadataChanged?(revision: number): void
+  ratingsChanged?(revision: number): void
+  preferencesChanged?(revision: number): void
+  tagsChanged?(token: import('../../shared/musicTags.ts').MusicTagsToken): void
+  explorationChanged?(state: import('../../shared/musicExploration.ts').MusicExplorationState): void
+  focusChanged?(state: import('../../shared/musicFocus.ts').MusicFocusState): void
+  genresInvalidated?(): void
   serviceEntry: string
   /** Omit only for Core state in development JSON-library mode. */
   libraryFilePath?: string
@@ -51,6 +59,117 @@ type Pending = { resolve(value: unknown): void; reject(error: Error): void; time
 
 /** Bounded asynchronous transport. Mutations are never automatically replayed. */
 export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
+  explorationLookup(...args: Parameters<LibraryDatabaseWorkerApi['explorationLookup']>) { return this.call('explorationLookup', ...args) }
+  explorationBackfillCredits(...args: Parameters<LibraryDatabaseWorkerApi['explorationBackfillCredits']>) { return this.call('explorationBackfillCredits', ...args) }
+  explorationState(...args: Parameters<LibraryDatabaseWorkerApi['explorationState']>) { return this.call('explorationState', ...args) }
+  explorationQuery(...args: Parameters<LibraryDatabaseWorkerApi['explorationQuery']>) { return this.call('explorationQuery', ...args) }
+  explorationDetail(...args: Parameters<LibraryDatabaseWorkerApi['explorationDetail']>) { return this.call('explorationDetail', ...args) }
+  explorationRelations(...args: Parameters<LibraryDatabaseWorkerApi['explorationRelations']>) { return this.call('explorationRelations', ...args) }
+  explorationParticipation(...args: Parameters<LibraryDatabaseWorkerApi['explorationParticipation']>) { return this.call('explorationParticipation', ...args) }
+  explorationPerformanceSave(...args: Parameters<LibraryDatabaseWorkerApi['explorationPerformanceSave']>) { return this.call('explorationPerformanceSave', ...args) }
+  explorationPerformanceDelete(...args: Parameters<LibraryDatabaseWorkerApi['explorationPerformanceDelete']>) { return this.call('explorationPerformanceDelete', ...args) }
+  explorationIngest(...args: Parameters<LibraryDatabaseWorkerApi['explorationIngest']>) { return this.call('explorationIngest', ...args) }
+  explorationSyncCredits(...args: Parameters<LibraryDatabaseWorkerApi['explorationSyncCredits']>) { return this.call('explorationSyncCredits', ...args) }
+  focusState() { return this.call('focusState') }
+  focusQuery(...args: Parameters<LibraryDatabaseWorkerApi['focusQuery']>) { return this.call('focusQuery', ...args) }
+  focusFacets(...args: Parameters<LibraryDatabaseWorkerApi['focusFacets']>) { return this.call('focusFacets', ...args) }
+  focusPlaybackPage(...args: Parameters<LibraryDatabaseWorkerApi['focusPlaybackPage']>) { return this.call('focusPlaybackPage', ...args) }
+  focusSavedList(...args: Parameters<LibraryDatabaseWorkerApi['focusSavedList']>) { return this.call('focusSavedList', ...args) }
+  focusSavedCreate(...args: Parameters<LibraryDatabaseWorkerApi['focusSavedCreate']>) { return this.call('focusSavedCreate', ...args) }
+  focusSavedRename(...args: Parameters<LibraryDatabaseWorkerApi['focusSavedRename']>) { return this.call('focusSavedRename', ...args) }
+  focusSavedUpdate(...args: Parameters<LibraryDatabaseWorkerApi['focusSavedUpdate']>) { return this.call('focusSavedUpdate', ...args) }
+  focusSavedDelete(...args: Parameters<LibraryDatabaseWorkerApi['focusSavedDelete']>) { return this.call('focusSavedDelete', ...args) }
+  tagsState() { return this.call('tagsState') }
+  tagsList(...args: Parameters<LibraryDatabaseWorkerApi['tagsList']>) { return this.call('tagsList', ...args) }
+  tagsEntity(...args: Parameters<LibraryDatabaseWorkerApi['tagsEntity']>) { return this.call('tagsEntity', ...args) }
+  tagsMembers(...args: Parameters<LibraryDatabaseWorkerApi['tagsMembers']>) { return this.call('tagsMembers', ...args) }
+  tagsRecordings(...args: Parameters<LibraryDatabaseWorkerApi['tagsRecordings']>) { return this.call('tagsRecordings', ...args) }
+  tagsCreate(...args: Parameters<LibraryDatabaseWorkerApi['tagsCreate']>) { return this.call('tagsCreate', ...args) }
+  tagsRename(...args: Parameters<LibraryDatabaseWorkerApi['tagsRename']>) { return this.call('tagsRename', ...args) }
+  tagsDelete(...args: Parameters<LibraryDatabaseWorkerApi['tagsDelete']>) { return this.call('tagsDelete', ...args) }
+  tagsMemberSet(...args: Parameters<LibraryDatabaseWorkerApi['tagsMemberSet']>) { return this.call('tagsMemberSet', ...args) }
+  tagsPlaybackPage(...args: Parameters<LibraryDatabaseWorkerApi['tagsPlaybackPage']>) { return this.call('tagsPlaybackPage', ...args) }
+  preferencesTargets(...args: Parameters<LibraryDatabaseWorkerApi['preferencesTargets']>) { return this.call('preferencesTargets', ...args) }
+  preferencesDetail(...args: Parameters<LibraryDatabaseWorkerApi['preferencesDetail']>) { return this.call('preferencesDetail', ...args) }
+  preferencesSet(...args: Parameters<LibraryDatabaseWorkerApi['preferencesSet']>) { return this.call('preferencesSet', ...args) }
+  preferencesHistory(...args: Parameters<LibraryDatabaseWorkerApi['preferencesHistory']>) { return this.call('preferencesHistory', ...args) }
+  preferencesAutomaticEligibility(...args: Parameters<LibraryDatabaseWorkerApi['preferencesAutomaticEligibility']>) { return this.call('preferencesAutomaticEligibility', ...args) }
+  preferencesTrackStates(...args: Parameters<LibraryDatabaseWorkerApi['preferencesTrackStates']>) { return this.call('preferencesTrackStates', ...args) }
+  preferencesPlaylistsLoad(...args: Parameters<LibraryDatabaseWorkerApi['preferencesPlaylistsLoad']>) { return this.call('preferencesPlaylistsLoad', ...args) }
+  preferencesPlaylistsMigrate(...args: Parameters<LibraryDatabaseWorkerApi['preferencesPlaylistsMigrate']>) { return this.call('preferencesPlaylistsMigrate', ...args) }
+  preferencesPlaylistsMigrationReceipt() { return this.call('preferencesPlaylistsMigrationReceipt') }
+  preferencesPlaylistsSave(...args: Parameters<LibraryDatabaseWorkerApi['preferencesPlaylistsSave']>) { return this.call('preferencesPlaylistsSave', ...args) }
+  preferencesPlaylistsRestore(...args: Parameters<LibraryDatabaseWorkerApi['preferencesPlaylistsRestore']>) { return this.call('preferencesPlaylistsRestore', ...args) }
+  ratingsDetail(...args: Parameters<LibraryDatabaseWorkerApi['ratingsDetail']>) { return this.call('ratingsDetail', ...args) }
+  ratingsTargets(...args: Parameters<LibraryDatabaseWorkerApi['ratingsTargets']>) { return this.call('ratingsTargets', ...args) }
+  ratingsSet(...args: Parameters<LibraryDatabaseWorkerApi['ratingsSet']>) { return this.call('ratingsSet', ...args) }
+  ratingsHistory(...args: Parameters<LibraryDatabaseWorkerApi['ratingsHistory']>) { return this.call('ratingsHistory', ...args) }
+  albumsBrowse(...args: Parameters<LibraryDatabaseWorkerApi['albumsBrowse']>) { return this.call('albumsBrowse', ...args) }
+  albumsSources(...args: Parameters<LibraryDatabaseWorkerApi['albumsSources']>) { return this.call('albumsSources', ...args) }
+  albumsContainsSource(...args: Parameters<LibraryDatabaseWorkerApi['albumsContainsSource']>) { return this.call('albumsContainsSource', ...args) }
+  catalogPlaybackSources(...args: Parameters<LibraryDatabaseWorkerApi['catalogPlaybackSources']>) { return this.call('catalogPlaybackSources', ...args) }
+  genresContainsSources(...args: Parameters<LibraryDatabaseWorkerApi['genresContainsSources']>) { return this.call('genresContainsSources', ...args) }
+  genresBrowse(...args: Parameters<LibraryDatabaseWorkerApi['genresBrowse']>) { return this.call('genresBrowse', ...args) }
+  genresMembers(...args: Parameters<LibraryDatabaseWorkerApi['genresMembers']>) { return this.call('genresMembers', ...args) }
+  genresFacets(...args: Parameters<LibraryDatabaseWorkerApi['genresFacets']>) { return this.call('genresFacets', ...args) }
+  genresTree(...args: Parameters<LibraryDatabaseWorkerApi['genresTree']>) { return this.call('genresTree', ...args) }
+  genresUnmapped(...args: Parameters<LibraryDatabaseWorkerApi['genresUnmapped']>) { return this.call('genresUnmapped', ...args) }
+  genresEvidence(...args: Parameters<LibraryDatabaseWorkerApi['genresEvidence']>) { return this.call('genresEvidence', ...args) }
+  genresEdit(...args: Parameters<LibraryDatabaseWorkerApi['genresEdit']>) { return this.call('genresEdit', ...args) }
+  genresMap(...args: Parameters<LibraryDatabaseWorkerApi['genresMap']>) { return this.call('genresMap', ...args) }
+  genresOverride(...args: Parameters<LibraryDatabaseWorkerApi['genresOverride']>) { return this.call('genresOverride', ...args) }
+  genresAdvance(...args: Parameters<LibraryDatabaseWorkerApi['genresAdvance']>) { return this.call('genresAdvance', ...args) }
+  legacyMusicStatus(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicStatus']>) { return this.call('legacyMusicStatus', ...args) }
+  legacyMusicBegin(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicBegin']>) { return this.call('legacyMusicBegin', ...args) }
+  legacyMusicStage(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicStage']>) { return this.call('legacyMusicStage', ...args) }
+  legacyMusicPublish(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicPublish']>) { return this.call('legacyMusicPublish', ...args) }
+  legacyMusicRead(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicRead']>) { return this.call('legacyMusicRead', ...args) }
+  legacyMusicEdit(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicEdit']>) { return this.call('legacyMusicEdit', ...args) }
+  legacyMusicInventory(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicInventory']>) { return this.call('legacyMusicInventory', ...args) }
+  legacyMusicProvenanceList(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicProvenanceList']>) { return this.call('legacyMusicProvenanceList', ...args) }
+  legacyMusicProvenanceRead(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicProvenanceRead']>) { return this.call('legacyMusicProvenanceRead', ...args) }
+  legacyMusicProvenanceReview(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicProvenanceReview']>) { return this.call('legacyMusicProvenanceReview', ...args) }
+  legacyMusicHistory(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicHistory']>) { return this.call('legacyMusicHistory', ...args) }
+  legacyMusicHistoryRead(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicHistoryRead']>) { return this.call('legacyMusicHistoryRead', ...args) }
+  legacyMusicRestore(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicRestore']>) { return this.call('legacyMusicRestore', ...args) }
+  legacyMusicBatchBegin(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicBatchBegin']>) { return this.call('legacyMusicBatchBegin', ...args) }
+  legacyMusicBatchStage(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicBatchStage']>) { return this.call('legacyMusicBatchStage', ...args) }
+  legacyMusicBatchPublish(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicBatchPublish']>) { return this.call('legacyMusicBatchPublish', ...args) }
+  legacyMusicTaskStatus(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicTaskStatus']>) { return this.call('legacyMusicTaskStatus', ...args) }
+  legacyMusicBatchCancel(...args: Parameters<LibraryDatabaseWorkerApi['legacyMusicBatchCancel']>) { return this.call('legacyMusicBatchCancel', ...args) }
+  identificationSchedule(...args: Parameters<LibraryDatabaseWorkerApi['identificationSchedule']>) { return this.call('identificationSchedule', ...args) }
+  identificationScheduleStatus() { return this.call('identificationScheduleStatus') }
+  identificationEnqueue(...args: Parameters<LibraryDatabaseWorkerApi['identificationEnqueue']>) { return this.call('identificationEnqueue', ...args) }
+  identificationInput(...args: Parameters<LibraryDatabaseWorkerApi['identificationInput']>) { return this.call('identificationInput', ...args) }
+  identificationPublish(...args: Parameters<LibraryDatabaseWorkerApi['identificationPublish']>) { return this.call('identificationPublish', ...args) }
+  identificationDetail(...args: Parameters<LibraryDatabaseWorkerApi['identificationDetail']>) { return this.call('identificationDetail', ...args) }
+  identificationCandidates(...args: Parameters<LibraryDatabaseWorkerApi['identificationCandidates']>) { return this.call('identificationCandidates', ...args) }
+  identificationInbox(...args: Parameters<LibraryDatabaseWorkerApi['identificationInbox']>) { return this.call('identificationInbox', ...args) }
+  identificationHistory(...args: Parameters<LibraryDatabaseWorkerApi['identificationHistory']>) { return this.call('identificationHistory', ...args) }
+  identificationRestorePreview(...args: Parameters<LibraryDatabaseWorkerApi['identificationRestorePreview']>) { return this.call('identificationRestorePreview', ...args) }
+  identificationRestore(...args: Parameters<LibraryDatabaseWorkerApi['identificationRestore']>) { return this.call('identificationRestore', ...args) }
+  metadataTaskSources(...args: Parameters<LibraryDatabaseWorkerApi['metadataTaskSources']>) { return this.call('metadataTaskSources', ...args) }
+  metadataRequery(...args: Parameters<LibraryDatabaseWorkerApi['metadataRequery']>) { return this.call('metadataRequery', ...args) }
+  identificationPreview(...args: Parameters<LibraryDatabaseWorkerApi['identificationPreview']>) { return this.call('identificationPreview', ...args) }
+  identificationDecide(...args: Parameters<LibraryDatabaseWorkerApi['identificationDecide']>) { return this.call('identificationDecide', ...args) }
+  identificationDetach(...args: Parameters<LibraryDatabaseWorkerApi['identificationDetach']>) { return this.call('identificationDetach', ...args) }
+  metadataDetail(...args: Parameters<LibraryDatabaseWorkerApi['metadataDetail']>) { return this.call('metadataDetail', ...args) }
+  metadataCredits(...args: Parameters<LibraryDatabaseWorkerApi['metadataCredits']>) { return this.call('metadataCredits', ...args) }
+  metadataArtwork(...args: Parameters<LibraryDatabaseWorkerApi['metadataArtwork']>) { return this.call('metadataArtwork', ...args) }
+  metadataEnqueue(...args: Parameters<LibraryDatabaseWorkerApi['metadataEnqueue']>) { return this.call('metadataEnqueue', ...args) }
+  metadataDecide(...args: Parameters<LibraryDatabaseWorkerApi['metadataDecide']>) { return this.call('metadataDecide', ...args) }
+  metadataDetach(...args: Parameters<LibraryDatabaseWorkerApi['metadataDetach']>) { return this.call('metadataDetach', ...args) }
+  metadataOverride(...args: Parameters<LibraryDatabaseWorkerApi['metadataOverride']>) { return this.call('metadataOverride', ...args) }
+  metadataSourcePreference(...args: Parameters<LibraryDatabaseWorkerApi['metadataSourcePreference']>) { return this.call('metadataSourcePreference', ...args) }
+  metadataArtworkOverride(...args: Parameters<LibraryDatabaseWorkerApi['metadataArtworkOverride']>) { return this.call('metadataArtworkOverride', ...args) }
+  metadataJobs(...args: Parameters<LibraryDatabaseWorkerApi['metadataJobs']>) { return this.call('metadataJobs', ...args) }
+  metadataTasks(...args: Parameters<LibraryDatabaseWorkerApi['metadataTasks']>) { return this.call('metadataTasks', ...args) }
+  metadataTaskDemands(...args: Parameters<LibraryDatabaseWorkerApi['metadataTaskDemands']>) { return this.call('metadataTaskDemands', ...args) }
+  metadataCancel(...args: Parameters<LibraryDatabaseWorkerApi['metadataCancel']>) { return this.call('metadataCancel', ...args) }
+  metadataRecover(...args: Parameters<LibraryDatabaseWorkerApi['metadataRecover']>) { return this.call('metadataRecover', ...args) }
+  metadataClaim(...args: Parameters<LibraryDatabaseWorkerApi['metadataClaim']>) { return this.call('metadataClaim', ...args) }
+  metadataNextAttempt() { return this.call('metadataNextAttempt') }
+  metadataFinish(...args: Parameters<LibraryDatabaseWorkerApi['metadataFinish']>) { return this.call('metadataFinish', ...args) }
   catalogStatus() { return this.call('catalogStatus') }
   catalogAdvance(limit?: number) { return this.call('catalogAdvance', limit) }
   catalogQuery(...args: Parameters<LibraryDatabaseWorkerApi['catalogQuery']>) { return this.call('catalogQuery', ...args) }
@@ -162,6 +281,14 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
           this.readyReject = null
         } else if (message.kind === 'open-error') this.fail(new Error(message.error))
         else if (message.kind === 'library-changed') this.options.changed?.(message.revision)
+        else if (message.kind === 'genres-changed') this.options.genresChanged?.(message.revision)
+        else if (message.kind === 'ratings-changed') this.options.ratingsChanged?.(message.revision)
+        else if (message.kind === 'preferences-changed') this.options.preferencesChanged?.(message.revision)
+        else if (message.kind === 'exploration-changed') this.options.explorationChanged?.(message.state)
+        else if (message.kind === 'focus-changed') this.options.focusChanged?.(message.state)
+        else if (message.kind === 'tags-changed') this.options.tagsChanged?.(message.token)
+        else if (message.kind === 'classification-metadata-changed') this.options.classificationMetadataChanged?.(message.revision)
+        else if (message.kind === 'genres-invalidated') this.options.genresInvalidated?.()
         else if (message.kind === 'response') {
           const pending = this.pending.get(message.requestId)
           if (!pending) return
@@ -433,6 +560,10 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   exportDocument(options?: LibraryDocumentExportOptions) {
     return this.call('exportDocument', options)
   }
+  musicBackupRevision() { return this.call('musicBackupRevision') }
+  musicBackupExport(...args: Parameters<LibraryDatabaseWorkerApi['musicBackupExport']>) { return this.call('musicBackupExport', ...args) }
+  musicBackupPreview(...args: Parameters<LibraryDatabaseWorkerApi['musicBackupPreview']>) { return this.call('musicBackupPreview', ...args) }
+  musicBackupRestore(...args: Parameters<LibraryDatabaseWorkerApi['musicBackupRestore']>) { return this.call('musicBackupRestore', ...args) }
   replaceDocument(document: LocalMusicLibraryDocument, expectedRevision?: number) {
     return this.call('replaceDocument', document, expectedRevision)
   }

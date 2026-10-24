@@ -1,8 +1,16 @@
+import type { CoreMusicExplorationService } from './library/explorationService.ts'
 import type { CoreCastService } from './cast/service.ts'
 import type { CoreQueueSubmission } from './playback/queueSubmission.ts'
 import type { CorePlaylistSubmission } from './playlists/submission.ts'
 import type { CoreRecordingCatalog } from './playlists/recordingCatalog.ts'
 import type { CoreCatalogService } from './catalog/service.ts'
+import type { CoreGenresService } from './library/genresService.ts'
+import type { CoreMusicRatingsService } from './library/ratingsService.ts'
+import type { CoreMusicPreferencesService } from './library/preferencesService.ts'
+import type { CoreMusicTagsService } from './library/tagsService.ts'
+import type { CoreMusicFocusService } from './library/focusService.ts'
+import type { CoreAlbumBrowseService } from './library/albumBrowseService.ts'
+import type { CoreUnifiedPlaybackService } from './catalog/unifiedPlayback.ts'
 import { getTrackSource } from '../shared/trackSourceIdentity.ts'
 import type { CoreRemoteService } from './remote/service.ts'
 import type { CorePlaylistSourceEdits } from './playlists/sourceEdits.ts'
@@ -82,6 +90,14 @@ export interface CoreApplicationDependencies {
   remote?: Pick<CoreRemoteService, 'status' | 'setEnabled' | 'rotatePin' | 'shutdown'>
   recordingCatalog?: CoreRecordingCatalog
   catalog?: CoreCatalogService
+  genres?: CoreGenresService
+  ratings?: CoreMusicRatingsService
+  preferences?: CoreMusicPreferencesService
+  tags?: CoreMusicTagsService
+  exploration?: CoreMusicExplorationService
+  focus?: CoreMusicFocusService
+  albums?: CoreAlbumBrowseService
+  unifiedPlayback?: CoreUnifiedPlaybackService
   resolvePlaylistInputs?: (inputs: readonly CoreQueueTrackInput[], signal: AbortSignal) => Promise<import('../shared/track.ts').TrackData[]>
   libraryRevision?(): number | null
   diagnostics?: CoreAudioDiagnosticsService
@@ -223,6 +239,7 @@ export class CoreApplication {
       this.dependencies.scan.activate()
       this.dependencies.libraryBackground?.activate()
       this.dependencies.catalog?.activate()
+      this.dependencies.genres?.activate()
       this.dependencies.metadata?.activate()
       this.dependencies.lyrics?.activate()
       this.dependencies.imports?.activate()
@@ -234,11 +251,37 @@ export class CoreApplication {
     }))
   }
   snapshot(identity?: CoreClientIdentity): CoreSnapshot {
+    // Graph transactions advance the same catalog revision without running the
+    // derived-index job, which may be paused. Publish the latest observed value.
+    const catalogRevisions = [
+      this.dependencies.catalog?.getRevision(),
+      this.dependencies.exploration?.getCatalogRevision()
+    ].filter((revision): revision is number => revision != null)
     return structuredClone({
       libraryRevision: !identity || identity.permissions.includes('library:read')
         ? this.dependencies.libraryRevision?.() ?? null : null,
       catalogRevision: !identity || identity.permissions.includes('library:read')
-        ? this.dependencies.catalog?.getRevision() ?? null : null,
+        ? catalogRevisions.length ? Math.max(...catalogRevisions) : null : null,
+      genresRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.genres?.getRevision() ?? null : null,
+      classificationMetadataRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.genres?.getMetadataRevision() ?? null : null,
+      ratingsRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.ratings?.getRevision() ?? null : null,
+      preferencesRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.preferences?.getRevision() ?? null : null,
+      explorationRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.exploration?.getRevision() ?? null : null,
+      focusRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.focus?.getRevision() ?? null : null,
+      focusHistoryRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.focus?.getHistoryRevision() ?? null : null,
+      tagsRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.tags?.getRevision() ?? null : null,
+      tagsLinkRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.tags?.getLinkRevision() ?? null : null,
+      entityMetadataRevision: !identity || identity.permissions.includes('library:read')
+        ? this.dependencies.metadata?.entities?.getRevision() ?? null : null,
       pluginsRevision:
         !identity || identity.permissions.includes('plugins:read') ? this.pluginsRevision : null,
       presentationRevision:
@@ -278,6 +321,9 @@ export class CoreApplication {
         !identity || identity.permissions.includes('settings:read')
           ? (this.dependencies.settings?.getRevision() ?? null)
           : null,
+      personalBackupRecovery:
+        !identity || identity.permissions.includes('settings:read')
+          ? (this.dependencies.personalBackup?.recoveryAvailable() ?? false) : null,
       sleepTimer:
         !identity || identity.permissions.includes('playback:read')
           ? (this.dependencies.sleepTimer?.state() ?? null)
@@ -491,7 +537,191 @@ export class CoreApplication {
         ? playback.startPersonalized(request.payload, signal)
         : playback.refillPersonalized(request.payload)
     }
+    if (request.name.startsWith('playlists.')) {
+      await this.dependencies.playlists?.waitForPending()
+      signal.throwIfAborted()
+    }
     switch (request.name) {
+      case 'exploration.query':
+      case 'exploration.lookup':
+      case 'exploration.detail':
+      case 'exploration.relations':
+      case 'exploration.participation':
+      case 'exploration.performance.save':
+      case 'exploration.performance.delete': {
+        const service = this.dependencies.exploration
+        if (!service) throw failure('NOT_READY', '人物作品探索尚未就绪')
+        switch (request.name) {
+          case 'exploration.query': return service.query(request.payload)
+          case 'exploration.lookup': return service.lookup(request.payload)
+          case 'exploration.detail': return service.detail(request.payload)
+          case 'exploration.relations': return service.relations(request.payload)
+          case 'exploration.participation': return service.participation(request.payload)
+          case 'exploration.performance.save': return service.performanceSave(request.payload)
+          case 'exploration.performance.delete': return service.performanceDelete(request.payload)
+        }
+        break
+      }
+      case 'focus.query':
+      case 'focus.play.status':
+      case 'focus.facets':
+      case 'focus.saved.list':
+      case 'focus.saved.create':
+      case 'focus.saved.rename':
+      case 'focus.saved.update':
+      case 'focus.saved.delete':
+      case 'focus.play': {
+        const focus = this.dependencies.focus
+        if (!focus) throw failure('NOT_READY', 'Focus is unavailable')
+        switch (request.name) {
+          case 'focus.play.status': {
+            if (!identity.permissions.includes('library:read')) throw failure('FORBIDDEN', 'Library access is not granted')
+            return focus.playStatus(request.payload, identity.id, this.dependencies.epoch)
+          }
+          case 'focus.query': return focus.query(request.payload)
+          case 'focus.facets': return focus.facets(request.payload)
+          case 'focus.saved.list': return focus.savedList(request.payload)
+          case 'focus.saved.create': return focus.savedCreate(request.payload)
+          case 'focus.saved.rename': return focus.savedRename(request.payload)
+          case 'focus.saved.update': return focus.savedUpdate(request.payload)
+          case 'focus.saved.delete': return focus.savedDelete(request.payload)
+          case 'focus.play': {
+            if (!identity.permissions.includes('library:read')) throw failure('FORBIDDEN', 'Library access is not granted')
+            return focus.play(request.payload, signal, async (track, preparation) => {
+              preparation.throwIfAborted()
+              if (getTrackSource(track) === 'local') return track
+              if (!identity.permissions.includes('providers:call')) throw failure('FORBIDDEN', 'Provider access is not granted')
+              const resolve = this.dependencies.resolvePlaylistInputs
+              if (!resolve) throw failure('NOT_READY', 'Provider resolution is unavailable')
+              const tracks = await resolve([{ kind: 'provider', track: {
+                id: track.id, source: getTrackSource(track), ncmSongId: track.ncmSongId,
+                title: track.title, artist: track.artist, album: track.album, duration: track.duration
+              } }], preparation)
+              preparation.throwIfAborted()
+              if (!tracks[0]) throw failure('FAILED', '来源不可用')
+              return tracks[0]
+            }, { requestId: request.requestId, epoch: this.dependencies.epoch, owner: identity.id })
+          }
+        }
+        break
+      }
+      case 'tags.list':
+      case 'tags.entity':
+      case 'tags.members':
+      case 'tags.recordings':
+      case 'tags.create':
+      case 'tags.rename':
+      case 'tags.delete':
+      case 'tags.member.set':
+      case 'tags.play': {
+        const tags = this.dependencies.tags
+        if (!tags) throw failure('NOT_READY', 'Music tags are unavailable')
+        switch (request.name) {
+          case 'tags.list': return tags.list(request.payload)
+          case 'tags.entity': return tags.entity(request.payload)
+          case 'tags.members': return tags.members(request.payload)
+          case 'tags.recordings': return tags.recordings(request.payload)
+          case 'tags.create': return tags.create(request.payload)
+          case 'tags.rename': return tags.rename(request.payload)
+          case 'tags.delete': return tags.delete(request.payload)
+          case 'tags.member.set': return tags.memberSet(request.payload)
+          case 'tags.play': {
+            if (!identity.permissions.includes('library:read')) throw failure('FORBIDDEN', 'Library access is not granted')
+            return tags.play(request.payload, signal, async (track, preparation) => {
+              preparation.throwIfAborted()
+              if (getTrackSource(track) === 'local') return track
+              if (!identity.permissions.includes('providers:call')) throw failure('FORBIDDEN', 'Provider access is not granted')
+              const resolve = this.dependencies.resolvePlaylistInputs
+              if (!resolve) throw failure('NOT_READY', 'Provider resolution is unavailable')
+              const tracks = await resolve([{ kind: 'provider', track: {
+                id: track.id, source: getTrackSource(track), ncmSongId: track.ncmSongId,
+                title: track.title, artist: track.artist, album: track.album, duration: track.duration
+              } }], preparation)
+              preparation.throwIfAborted()
+              if (!tracks[0]) throw failure('FAILED', '来源不可用')
+              return tracks[0]
+            })
+          }
+        }
+        break
+      }
+      case 'preferences.detail':
+      case 'preferences.targets':
+      case 'preferences.history':
+      case 'preferences.set': {
+        const preferences = this.dependencies.preferences
+        if (!preferences) throw failure('NOT_READY', 'Music preferences are unavailable')
+        switch (request.name) {
+          case 'preferences.detail': return preferences.detail(request.payload.entityId)
+          case 'preferences.targets': return preferences.targets(request.payload)
+          case 'preferences.history': return preferences.history(request.payload)
+          case 'preferences.set': return preferences.set(request.payload)
+        }
+        break
+      }
+      case 'ratings.detail':
+      case 'ratings.targets':
+      case 'ratings.history':
+      case 'ratings.set': {
+        const ratings = this.dependencies.ratings
+        if (!ratings) throw failure('NOT_READY', 'Music ratings are unavailable')
+        switch (request.name) {
+          case 'ratings.detail': return ratings.detail(request.payload.entityId)
+          case 'ratings.targets': return ratings.targets(request.payload)
+          case 'ratings.history': return ratings.history(request.payload)
+          case 'ratings.set': return ratings.set(request.payload)
+        }
+        break
+      }
+      case 'albums.browse':
+      case 'albums.sources': {
+        const albums = this.dependencies.albums
+        if (!albums) throw failure('NOT_READY', 'Album version browsing is unavailable')
+        return request.name === 'albums.browse' ? albums.browse(request.payload) : albums.sources(request.payload)
+      }
+      case 'catalog.playUnified': {
+        if (!identity.permissions.includes('library:read')) throw failure('FORBIDDEN', 'Library access is not granted')
+        const unified = this.dependencies.unifiedPlayback
+        if (!unified) throw failure('NOT_READY', 'Unified music playback is unavailable')
+        return unified.play(request.payload, signal, async (track, preparation) => {
+          preparation.throwIfAborted()
+          if (getTrackSource(track) === 'local') return track
+          if (!identity.permissions.includes('providers:call')) throw failure('FORBIDDEN', 'Provider access is not granted')
+          const resolve = this.dependencies.resolvePlaylistInputs
+          if (!resolve) throw failure('NOT_READY', 'Provider resolution is unavailable')
+          const tracks = await resolve([{ kind: 'provider', track: {
+            id: track.id, source: getTrackSource(track), ncmSongId: track.ncmSongId,
+            title: track.title, artist: track.artist, album: track.album, duration: track.duration
+          } }], preparation)
+          preparation.throwIfAborted()
+          if (!tracks[0]) throw failure('FAILED', '来源不可用')
+          return tracks[0]
+        })
+      }
+      case 'genres.tree':
+      case 'genres.browse':
+      case 'genres.members':
+      case 'genres.facets':
+      case 'genres.unmapped':
+      case 'genres.evidence':
+      case 'genres.edit':
+      case 'genres.map':
+      case 'genres.override': {
+        const genres = this.dependencies.genres
+        if (!genres) throw failure('NOT_READY', 'Music classification is unavailable')
+        switch (request.name) {
+          case 'genres.tree': return genres.tree(request.payload)
+          case 'genres.browse': return genres.browse(request.payload)
+          case 'genres.members': return genres.members(request.payload)
+          case 'genres.facets': return genres.facets(request.payload)
+          case 'genres.unmapped': return genres.unmapped(request.payload)
+          case 'genres.evidence': return genres.evidence(request.payload)
+          case 'genres.edit': return genres.edit(request.payload)
+          case 'genres.map': return genres.map(request.payload)
+          case 'genres.override': return genres.override(request.payload)
+        }
+        break
+      }
       case 'catalog.query':
       case 'catalog.detail':
       case 'catalog.sources':
@@ -819,6 +1049,8 @@ export class CoreApplication {
       }
       case 'backup.export':
       case 'backup.preview':
+      case 'backup.recover':
+      case 'backup.repreview':
       case 'backup.stage':
       case 'backup.chooseFolder': {
         if (identity.role !== 'desktop')
@@ -827,11 +1059,18 @@ export class CoreApplication {
         if (!backup) throw failure('FAILED', 'Personal backup unavailable')
         switch (request.name) {
           case 'backup.export':
-            return backup.export(signal)
+            return backup.export(request.payload, signal)
           case 'backup.preview':
             return backup.preview(signal)
-          case 'backup.stage':
-            return backup.stage(request.payload, signal)
+          case 'backup.recover':
+            return backup.recoverPreview(signal)
+          case 'backup.repreview':
+            return backup.repreview(request.payload, signal)
+          case 'backup.stage': {
+            const result = await backup.stage(request.payload, signal)
+            this.changed()
+            return result
+          }
           case 'backup.chooseFolder':
             return backup.chooseFolder(signal)
         }
@@ -1525,6 +1764,66 @@ export class CoreApplication {
         return this.dependencies.libraryBackground?.snapshot() ?? { enabled: false, folders: [] }
       case 'metadata.status':
         return this.dependencies.metadata?.snapshot() ?? null
+      case 'metadata.entity.policy':
+      case 'identification.start':
+      case 'identification.status':
+      case 'identification.detail':
+      case 'identification.candidates':
+      case 'identification.history':
+      case 'identification.restorePreview':
+      case 'identification.restore':
+      case 'metadata.entity.sources':
+      case 'metadata.entity.requery':
+      case 'identification.inbox':
+      case 'identification.preview':
+      case 'identification.decide':
+      case 'identification.detach':
+      case 'metadata.entity.detail':
+      case 'metadata.entity.jobs':
+      case 'metadata.entity.tasks':
+      case 'metadata.entity.demands':
+      case 'metadata.entity.credits':
+      case 'metadata.entity.resolve':
+      case 'metadata.entity.enrich':
+      case 'metadata.entity.decide':
+      case 'metadata.entity.detach':
+      case 'metadata.entity.override':
+      case 'metadata.entity.sourcePreference':
+      case 'metadata.entity.artworkOverride':
+      case 'metadata.entity.cancel': {
+        const service = this.dependencies.metadata?.entities
+        if (!service) throw failure('NOT_READY', 'Entity metadata service is unavailable')
+        switch (request.name) {
+          case 'identification.start': return service.startIdentification(request.payload)
+          case 'identification.status': return service.identificationStatus()
+          case 'identification.detail': return service.identity(request.payload.entityId)
+          case 'identification.candidates': return service.candidates(request.payload)
+          case 'identification.history': return service.history(request.payload)
+          case 'identification.restorePreview': return service.restorePreview(request.payload)
+          case 'identification.restore': return service.restoreIdentity(request.payload)
+          case 'metadata.entity.sources': return service.taskSources(request.payload)
+          case 'metadata.entity.requery': return service.requery(request.payload)
+          case 'identification.inbox': return service.inbox(request.payload)
+          case 'identification.preview': return service.preview(request.payload)
+          case 'identification.decide': return service.decideIdentity(request.payload)
+          case 'identification.detach': return service.detachIdentity(request.payload.linkId, request.payload.revision)
+          case 'metadata.entity.policy': return service.policy()
+          case 'metadata.entity.detail': return service.detail(request.payload.entityId, request.payload.language, request.payload.sourceProvider)
+          case 'metadata.entity.jobs': return service.jobs(request.payload)
+          case 'metadata.entity.tasks': return service.tasks(request.payload)
+          case 'metadata.entity.demands': return service.demands(request.payload)
+          case 'metadata.entity.credits': return service.credits(request.payload)
+          case 'metadata.entity.resolve': return service.resolve(request.payload)
+          case 'metadata.entity.enrich': return service.enrich(request.payload)
+          case 'metadata.entity.decide': return service.decide(request.payload)
+          case 'metadata.entity.detach': return service.detach(request.payload.entityId, request.payload.revision)
+          case 'metadata.entity.override': return service.override(request.payload)
+          case 'metadata.entity.sourcePreference': return service.sourcePreference(request.payload)
+          case 'metadata.entity.artworkOverride': return service.artworkOverride(request.payload)
+          case 'metadata.entity.cancel': return service.cancel(request.payload.jobId, request.payload.batchId, request.payload.generation)
+        }
+        break
+      }
       case 'metadata.start':
         if (!this.dependencies.metadata) throw new Error('Metadata service is unavailable')
         this.dependencies.metadata.start()
@@ -1705,6 +2004,7 @@ export class CoreApplication {
   }
   async shutdown(): Promise<void> {
     await this.dependencies.catalog?.shutdown()
+    await this.dependencies.genres?.shutdown()
     await this.dependencies.remote?.shutdown()
     if (this.phase === 'stopped') return
     this.shuttingDown = true

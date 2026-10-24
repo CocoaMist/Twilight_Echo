@@ -211,6 +211,7 @@ export interface AppSettings {
   downloadFolder: string
   genreSeparators: string
   watchLibrary: boolean
+  musicIdentification: import('./musicIdentificationSchedule.ts').MusicIdentificationSettings
   /** When true, empty local/provider lyrics may fall back to LRCLIB online search. */
   onlineLyricsFallback: boolean
   smtcEnabled: boolean

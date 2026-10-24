@@ -1,4 +1,5 @@
 import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
+import { defaultMusicIdentificationSettings, normalizeMusicIdentificationSettings } from '../../shared/musicIdentificationSchedule.ts'
 import { normalizeShortcutEnabled } from '../../shared/shortcutPreferences.ts'
 import {
   normalizeAutoMixMode,
@@ -170,6 +171,7 @@ const BASE_SETTINGS: AppSettings = {
   downloadFolder: '',
   genreSeparators: DEFAULT_GENRE_SEPARATORS,
   watchLibrary: true,
+  musicIdentification: defaultMusicIdentificationSettings(),
   onlineLyricsFallback: false,
   smtcEnabled: true,
   discordRpcEnabled: false,
@@ -724,6 +726,7 @@ export function normalizeAppSettings(
         : DEFAULT_SETTINGS.downloadFolder,
     genreSeparators: normalizeGenreSeparators(settings.genreSeparators),
     watchLibrary: settings.watchLibrary !== false,
+    musicIdentification: normalizeMusicIdentificationSettings(settings.musicIdentification),
     onlineLyricsFallback: settings.onlineLyricsFallback === true,
     smtcEnabled: settings.smtcEnabled !== false,
     discordRpcEnabled: settings.discordRpcEnabled === true,

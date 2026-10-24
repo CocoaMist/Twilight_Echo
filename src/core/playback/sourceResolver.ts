@@ -50,9 +50,16 @@ export async function prepareNativeSource(
   const iso = local
     ? /^(.*\.iso)(\?area=(?:stereo|multichannel)&track=[1-9]\d{0,8})$/i.exec(source)
     : null
-  if (!iso) return prepare(source)
-  const path = await prepare(iso[1])
-  return path === null ? null : `${path}${iso[2]}`
+  try {
+    if (!iso) return await prepare(source)
+    const path = await prepare(iso[1])
+    return path === null ? null : `${path}${iso[2]}`
+  } catch (cause) {
+    if (cause instanceof SourceAuthorizationError) throw cause
+    throw new SourceAuthorizationError(
+      cause instanceof Error ? cause.message : 'Audio source authorization was refused', { cause }
+    )
+  }
 }
 
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/i

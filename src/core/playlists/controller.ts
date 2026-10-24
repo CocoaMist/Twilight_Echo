@@ -805,7 +805,7 @@ export function createPlaylistController(options: {
     return setFavoriteTracks([track], false) > 0
   }
 
-  function setFavoriteTracks(favoriteTracks: Track[], favorite: boolean): number {
+  function setFavoriteTracks(favoriteTracks: Track[], favorite: boolean, exactAdditions?: ReadonlySet<string>): number {
     if (favoriteTracks.length === 0) return 0
     const playlist = getDefaultFavoritePlaylist()
     if (favorite) {
@@ -822,7 +822,7 @@ export function createPlaylistController(options: {
         if (knownIds.has(track.id)) return false
         const logicalKey = getLogicalTrackKey(track)
         const known = knownByLogicalKey.get(logicalKey)
-        if (known?.some((candidate) => canShareTrackIdentity(candidate, track))) return false
+        if (!exactAdditions?.has(track.id) && known?.some((candidate) => canShareTrackIdentity(candidate, track))) return false
         knownIds.add(track.id)
         if (known) known.push(track)
         else knownByLogicalKey.set(logicalKey, [track])

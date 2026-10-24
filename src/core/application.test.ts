@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { shallowRef } from 'vue'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CoreApplication, type CoreApplicationDependencies } from './application.ts'
 import { CoreStateDatabase } from '../main/library/coreStateDatabase.ts'
 import { emptyCoreStateCounts, type CoreStateApi } from '../shared/coreState.ts'
@@ -15,9 +19,30 @@ import { CoreDownloadsService } from './downloads/service.ts'
 import { CoreMusicCacheService } from './cache/service.ts'
 import { OpraCatalog } from './audio/opraCatalog.ts'
 import { CoreCatalogService } from './catalog/service.ts'
+import { CoreGenresService } from './library/genresService.ts'
+import { CoreMusicRatingsService } from './library/ratingsService.ts'
+import { CoreMusicPreferencesService } from './library/preferencesService.ts'
+import { CoreMusicTagsService } from './library/tagsService.ts'
+import { CoreMusicFocusService } from './library/focusService.ts'
+import { CoreMusicExplorationService } from './library/explorationService.ts'
+import type { CatalogDatabaseApi } from '../shared/musicCatalog.ts'
+import { createMusicTagsView, observeMusicTagsView } from '../renderer/src/components/music-tags/musicTagsView.ts'
+import { tagsFixture } from '../renderer/src/components/music-tags/musicTagsTest.fixture.ts'
+import { createMusicFocusView, observeMusicFocusView } from '../renderer/src/components/music-focus/musicFocusView.ts'
+import { focusFixture } from '../renderer/src/components/music-focus/musicFocusTest.fixture.ts'
+import type { MusicExplorationDatabaseApi, MusicExplorationDetail, MusicExplorationPage, MusicExplorationReference, MusicExplorationRelationsPage } from '../shared/musicExploration.ts'
+import type { MusicFocusDatabaseApi, MusicFocusQuery } from '../shared/musicFocus.ts'
+import type { MusicTagsDatabaseApi, MusicTagsWriteResult } from '../shared/musicTags.ts'
+import type { LibraryQueueSeedItem } from '../shared/libraryQueueBuild.ts'
+import { CoreAlbumBrowseService } from './library/albumBrowseService.ts'
+import { CoreUnifiedPlaybackService } from './catalog/unifiedPlayback.ts'
+import { CoreCatalogPlaybackScope } from './catalog/playbackScope.ts'
 import { LibraryDatabase } from '../main/library/libraryDatabase.ts'
 import { emptyMusicVersions } from '../shared/musicVersions.ts'
 import type { TrackData } from '../shared/track.ts'
+import { CoreMetadataService } from './library/metadataService.ts'
+import { CorePersonalBackupService } from './persistence/personalBackupService.ts'
+import type { EntityMetadataDatabaseApi, EntityMetadataDetail, EntityMetadataJob } from '../shared/entityMetadata.ts'
 
 function fixture(
   t: test.TestContext,
@@ -77,6 +102,7 @@ function fixture(
     fromQuery: async () => {},
     fromPages: async () => {},
     fromTrack: async () => {},
+    fromUnifiedTrack: async () => { throw new Error('No unified playback fixture') },
     restoreNamedSession: async () => ({ restored: 0, missing: [], deferred: 0 }),
     setRate: async () => {},
     startCast: async () => {
@@ -300,6 +326,376 @@ function fixture(
   return { application, playback, scan, calls, messages, connect, request }
 }
 
+test('Core Focus keeps offline saved queries and library playback independent of provider authority', async t => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  const local: TrackData = { id: 'local', source: 'local', title: 'Local', artist: 'Artist', album: 'Album',
+    duration: 200, filePath: 'D:/music/local.flac', fileName: 'local.flac', size: 0, cover: null, lyrics: null }
+  const remote: TrackData = { ...local, id: 'ncm:1', source: 'ncm', ncmSongId: 1, title: 'Remote', filePath: '', fileName: '' }
+  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [local] })
+  while (db.catalogStatus().localPending) db.catalogAdvance()
+  const begin = db.catalogSync({ kind: 'begin', revision: 1 })
+  const appended = db.catalogSync({ kind: 'append', id: begin.id, sequence: begin.sequence, tracks: [remote] })
+  db.catalogSync({ kind: 'commit', id: begin.id, sequence: appended.sequence })
+  const database: MusicFocusDatabaseApi = {
+    focusState: async () => db.focusState(), focusQuery: async (...a) => db.focusQuery(...a),
+    focusFacets: async (...a) => db.focusFacets(...a), focusPlaybackPage: async (...a) => db.focusPlaybackPage(...a),
+    focusSavedList: async q => db.focusSavedList(q), focusSavedCreate: async (...a) => db.focusSavedCreate(...a),
+    focusSavedRename: async (...a) => db.focusSavedRename(...a), focusSavedUpdate: async (...a) => db.focusSavedUpdate(...a),
+    focusSavedDelete: async q => db.focusSavedDelete(q)
+  }
+  let adopted: LibraryQueueSeedItem[] = [], providers = 0, historyChecks = 0
+  const focus = new CoreMusicFocusService({ database, now: () => 1000, platformContexts: () => ({}),
+    ensureHistory: async () => { historyChecks++ }, changed() {}, playback: {
+      async fromPages(produce, options = {}, signal) {
+        const staged: LibraryQueueSeedItem[] = []
+        await produce(async items => { staged.push(...items) })
+        await options.beforeAdopt?.(true)
+        options.guard?.(); signal?.throwIfAborted(); adopted = staged; options.onAdopt?.()
+      }
+    } })
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { focus,
+    resolvePlaylistInputs: async inputs => { providers++; return inputs.map(() => remote) } })
+  await f.application.initialize()
+  f.connect('reader', ['library:read']); f.connect('writer', ['library:write'])
+  f.connect('player', ['playback:write']); f.connect('local', ['library:read', 'playback:write'])
+  f.connect('provider', ['library:read', 'playback:read', 'playback:write', 'providers:call'])
+  const query: MusicFocusQuery = { version: 1, entity: 'recording', where: { source: { provider: 'local' } } }
+  assert.equal((await f.request('reader', 'focus.saved.create', { name: 'Local', query, savedRevision: 0 })).ok, false)
+  assert.equal((await f.request('writer', 'focus.saved.create', { name: 'Local', query, savedRevision: 0 })).ok, true)
+  assert.equal((await f.request('reader', 'focus.saved.list')).ok, true)
+  assert.equal((await f.request('writer', 'focus.query', { query })).ok, false)
+  const page = await focus.query({ query })
+  assert.equal((await f.request('reader', 'focus.query', { query, token: page.token })).ok, true)
+  assert.equal((await f.request('reader', 'focus.facets', { query, token: page.token, facet: 'provider' })).ok, true)
+  assert.equal(JSON.stringify(page).includes('D:/music'), false)
+  assert.equal((await f.request('player', 'focus.play', { query, token: page.token })).ok, false)
+  assert.equal((await f.request('local', 'focus.play', { query, token: page.token })).ok, true)
+  assert.equal(adopted.length, 1); assert.equal(providers, 0); assert.ok(historyChecks > 0)
+  const localQueue = adopted
+  const remoteQuery: MusicFocusQuery = { ...query, where: { source: { provider: 'ncm' } } }
+  const remotePage = await focus.query({ query: remoteQuery })
+  assert.equal((await f.request('local', 'focus.play', { query: remoteQuery, token: remotePage.token })).ok, false)
+  assert.equal(adopted, localQueue); assert.equal(providers, 0)
+  const play = { query: remoteQuery, token: remotePage.token }
+  assert.equal((await f.request('provider', 'focus.play', play, { requestId: 'once' })).ok, true)
+  const frozen = adopted
+  const duplicate = await f.request('provider', 'focus.play', play, { requestId: 'once' })
+  assert.equal(duplicate.ok, false)
+  if (!duplicate.ok) assert.equal(duplicate.error.code, 'OUTCOME_UNKNOWN')
+  assert.equal(providers, 1); assert.equal(adopted, frozen)
+  assert.equal((await f.request('reader', 'focus.play.status', { requestId: 'once', epoch: 'current' })).ok, false)
+  const receipt = await f.request('provider', 'focus.play.status', { requestId: 'once', epoch: 'current' })
+  assert.equal(receipt.ok, true)
+  if (receipt.ok) assert.deepEqual(receipt.value, { status: 'committed', result: { total: 1, selectedIndex: 0 }, playback: 'confirmed' })
+  f.connect('receipt', ['library:read', 'playback:read'])
+  const unknown = await f.request('receipt', 'focus.play.status', { requestId: 'once', epoch: 'current' })
+  assert.equal(unknown.ok, true)
+  if (unknown.ok) assert.deepEqual(unknown.value, { status: 'unknown' })
+  assert.equal(f.application.snapshot({ id: 'blind', role: 'plugin', permissions: [] }).focusRevision, null)
+  assert.equal(f.application.snapshot({ id: 'reader', role: 'plugin', permissions: ['library:read'] }).focusRevision, db.focusState().savedRevision)
+})
+
+test('Core tags keep local management offline and require library plus playback and provider authority only where used', async t => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  const local: TrackData = { id: 'local', source: 'local', title: 'Local', artist: 'Artist', album: 'Album',
+    duration: 200, filePath: 'D:/music/local.flac', fileName: 'local.flac', size: 0, cover: null, lyrics: null }
+  const remote: TrackData = { ...local, id: 'ncm:1', source: 'ncm', ncmSongId: 1, title: 'Remote', filePath: '', fileName: '' }
+  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [local] })
+  while (db.catalogStatus().localPending) db.catalogAdvance()
+  const sync = db.catalogSync({ kind: 'begin', revision: 1 })
+  const appended = db.catalogSync({ kind: 'append', id: sync.id, sequence: sync.sequence, tracks: [remote] })
+  db.catalogSync({ kind: 'commit', id: sync.id, sequence: appended.sequence })
+  const localId = String(db.sql.prepare("SELECT recording_id FROM catalog_sources WHERE provider='local'").get()!.recording_id)
+  const remoteId = String(db.sql.prepare("SELECT recording_id FROM catalog_sources WHERE provider='ncm'").get()!.recording_id)
+  const database: MusicTagsDatabaseApi = {
+    tagsState: async () => db.tagsState(), tagsList: async q => db.tagsList(q), tagsEntity: async q => db.tagsEntity(q),
+    tagsMembers: async q => db.tagsMembers(q), tagsRecordings: async q => db.tagsRecordings(q),
+    tagsCreate: async (...args) => db.tagsCreate(...args), tagsRename: async (...args) => db.tagsRename(...args),
+    tagsDelete: async q => db.tagsDelete(q), tagsMemberSet: async (...args) => db.tagsMemberSet(...args),
+    tagsPlaybackPage: async q => db.tagsPlaybackPage(q)
+  }
+  let adopted: LibraryQueueSeedItem[] = [], providerCalls = 0
+  const tags = new CoreMusicTagsService({ database, now: () => 1234, changed() {}, playback: {
+    async fromPages(produce, options = {}, signal) {
+      const staged: LibraryQueueSeedItem[] = []
+      await produce(async items => { staged.push(...items) })
+      await options.beforeAdopt?.(true)
+      options.guard?.(); signal?.throwIfAborted()
+      adopted = staged
+    }
+  } })
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, {
+    tags, resolvePlaylistInputs: async (_inputs, signal) => { signal.throwIfAborted(); providerCalls++; return [remote] }
+  })
+  await f.application.initialize()
+  f.connect('reader', ['library:read'])
+  f.connect('writer', ['library:write'])
+  f.connect('player', ['playback:write'])
+  f.connect('local-player', ['library:read', 'playback:write'])
+  f.connect('stream-player', ['library:read', 'playback:write', 'providers:call'])
+  assert.equal((await f.request('reader', 'tags.create', { name: 'Night', tagsRevision: 0 })).ok, false)
+  const created = await f.request('writer', 'tags.create', { name: 'Night', tagsRevision: 0 })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const tag = (created.value as MusicTagsWriteResult).tag
+  assert.equal((await f.request('writer', 'tags.list')).ok, false)
+  assert.equal((await f.request('reader', 'tags.list')).ok, true)
+  assert.equal((await f.request('writer', 'tags.member.set', { tagId: tag.id, entityId: localId, present: true, membersRevision: 0 })).ok, true)
+  const token = db.tagsState()
+  assert.equal((await f.request('reader', 'tags.members', { tagId: tag.id, token })).ok, true)
+  assert.equal((await f.request('reader', 'tags.entity', { entityId: localId, token })).ok, true)
+  const recordings = await f.request('reader', 'tags.recordings', { tagId: tag.id, token })
+  assert.equal(recordings.ok, true)
+  assert.equal(JSON.stringify(recordings).includes('D:/music'), false)
+  assert.equal((await f.request('player', 'tags.play', { tagId: tag.id, token })).ok, false)
+  assert.equal((await f.request('local-player', 'tags.play', { tagId: tag.id, token })).ok, true)
+  assert.equal(providerCalls, 0); assert.equal(adopted.length, 1)
+  const localQueue = adopted
+  const { tag: remoteTag } = db.tagsCreate({ name: 'Streaming', tagsRevision: db.tagsState().tagsRevision }, 1235)
+  db.tagsMemberSet({ tagId: remoteTag.id, entityId: remoteId, present: true, membersRevision: 0 }, 1236)
+  const remoteRequest = { tagId: remoteTag.id, token: db.tagsState() }
+  assert.equal((await f.request('local-player', 'tags.play', remoteRequest)).ok, false)
+  assert.equal(adopted, localQueue); assert.equal(providerCalls, 0)
+  assert.equal((await f.request('stream-player', 'tags.play', remoteRequest)).ok, true)
+  assert.equal(providerCalls, 1); assert.equal(adopted[0].snapshot?.source, 'ncm')
+  assert.equal(f.application.snapshot({ id: 'reader', role: 'plugin', permissions: ['library:read'] }).tagsRevision, db.tagsState().tagsRevision)
+  const hidden = f.application.snapshot({ id: 'blind', role: 'plugin', permissions: [] })
+  assert.equal(hidden.tagsRevision, null); assert.equal(hidden.tagsLinkRevision, null)
+})
+
+test('Core playlist reads wait for a published preference refresh before returning cached members', async t => {
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  let reads = 0
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, {
+    playlists: {
+      getRevision: () => 4,
+      initialize: async () => {},
+      shutdown: async () => {},
+      waitForPending: () => pending,
+      list: () => { reads++; return { revision: 4, offset: 0, total: 0, items: [] } }
+    } as unknown as CoreApplicationDependencies['playlists']
+  })
+  await f.application.initialize()
+  f.connect('reader', ['library:read'])
+  const request = f.request('reader', 'playlists.list', { offset: 0, limit: 20 })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(reads, 0)
+  release()
+  assert.equal((await request).ok, true)
+  assert.equal(reads, 1)
+})
+
+test('Core preferences keep local bans independent from provider access and scope revisions to library readers', async t => {
+  const db = new LibraryDatabase(':memory:')
+  db.sql.exec("INSERT INTO catalog_entities VALUES('song','recording','Song','','source'),('album','release','Album','','source'),('project','album_project','Project','','source'),('artist','artist','Artist','','source')")
+  const preferences = new CoreMusicPreferencesService({
+    database: {
+      preferencesDetail: async id => db.preferencesDetail(id),
+      preferencesTargets: async query => db.preferencesTargets(query),
+      preferencesSet: async (...args) => db.preferencesSet(...args),
+      preferencesHistory: async query => db.preferencesHistory(query),
+      preferencesAutomaticEligibility: async tracks => db.preferencesAutomaticEligibility(tracks),
+      preferencesTrackStates: async tracks => db.preferencesTrackStates(tracks),
+      preferencesPlaylistsLoad: async () => db.preferencesPlaylistsLoad(),
+      preferencesPlaylistsMigrate: async (...args) => db.preferencesPlaylistsMigrate(...args),
+      preferencesPlaylistsMigrationReceipt: async () => db.preferencesPlaylistsMigrationReceipt(),
+      preferencesPlaylistsSave: async (...args) => db.preferencesPlaylistsSave(...args),
+      preferencesPlaylistsRestore: async (...args) => db.preferencesPlaylistsRestore(...args)
+    }, now: () => 1234, changed() {}
+  })
+  t.after(() => db.close())
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { preferences })
+  await f.application.initialize()
+  f.connect('reader', ['library:read'])
+  f.connect('writer', ['library:write'])
+  f.connect('blind', ['playback:read', 'providers:call'])
+  assert.equal((await f.request('blind', 'preferences.detail', { entityId: 'song' })).ok, false)
+  assert.equal((await f.request('blind', 'preferences.targets', { entityId: 'song' })).ok, false)
+  const targets = await f.request('reader', 'preferences.targets', { entityId: 'song' })
+  assert.equal(targets.ok, true)
+  if (targets.ok) assert.deepEqual((targets.value as import('../shared/musicPreferences.ts').MusicPreferencesTargetsPage).items.map(item => item.id), ['song'])
+  assert.equal((await f.request('writer', 'preferences.history', { entityId: 'song' })).ok, false)
+  const read = await f.request('reader', 'preferences.detail', { entityId: 'song' })
+  assert.equal(read.ok, true)
+  if (!read.ok) return
+  const detail = read.value as import('../shared/musicPreferences.ts').MusicPreferencesDetail
+  const set = { entityId: 'song', token: detail.token, state: 'ban' }
+  assert.equal((await f.request('reader', 'preferences.set', set)).ok, false)
+  assert.equal((await f.request('writer', 'preferences.set', set)).ok, true)
+  assert.equal(db.preferencesDetail('song').value?.state, 'ban')
+  assert.equal(db.preferencesDetail('song').value?.updatedAt, 1234)
+  assert.equal(db.preferencesDetail('album').value, null)
+  assert.equal((await f.request('writer', 'preferences.set', set)).ok, false)
+  const invalid = await f.request('writer', 'preferences.set', { ...set, state: 'like' })
+  assert.equal(invalid.ok, false)
+  if (!invalid.ok) assert.equal(invalid.error.code, 'INVALID_REQUEST')
+  assert.equal((await f.request('reader', 'preferences.detail', { entityId: 'project' })).ok, false)
+  assert.equal((await f.request('reader', 'preferences.detail', { entityId: 'artist' })).ok, false)
+  assert.equal((await f.request('reader', 'preferences.history', { entityId: 'song' })).ok, true)
+  assert.equal(f.application.snapshot({ id: 'reader', role: 'plugin', permissions: ['library:read'] }).preferencesRevision, db.getPreferencesRevision())
+  assert.equal(f.application.snapshot({ id: 'blind', role: 'plugin', permissions: [] }).preferencesRevision, null)
+})
+
+test('Core ratings keep local writes independent from provider access and scope revisions to library readers', async t => {
+  const db = new LibraryDatabase(':memory:')
+  db.sql.exec("INSERT INTO catalog_entities VALUES('song','recording','Song','','source'),('album','release','Album','','source'),('project','album_project','Project','','source')")
+  const ratings = new CoreMusicRatingsService({
+    database: {
+      ratingsDetail: async id => db.ratingsDetail(id),
+      ratingsTargets: async query => db.ratingsTargets(query),
+      ratingsSet: async (...args) => db.ratingsSet(...args),
+      ratingsHistory: async query => db.ratingsHistory(query)
+    }, now: () => 1234, changed() {}
+  })
+  t.after(() => db.close())
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { ratings })
+  await f.application.initialize()
+  f.connect('reader', ['library:read'])
+  f.connect('writer', ['library:write'])
+  f.connect('blind', ['playback:read', 'providers:call'])
+  assert.equal((await f.request('blind', 'ratings.detail', { entityId: 'song' })).ok, false)
+  assert.equal((await f.request('blind', 'ratings.targets', { entityId: 'song' })).ok, false)
+  const targets = await f.request('reader', 'ratings.targets', { entityId: 'song' })
+  assert.equal(targets.ok, true)
+  if (targets.ok) assert.deepEqual((targets.value as import('../shared/musicRatings.ts').MusicRatingsTargetsPage).items.map(item => item.id), ['song'])
+  assert.equal((await f.request('writer', 'ratings.history', { entityId: 'song' })).ok, false)
+  const read = await f.request('reader', 'ratings.detail', { entityId: 'song' })
+  assert.equal(read.ok, true)
+  if (!read.ok) return
+  const detail = read.value as import('../shared/musicRatings.ts').MusicRatingsDetail
+  assert.deepEqual(detail.external, { status: 'unavailable', reason: 'no_approved_source', items: [] })
+  const set = { entityId: 'song', token: detail.token, steps: 9 }
+  assert.equal((await f.request('reader', 'ratings.set', set)).ok, false)
+  const saved = await f.request('writer', 'ratings.set', set)
+  assert.equal(saved.ok, true)
+  assert.equal(db.ratingsDetail('song').value?.steps, 9)
+  assert.equal(db.ratingsDetail('song').value?.updatedAt, 1234)
+  assert.equal(db.ratingsDetail('album').value, null)
+  assert.equal((await f.request('writer', 'ratings.set', set)).ok, false)
+  const invalid = await f.request('writer', 'ratings.set', { ...set, steps: 0 })
+  assert.equal(invalid.ok, false)
+  if (!invalid.ok) assert.equal(invalid.error.code, 'INVALID_REQUEST')
+  assert.equal((await f.request('reader', 'ratings.detail', { entityId: 'project' })).ok, false)
+  assert.equal((await f.request('reader', 'ratings.history', { entityId: 'song' })).ok, true)
+  assert.equal(f.application.snapshot({ id: 'reader', role: 'plugin', permissions: ['library:read'] }).ratingsRevision, db.getRatingsRevision())
+  assert.equal(f.application.snapshot({ id: 'blind', role: 'plugin', permissions: [] }).ratingsRevision, null)
+})
+
+test('Core classification is permission-scoped and edits use current database revisions', async t => {
+  const db = new LibraryDatabase(':memory:')
+  const genres = new CoreGenresService({
+    database: {
+      genresBrowse: async (...args) => db.genresBrowse(...args),
+      genresMembers: async (...args) => db.genresMembers(...args),
+      genresFacets: async (...args) => db.genresFacets(...args),
+      genresTree: async query => db.genresTree(query),
+      genresUnmapped: async query => db.genresUnmapped(query),
+      genresEvidence: async query => db.genresEvidence(query),
+      genresEdit: async input => db.genresEdit(input),
+      genresMap: async input => db.genresMap(input),
+      genresOverride: async input => db.genresOverride(input),
+      genresAdvance: async (...args) => db.genresAdvance(...args)
+    }, separators: () => ';', changed() {}, failed: error => assert.fail(String(error))
+  })
+  t.after(() => db.close())
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { genres })
+  await f.application.initialize()
+  f.connect('reader', ['library:read'])
+  f.connect('writer', ['library:read', 'library:write'])
+  f.connect('blind', [])
+  assert.equal((await f.request('blind', 'genres.browse', { kind: 'recording' })).ok, false)
+  const browse = await f.request('reader', 'genres.browse', { kind: 'recording', limit: 20 })
+  assert.ok(browse.ok)
+  const token = (browse.value as import('../shared/musicGenreBrowse.ts').GenreBrowsePage).token
+  assert.equal((await f.request('reader', 'genres.members', { entityId: 'absent', token })).ok, true)
+  const facets = await f.request('reader', 'genres.facets', { kind: 'recording', dimension: 'format', token })
+  assert.ok(facets.ok)
+  assert.equal((await f.request('reader', 'genres.browse', { kind: 'recording', platformContexts: { ncm: 'injected' } })).ok, false)
+  assert.equal((await f.request('reader', 'genres.facets', { kind: 'recording', dimension: 'rating' })).ok, false)
+  const page = await f.request('reader', 'genres.tree')
+  assert.ok(page.ok)
+  const revision = (page.value as { revision: number }).revision
+  const edit = { action: 'create', revision, name: '实验', nameEn: 'Experimental' }
+  assert.equal((await f.request('reader', 'genres.edit', edit)).ok, false)
+  assert.equal((await f.request('writer', 'genres.edit', edit)).ok, true)
+  assert.equal((await f.request('writer', 'genres.edit', edit)).ok, false)
+  assert.equal(f.application.snapshot({ id: 'blind', role: 'plugin', permissions: [] }).genresRevision, null)
+  genres.observeMetadata(7)
+  assert.equal(f.application.snapshot().classificationMetadataRevision, 7)
+  assert.equal(f.application.snapshot({ id: 'blind', role: 'plugin', permissions: [] }).classificationMetadataRevision, null)
+  assert.ok(f.application.snapshot().genresRevision! > revision)
+  await genres.shutdown()
+})
+
+test('Core album browse and unified play keep library, playback and per-candidate provider authorization separate', async t => {
+  const db = new LibraryDatabase(':memory:')
+  const local: TrackData = { id: 'local', source: 'local', filePath: 'D:/music/one.flac', fileName: 'one.flac',
+    title: 'One', artist: 'Artist', album: 'Album', duration: 10, size: 1, cover: null, lyrics: null }
+  db.replaceDocument({ version: 2, revision: 0, tracks: [local], folders: [], exclusions: [] })
+  while (db.catalogStatus().localPending) db.catalogAdvance()
+  const remote: TrackData = { ...local, id: 'ncm:7', source: 'ncm', ncmSongId: 7, albumId: '77', filePath: '' }
+  let job = db.catalogSync({ kind: 'begin', revision: 0 })
+  job = db.catalogSync({ kind: 'append', ...job, tracks: [remote] })
+  db.catalogSync({ kind: 'commit', ...job })
+  const context = { platformContexts: {} }
+  const scopes = new CoreCatalogPlaybackScope({ database: {
+    genresContainsSources: async (...args) => db.genresContainsSources(...args),
+    albumsContainsSource: async (...args) => db.albumsContainsSource(...args)
+  }, platformContexts: () => ({}) })
+  const chosen: TrackData[] = []
+  const unified = new CoreUnifiedPlaybackService({ database: { catalogPlaybackSources: async query => db.catalogPlaybackSources(query) },
+    versions: { snapshot: emptyMusicVersions, getRevision: () => 0 },
+    playback: { fromUnifiedTrack: async (select, signal, beforeAdopt) => {
+      const selected = await select(signal ?? new AbortController().signal, async track => ({ track, resolved: { source: track.filePath || 'https://example.test/audio', expiresAt: null } }))
+      if (selected.prepared) { await beforeAdopt?.(); chosen.push(selected.prepared.track) }
+      return selected.result
+    } }, restore: async () => { assert.fail('Global restorer must not replace request authorization') },
+    assertScope: (request, ids, signal) => scopes.allowed(request, ids, signal)
+  })
+  const albums = new CoreAlbumBrowseService({ database: {
+    albumsBrowse: async (...args) => db.albumsBrowse(...args), albumsSources: async (...args) => db.albumsSources(...args),
+    albumsContainsSource: async (...args) => db.albumsContainsSource(...args)
+  }, platformContexts: () => context.platformContexts, observeMetadata() {} })
+  let providerCalls = 0
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { unifiedPlayback: unified, albums,
+    resolvePlaylistInputs: async () => { providerCalls++; return [remote] } })
+  t.after(() => db.close())
+  f.connect('reader', ['library:read'])
+  f.connect('local-player', ['library:read', 'playback:write'])
+  f.connect('remote-player', ['library:read', 'playback:write', 'providers:call'])
+  f.connect('blind', ['playback:write'])
+  await f.application.initialize()
+  const release = db.catalogQuery({ kind: 'release', source: 'local' }).items[0]
+  const reply = await f.request('reader', 'albums.browse', { entityId: release.id, limit: 1 })
+  assert.ok(reply.ok)
+  const page = reply.value as import('../shared/musicAlbumBrowse.ts').AlbumBrowsePage
+  const albumScope = { entityId: release.id, releaseId: page.currentRelease!.id, token: page.token }
+  const sources = db.albumsSources(albumScope)
+  const localId = sources.items[0].sourceId
+  const remoteEntity = db.catalogQuery({ kind: 'recording', source: 'ncm' }).items[0]
+  const remoteId = db.catalogSources({ entityId: remoteEntity.id }).items[0].id
+  const revision = db.catalogStatus().revision
+  assert.equal((await f.request('blind', 'albums.browse', { entityId: release.id })).ok, false)
+  assert.equal((await f.request('reader', 'albums.sources', albumScope)).ok, true)
+  assert.equal((await f.request('reader', 'catalog.playUnified', { sourceId: localId, revision })).ok, false)
+  assert.equal((await f.request('blind', 'catalog.playUnified', { sourceId: localId, revision })).ok, false)
+  assert.equal((await f.request('local-player', 'catalog.playUnified', { sourceId: localId, revision, albumScope })).ok, true)
+  assert.equal(chosen.length, 1)
+  assert.equal(providerCalls, 0)
+  const denied = await f.request('local-player', 'catalog.playUnified', { sourceId: remoteId, revision })
+  assert.equal(denied.ok, false)
+  if (!denied.ok) assert.equal(denied.error.code, 'FORBIDDEN')
+  assert.equal(providerCalls, 0)
+  assert.equal((await f.request('remote-player', 'catalog.playUnified', { sourceId: remoteId, revision })).ok, true)
+  assert.equal(providerCalls, 1)
+  assert.equal(chosen[1].sourceSelection, 'explicit')
+  assert.equal((await f.request('remote-player', 'catalog.playUnified', { sourceId: remoteId, revision, albumScope })).ok, false)
+  assert.equal((await f.request('reader', 'albums.browse', { entityId: release.id, platformContexts: { fixture: 'injected' } })).ok, false)
+})
+
 test('Core owns catalog readiness, permissions and explicit source playback through the existing resolver', async t => {
   const db = new LibraryDatabase(':memory:')
   const local: TrackData = { id: 'cue:1', source: 'local', title: 'Local', artist: 'Artist', album: 'Album',
@@ -365,6 +761,91 @@ test('Core owns catalog readiness, permissions and explicit source playback thro
   db.close()
 })
 
+test('entity metadata dispatch keeps mutations permissioned, runs without a window and preserves the old Track metadata API', async t => {
+  const db = new LibraryDatabase(':memory:')
+  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [{ id: 'one', source: 'local', filePath: 'D:/one.flac', title: 'One', artist: 'Artist' }] })
+  db.catalogAdvance()
+  const artist = db.catalogQuery({ kind: 'artist' }).items[0].id
+  const repository = new Proxy({} as EntityMetadataDatabaseApi, { get: (_, key: keyof EntityMetadataDatabaseApi) => async (...args: unknown[]) => (db[key] as (...args: unknown[]) => unknown).apply(db, args) })
+  const metadata = new CoreMetadataService({
+    database: { queryTracks: async query => db.queryTracks(query), getTracksByIds: async ids => db.getTracksByIds(ids), patchTracks: async patches => db.patchTracks(patches) },
+    available: () => false, provider: { searchSongs: async () => ({ items: [], total: 0 }) },
+    policy: () => ({ metadata: false, cover: false, lyrics: false }), now: Date.now, newId: () => 'test', changed() {}, libraryChanged() {}, failed(e) { assert.fail(String(e)) },
+    entities: { database: repository, provider: { id: 'musicbrainz-wiki', capabilities: { entities: ['artist'], fields: ['name', 'description', 'introduction'], explicitIdentity: true }, resolve: async () => { assert.fail('Disabled policy must not fetch') }, enrich: async () => [] },
+      identificationProviders: () => [{ id: 'fixture', matcherVersion: 'fixture-v1', supports: () => true, context: () => '1', blockedReason: () => null,
+        recall: async () => { assert.fail('Disabled policy must not recall') } }],
+      policy: () => ({ enabled: false, publicServiceApproved: false, wikipediaText: false, contact: '' }), now: Date.now, changed() {}, failed(e) { assert.fail(String(e)) } }
+  })
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { metadata })
+  t.after(() => db.close())
+  f.connect('reader', ['library:read']); f.connect('writer')
+  await f.application.initialize()
+  const demand = { entityId: artist, language: 'en', batchId: 'durable', mbid: 'a223958d-5c56-4b2c-a30a-87e357bc121b' }
+  assert.equal((await f.request('reader', 'metadata.entity.resolve', demand)).ok, false)
+  const queued = await f.request('writer', 'metadata.entity.resolve', demand)
+  assert.ok(queued.ok)
+  const job = queued.value as EntityMetadataJob
+  f.application.disconnect('writer')
+  for (let i = 0; i < 100 && db.metadataJobs({ jobId: job.id }).items[0].state !== 'blocked'; i++) await new Promise<void>(r => setImmediate(r))
+  assert.equal(db.metadataJobs({ jobId: job.id }).items[0].state, 'blocked')
+  const persistedTasks = await f.request('reader', 'metadata.entity.tasks', { filter: 'attention', limit: 1 })
+  assert.ok(persistedTasks.ok)
+  assert.equal((persistedTasks.value as { items: Array<{ id: string }> }).items[0].id, job.id)
+  const persistedDemands = await f.request('reader', 'metadata.entity.demands', { jobId: job.id, limit: 1 })
+  assert.ok(persistedDemands.ok)
+  assert.equal((persistedDemands.value as { items: Array<{ batchId: string }> }).items[0].batchId, 'durable')
+  assert.equal((await f.request('reader', 'metadata.entity.cancel', { jobId: job.id, batchId: 'durable' })).ok, false)
+  f.connect('writer')
+  assert.equal((await f.request('reader', 'identification.start', { entityId: artist, batchId: 'recall' })).ok, false)
+  const started = await f.request('writer', 'identification.start', { entityId: artist, batchId: 'recall' })
+  assert.equal(started.ok, true)
+  const recallJob = (started as { value: { batchId: string; jobs: EntityMetadataJob[] } }).value
+  assert.equal(recallJob.batchId, 'recall')
+  assert.equal(recallJob.jobs[0].type, 'identify')
+  assert.equal((await f.request('writer', 'metadata.entity.cancel', { jobId: recallJob.jobs[0].id, batchId: 'recall' })).ok, true)
+    const beforeMetadataRevision = f.application.snapshot().entityMetadataRevision!
+    assert.equal((await f.request('writer', 'metadata.entity.override', { entityId: artist, revision: 0, mode: 'value', value: 'User introduction', language: 'en' })).ok, true)
+    assert.ok(f.application.snapshot().entityMetadataRevision! > beforeMetadataRevision)
+    assert.equal(f.application.snapshot({ id: 'unrelated', role: 'desktop', permissions: [] }).entityMetadataRevision, null)
+  const detail = await f.request('reader', 'metadata.entity.detail', { entityId: artist, language: 'en' })
+  assert.ok(detail.ok)
+  assert.equal((detail.value as EntityMetadataDetail).introduction!.value, 'User introduction')
+  const personalRevision = (detail.value as EntityMetadataDetail).revision
+  const preferred = { entityId: artist, revision: personalRevision, provider: 'wikipedia', language: 'en' }
+  assert.equal((await f.request('reader', 'metadata.entity.sourcePreference', preferred)).ok, false)
+  assert.equal((await f.request('writer', 'metadata.entity.sourcePreference', preferred)).ok, true)
+  const image = { entityId: artist, revision: personalRevision + 1, mode: 'value', language: 'en',
+    dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=' }
+  assert.equal((await f.request('reader', 'metadata.entity.artworkOverride', image)).ok, false)
+  assert.equal((await f.request('writer', 'metadata.entity.artworkOverride', { ...image, dataUrl: 'https://session.invalid/image' })).ok, false)
+  assert.equal((await f.request('writer', 'metadata.entity.artworkOverride', image)).ok, true)
+  const withImage = await f.request('reader', 'metadata.entity.detail', { entityId: artist, language: 'en' })
+  assert.ok(withImage.ok)
+  assert.equal((withImage.value as EntityMetadataDetail).manualArtwork?.dataUrl, image.dataUrl)
+  assert.equal((withImage.value as EntityMetadataDetail).sourcePreference?.provider, 'wikipedia')
+  assert.equal((withImage.value as EntityMetadataDetail).introduction!.value, 'User introduction', 'source preference never overrides personal prose')
+  const input = db.identificationInput(artist)
+  const [candidate] = db.identificationPublish(input, [{ provider: 'ncm', name: 'Artist', summary: 'Platform identity',
+    references: [{ provider: 'ncm', kind: 'artist', idType: 'native', value: '42' }], matcherVersion: 'fixture-v1',
+    evidence: { origin: 'search', matches: ['name'], missing: ['cross_reference'], conflicts: [], incomplete: false, provenance: 'fixture' } }], 1000)
+  const review = { candidateId: candidate.id, revision: candidate.revision, linkRevision: candidate.linkRevision }
+  const candidates = await f.request('reader', 'identification.candidates', { entityId: artist })
+  assert.equal(candidates.ok && (candidates.value as { total: number }).total, 1)
+  const reviewInbox = await f.request('reader', 'identification.inbox', { kind: 'artist', limit: 1 })
+  assert.equal(reviewInbox.ok && (reviewInbox.value as { total: number }).total, 1)
+  assert.equal((await f.request('reader', 'identification.preview', review)).ok, true)
+  assert.equal((await f.request('reader', 'identification.decide', { ...review, decision: 'confirm' })).ok, false)
+  assert.equal((await f.request('writer', 'identification.decide', { ...review, decision: 'confirm' })).ok, true)
+  const identified = db.identificationDetail(artist)
+  assert.equal((await f.request('reader', 'identification.detail', { entityId: artist })).ok, true)
+  assert.equal((await f.request('reader', 'identification.status', {})).ok, true)
+  assert.equal(db.metadataDetail(artist, 'en').introduction!.value, 'User introduction')
+  assert.equal((await f.request('writer', 'identification.detach', { linkId: identified.link!.id, revision: identified.link!.revision })).ok, true)
+  assert.equal(db.identificationDetail(artist).link!.state, 'detached')
+  assert.equal((await f.request('reader', 'metadata.status')).ok, true)
+  await metadata.shutdown()
+})
+
 test('Core owns OPRA queries and refresh survives window detach without blocking playback', async (t) => {
   const catalog = OpraCatalog.fromText([
     { type: 'vendor', id: 'v', data: { name: 'Vendor' } },
@@ -408,6 +889,7 @@ test('queue identities feed playlist writes and output diagnostics keep their ow
     playlists: {
       getRevision: () => 3,
       initialize: async () => {},
+      waitForPending: async () => {},
       shutdown: async () => {},
       edit: async (...args: unknown[]) => {
         writes.push(args)
@@ -488,6 +970,7 @@ test('finite Core playlist, import and file operations resolve source identities
   const playlist = {
     getRevision: () => 4,
     initialize: async () => {},
+    waitForPending: async () => {},
     shutdown: async () => {},
     edit: async (...args: unknown[]) => {
       writes.push(['edit', ...args])
@@ -1232,4 +1715,141 @@ test('a slow search is cancelled on disconnect while another client pauses indep
   assert.equal(cancelled, true)
   assert.equal(f.calls.filter((call) => call === 'pause').length, 1)
   assert.equal(f.messages.get('search')!.filter((message) => message.kind === 'response').length, 0)
+})
+
+test('Core backup v2 selection and repreview retain desktop settings permissions and private database boundaries', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'backup-gateway-'))
+  const dialogs: string[] = []
+  const unavailable = async (): Promise<never> => { throw new Error('No database work should run after cancelling the file picker') }
+  const backup = new CorePersonalBackupService({ root,
+    database: { exportDocument: unavailable, restoreDocument: unavailable, restorePersonalLibrary: unavailable,
+      previewPersonalLibrary: unavailable, getMetadata: unavailable, exportPlaybackQueue: unavailable,
+      corePersonalRestore: async () => ({ id: null, applied: false }) },
+    flush: async () => {}, personalData: () => ({}), chooseFile: async kind => { dialogs.push(kind); return null },
+    chooseFolder: async () => null, authorizeRoots: async roots => roots, newId: () => 'preview'
+  })
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { personalBackup: backup })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  await f.application.initialize()
+  f.connect('reader', ['settings:read'])
+  f.connect('writer', ['settings:write'])
+  f.connect('blind', ['library:read'])
+  f.connect('plugin', ['settings:read', 'settings:write'])
+  f.application.disconnect('plugin')
+  f.application.connect({ id: 'plugin', role: 'plugin', permissions: ['settings:read', 'settings:write'] }, message => f.messages.get('plugin')!.push(message))
+  assert.equal((await f.request('reader', 'backup.export', {})).ok, true)
+  assert.equal((await f.request('reader', 'backup.export', { domains: ['music'] })).ok, true)
+  assert.deepEqual(dialogs, ['export', 'export'])
+  assert.equal((await f.request('reader', 'backup.preview', {})).ok, false)
+  assert.equal((await f.request('writer', 'backup.preview', {})).ok, true)
+  assert.equal((await f.request('writer', 'backup.recover', {})).ok, true)
+  for (const name of ['backup.repreview', 'backup.stage']) {
+    const response = await f.request('writer', name, { id: 'missing', options: { domains: ['music'], conflict: 'keep-local', mappings: [] } })
+    assert.equal(response.ok, false)
+    if (!response.ok) assert.equal(response.error.code, 'STALE_REVISION')
+  }
+  for (const [name, payload] of [['backup.export', { domains: ['music'] }], ['backup.recover', {}], ['backup.preview', {}]] as const) {
+    const response = await f.request('plugin', name, payload)
+    assert.equal(response.ok, false)
+    if (!response.ok) assert.equal(response.error.code, 'FORBIDDEN')
+  }
+  assert.equal((await f.request('blind', 'musicBackupExport', {})).ok, false)
+  assert.equal(f.application.snapshot({ id: 'none', role: 'plugin', permissions: [] }).personalBackupRecovery, null)
+  assert.equal(f.application.snapshot({ id: 'reader', role: 'desktop', permissions: ['settings:read'] }).personalBackupRecovery, false)
+})
+
+test('Core exploration dispatch keeps exact local navigation and manual performances under library permissions', async t => {
+  const db = new LibraryDatabase(':memory:'); t.after(() => db.close())
+  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [{ id: 'exploration-local', source: 'local', filePath: 'D:/music/one.flac', title: 'One', artist: 'Same name', album: 'Album' }] })
+  while (db.catalogStatus().localPending) db.catalogAdvance()
+  const recording = db.catalogQuery({ kind: 'recording' }).items[0]
+  const reference = (kind: MusicExplorationReference['kind'], value: string): MusicExplorationReference => ({ provider: 'musicbrainz', kind, idType: 'mbid', value })
+  const recordingRef = reference('recording', '00000000-0000-0000-0000-000000000001'), personRef = reference('artist', '00000000-0000-0000-0000-000000000020'), workRef = reference('work', '00000000-0000-0000-0000-000000000010')
+  db.sql.prepare('INSERT INTO metadata_entities VALUES(?,?,?,?,?)').run('exploration-target', 'musicbrainz', 'recording', recordingRef.value, 'One')
+  db.sql.prepare('INSERT INTO metadata_identity_refs VALUES(?,?,?,?,?)').run(recordingRef.provider, recordingRef.kind, recordingRef.idType, recordingRef.value, 'exploration-target')
+  db.sql.prepare("INSERT INTO metadata_identity_links VALUES(?,?,?,1,?,'confirmed')").run('exploration-link', recording.id, 'recording', 'exploration-target')
+  const attribution = { provider: 'musicbrainz', externalId: personRef.value, url: 'https://musicbrainz.org', license: 'CC0', licenseUrl: '', attribution: 'MusicBrainz', revision: '1', retrievedAt: 1000 }
+  db.explorationIngest({ owner: recordingRef, provider: 'musicbrainz-details', setKey: 'dispatch', nodes: [{ reference: recordingRef, title: 'One' }, { reference: personRef, title: 'Exact person' }, { reference: workRef, title: 'Work' }], relations: [
+    { from: workRef, to: recordingRef, kind: 'work_recording', order: 0, attribution },
+    { from: personRef, to: workRef, kind: 'credit', order: 0, attribution, credit: { personRef: { ...personRef, kind: 'artist' }, name: 'Exact person', targetRef: { ...workRef, kind: 'work' }, role: 'composer', rawRole: 'composer', relationTypeId: 'composer', direction: 'backward', order: 0, joinphrase: '', attributes: [], begin: '', end: '', attribution } }
+  ], truncated: false })
+  const api = new Proxy({} as MusicExplorationDatabaseApi, { get: (_, key: keyof MusicExplorationDatabaseApi) => async (...args: unknown[]) => (db[key] as (...args: unknown[]) => unknown).apply(db, args) })
+  const catalogApi = new Proxy({} as CatalogDatabaseApi, { get: (_, key: keyof CatalogDatabaseApi) => async (...args: unknown[]) => (db[key] as (...args: unknown[]) => unknown).apply(db, args) })
+  const catalog = new CoreCatalogService({ database: catalogApi, versions: { getRevision: () => 0, snapshot: emptyMusicVersions },
+    playlists: { getRevision: () => 0, sourceTracks: () => [] }, changed() {}, failed: error => assert.fail(String(error)) })
+  let changed = () => {}
+  const exploration = new CoreMusicExplorationService({ database: api, platformContexts: () => ({}), now: () => 1001, changed: () => changed() })
+  const f = fixture(t, true, undefined, undefined, undefined, undefined, undefined, { exploration, catalog })
+  changed = () => f.application.changed()
+  await f.application.initialize()
+  for (let i = 0; i < 100 && (await catalog.status()).state === 'running'; i++) await new Promise<void>(resolve => setImmediate(resolve))
+  await catalog.cancel()
+  const indexedRevision = catalog.getRevision()
+  assert.equal(indexedRevision, db.catalogStatus().revision)
+  t.after(() => catalog.shutdown())
+  f.connect('reader', ['library:read', 'playback:read']); f.connect('writer', ['library:write']); f.connect('provider', ['library:read', 'library:write', 'providers:call']); f.connect('no-library', ['playback:read'])
+  const page = await f.request('reader', 'exploration.query', { kinds: ['artist'], scope: 'library' }); assert.equal(page.ok, true)
+  if (!page.ok) return
+  assert.equal((page.value as MusicExplorationPage).total, 1)
+  const lookup = await f.request('reader', 'exploration.lookup', { reference: personRef }); assert.equal(lookup.ok, true)
+  if (!lookup.ok) return
+  const person = (lookup.value as MusicExplorationDetail).entity!
+  assert.equal((await f.request('reader', 'exploration.detail', { entityId: person.id })).ok, true)
+  const participation = await f.request('reader', 'exploration.participation', { entityId: person.id, roles: ['composer'] }); assert.equal(participation.ok, true)
+  if (!participation.ok) return
+  const work = (participation.value as MusicExplorationRelationsPage).items[0].entity
+  const save = { title: 'Local confirmed rendition', workId: work.id, recordingIds: [recording.id], revision: db.explorationState().revision }
+  assert.equal((await f.request('reader', 'exploration.performance.save', save)).ok, false)
+  assert.equal((await f.request('writer', 'exploration.query', {})).ok, false)
+  assert.equal((await f.request('no-library', 'exploration.lookup', { reference: personRef })).ok, false)
+  assert.equal(f.application.snapshot({ id: 'none', role: 'desktop', permissions: ['playback:read'] }).explorationRevision, null)
+  assert.equal(f.application.snapshot({ id: 'reader', role: 'desktop', permissions: ['library:read'] }).explorationRevision, db.explorationState().revision)
+  for (const name of ['exploration.ingest', 'exploration.syncCredits', 'exploration.backfillCredits']) assert.equal((await f.request('provider', name, {})).ok, false)
+  assert.equal((await f.request('reader', 'exploration.query', { platformContexts: { musicbrainz: 'forged' } })).ok, false)
+  assert.equal((await f.request('reader', 'exploration.lookup', { name: 'Same name' })).ok, false)
+  const saved = await f.request('writer', 'exploration.performance.save', save); assert.equal(saved.ok, true)
+  if (!saved.ok) return
+  const performance = saved.value as MusicExplorationDetail
+  assert.equal(performance.entity!.inLibrary, true)
+  assert.equal((await f.request('reader', 'exploration.relations', { entityId: performance.entity!.id, direction: 'outgoing' })).ok, true)
+  assert.equal((await f.request('reader', 'exploration.performance.delete', { id: performance.entity!.id, revision: db.explorationState().revision })).ok, false)
+  const snapshot = shallowRef(f.application.snapshot())
+  const tagsData = tagsFixture(), tagsView = createMusicTagsView(tagsData.api)
+  const focusData = focusFixture(), focusView = createMusicFocusView(focusData.api)
+  const stopTags = observeMusicTagsView(tagsView, { entityId: () => person.id, scope: () => 'person', snapshot: () => snapshot.value })
+  const stopFocus = observeMusicFocusView(focusView, { scope: () => 'library', snapshot: () => snapshot.value })
+  t.after(() => { stopTags(); stopFocus(); tagsView.dispose(); focusView.dispose() })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  await focusView.evaluate()
+  tagsView.setCreateName('保留人物标签草稿')
+  focusView.setName('保留筛选草稿')
+  assert.ok(tagsView.state.value.entity)
+  assert.ok(focusView.state.value.page)
+  assert.ok(focusView.state.value.facets)
+  const tagReads = tagsData.queries.length, focusReads = focusData.queries.length
+  const beforeDelete = db.explorationState(), preferencesRevision = db.getPreferencesRevision()
+  const tagsToken = db.tagsState(), focusState = db.focusState(), draft = focusView.state.value.draft
+  const removed = await f.request('writer', 'exploration.performance.delete', { id: performance.entity!.id, revision: db.explorationState().revision }); assert.equal(removed.ok, true)
+  if (removed.ok) assert.equal(removed.value, true)
+  assert.ok(db.explorationState().catalogRevision > beforeDelete.catalogRevision)
+  assert.equal(db.getPreferencesRevision(), preferencesRevision, 'deletion keeps anchors; no incidental preference invalidation')
+  assert.equal(db.tagsState().tagsRevision, tagsToken.tagsRevision)
+  assert.equal(db.focusState().savedRevision, focusState.savedRevision)
+  assert.equal(catalog.getRevision(), indexedRevision, 'paused indexing is not restarted for graph writes')
+  const event = f.messages.get('reader')!.findLast(message => message.kind === 'state')
+  assert.ok(event?.kind === 'state')
+  assert.equal(event.snapshot.catalogRevision, db.catalogStatus().revision)
+  assert.equal(f.application.snapshot({ id: 'none', role: 'desktop', permissions: [] }).catalogRevision, null)
+  snapshot.value = event.snapshot
+  assert.equal(tagsView.state.value.entity, null)
+  assert.equal(focusView.state.value.page, null)
+  assert.equal(focusView.state.value.facets, null)
+  assert.equal(tagsView.state.value.createName, '保留人物标签草稿')
+  assert.equal(focusView.state.value.name, '保留筛选草稿')
+  assert.deepEqual(focusView.state.value.draft, draft)
+  assert.equal(tagsData.queries.length, tagReads)
+  assert.equal(focusData.queries.length, focusReads)
+  exploration.observe(beforeDelete)
+  assert.equal(f.application.snapshot().catalogRevision, event.snapshot.catalogRevision, 'late replies do not roll back the observed revision')
+  assert.equal(db.queryTracks({ limit: 10 }).total, 1)
 })

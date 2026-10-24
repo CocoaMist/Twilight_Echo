@@ -1,6 +1,32 @@
+import type { MusicExplorationDatabaseApi } from '../../shared/musicExploration.ts'
+import { LibraryDatabaseExploration, EXPLORATION_SCHEMA_SQL, EXPLORATION_SCHEMA_OBJECTS } from './libraryDatabaseExploration.ts'
+import { LibraryDatabaseIdentificationSchedule, IDENTIFICATION_SCHEDULE_SCHEMA_SQL } from './libraryDatabaseIdentificationSchedule.ts'
 import type { LibraryPlaybackQueueReference } from '../../shared/playbackSession.ts'
+import { LibraryDatabaseEntityMetadata, ENTITY_METADATA_SCHEMA_SQL, ENTITY_METADATA_DETAILS_SCHEMA_SQL, ENTITY_METADATA_PERSONAL_SCHEMA_SQL } from './libraryDatabaseEntityMetadata.ts'
+import { LibraryDatabaseLegacyMusic, LEGACY_MUSIC_METADATA_SCHEMA_SQL } from './libraryDatabaseLegacyMusic.ts'
+import { LEGACY_MUSIC_TASK_SCHEMA_SQL } from './libraryDatabaseLegacyTasks.ts'
+import type { LegacyMusicTaskDatabaseApi } from '../../shared/legacyMusicTasks.ts'
+import type { LegacyMusicMetadataDatabaseApi } from '../../shared/legacyMusicMetadata.ts'
+import type { EntityMetadataDatabaseApi } from '../../shared/entityMetadata.ts'
+import { metadataTasks, metadataTaskDemands } from './libraryDatabaseMetadataTasks.ts'
+import type { IdentificationDatabaseApi } from '../../shared/musicIdentification.ts'
+import type { CatalogUnifiedPlaybackDatabaseApi } from '../../shared/musicUnifiedPlayback.ts'
+import { readCatalogPlaybackSources } from './libraryDatabasePlaybackSources.ts'
+import type { AlbumBrowseDatabaseApi } from '../../shared/musicAlbumBrowse.ts'
+import { LibraryDatabaseAlbumBrowse } from './libraryDatabaseAlbumBrowse.ts'
+import type { MusicRatingsDatabaseApi } from '../../shared/musicRatings.ts'
+import { LibraryDatabaseRatings, RATING_SCHEMA_SQL, RATING_SCHEMA_OBJECTS } from './libraryDatabaseRatings.ts'
+import type { MusicPreferencesDatabaseApi } from '../../shared/musicPreferences.ts'
+import { LibraryDatabasePreferences, PREFERENCE_SCHEMA_SQL, PREFERENCE_SCHEMA_OBJECTS, PREFERENCE_WORK_MIGRATION_SQL } from './libraryDatabasePreferences.ts'
+import type { MusicTagsDatabaseApi } from '../../shared/musicTags.ts'
+import type { MusicFocusDatabaseApi } from '../../shared/musicFocus.ts'
+import { LibraryDatabaseFocus, FOCUS_SCHEMA_SQL, FOCUS_SCHEMA_OBJECTS } from './libraryDatabaseFocus.ts'
+import { LibraryDatabaseTags, TAG_SCHEMA_SQL, TAG_SCHEMA_OBJECTS } from './libraryDatabaseTags.ts'
+import { IDENTIFICATION_SCHEMA_SQL, IDENTIFICATION_INPUT_FENCE_SCHEMA_SQL, IDENTIFICATION_SOURCE_FENCE_SCHEMA_SQL, IDENTIFICATION_ALBUM_FENCE_SCHEMA_SQL } from './libraryDatabaseIdentification.ts'
 import { DatabaseSync, backup, type SQLInputValue } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
+import { LibraryDatabasePersonalMusic } from './libraryDatabasePersonalMusic.ts'
+import { validateMusicPersonalBackup, validMusicPersonalBackupRevision, type MusicPersonalBackupDatabaseApi } from '../../shared/musicPersonalBackup.ts'
 import { existsSync, mkdirSync, renameSync, unlinkSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
@@ -76,7 +102,15 @@ import {
 import type { LibrarySelectionRequest } from '../../shared/librarySelection.ts'
 import { validateLibrarySelection } from './libraryDatabaseSelections.ts'
 import { LibraryDatabaseHistory, LIBRARY_HISTORY_SCHEMA_SQL } from './libraryDatabaseHistory.ts'
-import { LibraryDatabaseCatalog, CATALOG_SCHEMA_SQL } from './libraryDatabaseCatalog.ts'
+import { LibraryDatabaseCatalog, CATALOG_SCHEMA_SQL, CATALOG_PROJECT_SCHEMA_SQL } from './libraryDatabaseCatalog.ts'
+import { LibraryDatabaseCatalogReferences } from './libraryDatabaseCatalogReferences.ts'
+import { LibraryDatabaseGenres, GENRE_SCHEMA_SQL } from './libraryDatabaseGenres.ts'
+import { LibraryDatabaseGenreLegacy, GENRE_LEGACY_SCHEMA_SQL } from './libraryDatabaseGenreLegacy.ts'
+import type { GenreDatabaseApi } from '../../shared/musicGenres.ts'
+import type { GenreBrowseDatabaseApi } from '../../shared/musicGenreBrowse.ts'
+import { LibraryDatabaseGenreBrowse, GENRE_PLATFORM_ALBUM_TARGET_SQL } from './libraryDatabaseGenreBrowse.ts'
+import { BROWSE_REVISION_OBJECTS, BROWSE_REVISION_SCHEMA_SQL, PERSONAL_METADATA_TABLES, PERSONAL_METADATA_REVISION_OBJECTS, PERSONAL_METADATA_REVISION_SCHEMA_SQL } from './libraryDatabaseBrowseRevision.ts'
+import { LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL } from './legacyMusicProvenance.ts'
 import type { CatalogQuery, CatalogSourceQuery, CatalogSync } from '../../shared/musicCatalog.ts'
 import type { MusicVersionsDocument } from '../../shared/musicVersions.ts'
 import {
@@ -171,15 +205,36 @@ export class LibraryDatabase {
   private readonly playlistViews: LibraryDatabasePlaylistViews
   private readonly selections: LibraryDatabaseSelections
   private readonly catalog: LibraryDatabaseCatalog
+  private readonly catalogReferences: LibraryDatabaseCatalogReferences
+  private readonly entityMetadata: LibraryDatabaseEntityMetadata
+  private readonly genres: LibraryDatabaseGenres
+  private readonly genreLegacy: LibraryDatabaseGenreLegacy
+  private readonly genreBrowse: LibraryDatabaseGenreBrowse
 
   constructor(filePath: string) {
     this.filePath = filePath
     const existing = filePath !== ':memory:' && existsSync(filePath)
     mkdirSync(dirname(filePath), { recursive: true })
     this.sql = new DatabaseSync(filePath)
+    this.genres = new LibraryDatabaseGenres({ sql: this.sql, transaction: action => this.transaction(action),
+      collectionExists: id => this.getAlbumAliases().has(id) || !!this.sql.prepare(`
+        SELECT 1 FROM catalog_sources s WHERE s.provider<>'local' AND s.album_key=?
+        AND ${GENRE_PLATFORM_ALBUM_TARGET_SQL}
+        AND EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id) LIMIT 1`).get(id) })
+    this.genreLegacy = new LibraryDatabaseGenreLegacy({ sql: this.sql,
+      transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+      albumCollections: () => [...this.getAlbumAliases().keys()].map(id => ({ id })), genres: this.genres })
+    this.genreBrowse = new LibraryDatabaseGenreBrowse({ sql: this.sql,
+      albumAliases: () => this.getAlbumAliases(), contentRevision: () => this.getContentRevision(),
+      metadataRevision: () => this.getClassificationMetadataRevision() })
+    this.catalogReferences = new LibraryDatabaseCatalogReferences(this.sql)
+    this.entityMetadata = new LibraryDatabaseEntityMetadata({ sql: this.sql, transaction: action => this.transaction(action),
+      contentRevision: () => this.getContentRevision(), albumAliases: id => this.getAlbumAliases().get(id) ?? [id], music: () => this.legacyMusic(),
+      exploration: () => this.exploration() })
     this.catalog = new LibraryDatabaseCatalog({
       sql: this.sql,
-      transaction: (action) => this.transaction(action)
+      transaction: (action) => this.transaction(action),
+      collectionSelection: (collection, id) => this.where(collection === 'artists' ? { artist: id } : { albumId: id })
     })
     this.repair = new LibraryDatabaseRepair(this.sql, (action) => this.transaction(action, false))
     registerLibraryRecordingFunctions(this.sql)
@@ -221,18 +276,25 @@ export class LibraryDatabase {
     })
     try {
       const version = Number((this.sql.prepare('PRAGMA user_version').get() as Row).user_version)
-      if (version > 12) throw new Error(`Unsupported music library database version: ${version}`)
+      if (version > 28) throw new Error(`Unsupported music library database version: ${version}`)
+      let legacyV14InputFence = false
       if (existing) {
         const identity = Number(
           (this.sql.prepare('PRAGMA application_id').get() as Row).application_id
         )
         const tables = new Set(
           (
-            this.sql.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view','trigger')").all() as Row[]
+            this.sql.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view','trigger','index')").all() as Row[]
           ).map((row) => text(row.name))
         )
+        // Early v14 profiles predate the additive input fence. Both objects
+        // were absent there; a partial fence or a newer incomplete schema is
+        // still rejected. Install it only inside the backed-up upgrade below.
+        legacyV14InputFence = version === 14 &&
+          !tables.has('metadata_identification_inputs') &&
+          !tables.has('metadata_identification_input_changed')
         if (
-          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(version) ||
+          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(version) ||
           identity !== 0x54574c42 ||
           [
             'meta',
@@ -243,6 +305,27 @@ export class LibraryDatabase {
             'track_search',
             ...(version >= 4 ? ['library_history'] : []),
             ...(version >= 7 ? ['queue_snapshots'] : []),
+            ...(version >= 13 ? ['metadata_entities', 'metadata_subjects', 'metadata_link_history', 'metadata_facts', 'metadata_overrides', 'metadata_jobs', 'metadata_demands'] : []),
+            ...(version >= 14 && !legacyV14InputFence ? ['metadata_identification_inputs', 'metadata_identification_input_changed'] : []),
+            ...(version >= 14 ? ['metadata_identity_refs', 'metadata_identity_links', 'metadata_identity_candidates', 'metadata_identity_suppressions', 'metadata_identity_history', 'catalog_release_projects'] : []),
+            ...(version >= 15 ? ['metadata_identification_source_before', 'metadata_identification_source_after', 'metadata_identification_source_insert', 'metadata_identification_credit_insert', 'metadata_identification_credit_delete'] : []),
+            ...(version >= 16 ? ['metadata_identification_album_cohort'] : []),
+            ...(version >= 17 ? ['metadata_identification_schedule','metadata_identification_schedule_state','metadata_schedule_input_insert','metadata_schedule_input_update','metadata_schedule_member_insert','metadata_schedule_member_delete'] : []),
+            ...(version >= 18 ? ['metadata_credits', 'metadata_credit_sets'] : []),
+            ...(version >= 19 ? ['metadata_legacy_documents', 'metadata_legacy_albums', 'metadata_legacy_bindings', 'metadata_legacy_history'] : []),
+            ...(version >= 20 ? ['metadata_legacy_inputs', 'metadata_legacy_batches'] : []),
+            ...(version >= 21 ? ['music_genre_state', 'music_genres', 'music_genre_aliases',
+              'music_genre_evidence', 'music_genre_overrides', 'music_genre_import_overrides',
+              'music_genre_import_nodes', 'music_genre_alias_bridges', 'music_genre_pending', 'music_genre_sources_ai',
+              'music_genre_sources_au', 'music_genre_members_ai', 'music_genre_members_ad',
+              'music_genre_legacy_documents', 'music_genre_legacy_albums', 'music_genre_legacy_targets'] : []),
+            ...(version >= 22 ? BROWSE_REVISION_OBJECTS : []),
+            ...(version >= 23 ? RATING_SCHEMA_OBJECTS : []),
+            ...(version >= 24 ? PREFERENCE_SCHEMA_OBJECTS : []),
+            ...(version >= 25 ? TAG_SCHEMA_OBJECTS : []),
+            ...(version >= 26 ? FOCUS_SCHEMA_OBJECTS : []),
+            ...(version >= 27 ? EXPLORATION_SCHEMA_OBJECTS : []),
+            ...(version >= 28 ? [...PERSONAL_METADATA_TABLES, ...PERSONAL_METADATA_REVISION_OBJECTS] : []),
             ...(version >= 12 ? ['catalog_state', 'catalog_entities', 'catalog_aliases',
               'catalog_sources', 'catalog_memberships', 'catalog_source_artists', 'catalog_facts',
               'catalog_pending', 'catalog_imports', 'catalog_import_members', 'catalog_versions',
@@ -373,10 +456,30 @@ export class LibraryDatabase {
         ${LIBRARY_HISTORY_SCHEMA_SQL}
         CREATE INDEX tracks_recording ON tracks(${LIBRARY_RECORDING_INDEX_EXPRESSION},seq);
         ${CATALOG_SCHEMA_SQL}
-        PRAGMA user_version=12;
+        ${ENTITY_METADATA_SCHEMA_SQL}
+        ${CATALOG_PROJECT_SCHEMA_SQL}
+        ${IDENTIFICATION_SCHEMA_SQL}
+        ${IDENTIFICATION_SOURCE_FENCE_SCHEMA_SQL}
+        ${IDENTIFICATION_ALBUM_FENCE_SCHEMA_SQL}
+        ${IDENTIFICATION_SCHEDULE_SCHEMA_SQL}
+        ${ENTITY_METADATA_DETAILS_SCHEMA_SQL}
+        ${LEGACY_MUSIC_METADATA_SCHEMA_SQL}
+        ${LEGACY_MUSIC_TASK_SCHEMA_SQL}
+        ${GENRE_SCHEMA_SQL}
+        ${GENRE_LEGACY_SCHEMA_SQL}
+        ${BROWSE_REVISION_SCHEMA_SQL}
+        ${RATING_SCHEMA_SQL}
+        ${PREFERENCE_SCHEMA_SQL}
+        ${TAG_SCHEMA_SQL}
+        ${FOCUS_SCHEMA_SQL}
+        ${EXPLORATION_SCHEMA_SQL}
+        ${ENTITY_METADATA_PERSONAL_SCHEMA_SQL}
+        ${LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL}
+        ${PERSONAL_METADATA_REVISION_SCHEMA_SQL}
+        PRAGMA user_version=28;
         COMMIT;
       `)
-      if (existing && version < 12) {
+      if (existing && version < 28) {
         // VACUUM INTO is a consistent SQLite snapshot, including committed WAL
         // pages. A backup failure must prevent the schema change.
         const destination = `${filePath}.v${version}-backup-${randomUUID()}.sqlite`
@@ -441,7 +544,35 @@ export class LibraryDatabase {
             ALTER TABLE queue_snapshots_v11 RENAME TO queue_snapshots;
             CREATE INDEX queue_entries_original ON queue_entries(queue_id,original_position);
             `)
-          this.sql.exec(`${CATALOG_SCHEMA_SQL}\nPRAGMA user_version=12; COMMIT;`)
+          if (version < 12) this.sql.exec(CATALOG_SCHEMA_SQL)
+          if (version < 13) this.sql.exec(ENTITY_METADATA_SCHEMA_SQL)
+          if (version < 14) {
+            this.sql.exec(`${CATALOG_PROJECT_SCHEMA_SQL}\n${IDENTIFICATION_SCHEMA_SQL}`)
+            this.entityMetadata.identification.migrateLegacyCandidates()
+          }
+          if (legacyV14InputFence) {
+            this.sql.exec(`${IDENTIFICATION_INPUT_FENCE_SCHEMA_SQL}
+              INSERT INTO metadata_identification_inputs SELECT id,1 FROM catalog_entities;
+              CREATE INDEX IF NOT EXISTS metadata_link_history_identity ON metadata_link_history(entity_id,lower(mbid),seq);`)
+          }
+          if (version < 15) this.sql.exec(IDENTIFICATION_SOURCE_FENCE_SCHEMA_SQL)
+          if (version < 16) this.sql.exec(IDENTIFICATION_ALBUM_FENCE_SCHEMA_SQL)
+          if (version < 17) this.sql.exec(IDENTIFICATION_SCHEDULE_SCHEMA_SQL)
+          if (version < 18) this.sql.exec(ENTITY_METADATA_DETAILS_SCHEMA_SQL)
+          if (version < 19) this.sql.exec(LEGACY_MUSIC_METADATA_SCHEMA_SQL)
+          if (version < 20) this.sql.exec(LEGACY_MUSIC_TASK_SCHEMA_SQL)
+          if (version < 21) this.sql.exec(`${GENRE_SCHEMA_SQL}\n${GENRE_LEGACY_SCHEMA_SQL}`)
+          if (version < 22) this.sql.exec(BROWSE_REVISION_SCHEMA_SQL)
+          if (version < 23) this.sql.exec(RATING_SCHEMA_SQL)
+          if (version < 24) this.sql.exec(PREFERENCE_SCHEMA_SQL)
+          if (version < 25) this.sql.exec(TAG_SCHEMA_SQL)
+          if (version < 26) this.sql.exec(FOCUS_SCHEMA_SQL)
+          if (version < 27) {
+            this.sql.exec(EXPLORATION_SCHEMA_SQL)
+            if (version >= 24) this.sql.exec(PREFERENCE_WORK_MIGRATION_SQL)
+          }
+          if (version < 28) this.sql.exec(`${ENTITY_METADATA_PERSONAL_SCHEMA_SQL}\n${LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL}\n${PERSONAL_METADATA_REVISION_SCHEMA_SQL}`)
+          this.sql.exec('PRAGMA user_version=28; COMMIT;')
         } catch (error) {
           this.sql.exec('ROLLBACK')
           throw error
@@ -459,7 +590,9 @@ export class LibraryDatabase {
       // Additive indexes keep records and revision unchanged. The constant
       // file index lets COUNT(*) skip wide path keys without caching stale counts.
       this.sql.exec(`CREATE INDEX IF NOT EXISTS tracks_insertion ON tracks(seq);
-        CREATE INDEX IF NOT EXISTS files_count ON files(1);`)
+        CREATE INDEX IF NOT EXISTS files_count ON files(1);
+        CREATE INDEX IF NOT EXISTS metadata_fact_expiry ON metadata_facts(json_extract(payload,'$.usage.expiresAt'))
+          WHERE json_extract(payload,'$.usage.expiresAt') IS NOT NULL;`)
       // A previous owner's unacknowledged construction is never playable.
       // Recovery only marks it; bounded background maintenance releases rows.
       this.queues.recoverBuilds()
@@ -472,6 +605,86 @@ export class LibraryDatabase {
   close(): void {
     if (this.sql.isOpen) this.sql.close()
   }
+  identificationSchedule(...args: Parameters<import('../../shared/musicIdentificationSchedule.ts').IdentificationScheduleDatabaseApi['identificationSchedule']>) {
+    return new LibraryDatabaseIdentificationSchedule(this.sql, this.entityMetadata, action => this.transaction(action)).advance(...args)
+  }
+  identificationScheduleStatus() {
+    return new LibraryDatabaseIdentificationSchedule(this.sql, this.entityMetadata, action => this.transaction(action)).status()
+  }
+  identificationEnqueue(...args: Parameters<IdentificationDatabaseApi['identificationEnqueue']>) { return this.entityMetadata.enqueueIdentification(...args) }
+  identificationInput(...args: Parameters<IdentificationDatabaseApi['identificationInput']>) { return this.entityMetadata.identification.input(...args) }
+  identificationPublish(...args: Parameters<IdentificationDatabaseApi['identificationPublish']>) { return this.entityMetadata.identification.publish(...args) }
+  identificationDetail(...args: Parameters<IdentificationDatabaseApi['identificationDetail']>) { return this.entityMetadata.identification.detail(...args) }
+  identificationCandidates(...args: Parameters<IdentificationDatabaseApi['identificationCandidates']>) { return this.entityMetadata.identification.candidates(...args) }
+  identificationInbox(...args: Parameters<IdentificationDatabaseApi['identificationInbox']>) { return this.entityMetadata.identification.inbox(...args) }
+  identificationHistory(...args: Parameters<IdentificationDatabaseApi['identificationHistory']>) { return this.entityMetadata.identification.history(...args) }
+  identificationRestorePreview(...args: Parameters<IdentificationDatabaseApi['identificationRestorePreview']>) { return this.entityMetadata.identification.restorePreview(...args) }
+  identificationRestore(...args: Parameters<IdentificationDatabaseApi['identificationRestore']>) { return this.entityMetadata.identification.restore(...args) }
+  identificationPreview(...args: Parameters<IdentificationDatabaseApi['identificationPreview']>) { return this.entityMetadata.identification.preview(...args) }
+  identificationDecide(...args: Parameters<IdentificationDatabaseApi['identificationDecide']>) { return this.entityMetadata.identification.decide(...args) }
+  identificationDetach(...args: Parameters<IdentificationDatabaseApi['identificationDetach']>) { return this.entityMetadata.identification.detach(...args) }
+  metadataDetail(...args: Parameters<EntityMetadataDatabaseApi['metadataDetail']>) { return this.entityMetadata.detail(...args) }
+  metadataCredits(...args: Parameters<EntityMetadataDatabaseApi['metadataCredits']>) { return this.entityMetadata.credits(...args) }
+  metadataArtwork(...args: Parameters<EntityMetadataDatabaseApi['metadataArtwork']>) { return this.entityMetadata.artwork(...args) }
+  metadataEnqueue(...args: Parameters<EntityMetadataDatabaseApi['metadataEnqueue']>) { return this.entityMetadata.enqueue(...args) }
+  metadataDecide(...args: Parameters<EntityMetadataDatabaseApi['metadataDecide']>) { return this.entityMetadata.decide(...args) }
+  metadataDetach(...args: Parameters<EntityMetadataDatabaseApi['metadataDetach']>) { return this.entityMetadata.detach(...args) }
+  metadataOverride(...args: Parameters<EntityMetadataDatabaseApi['metadataOverride']>) { return this.entityMetadata.override(...args) }
+  metadataSourcePreference(...args: Parameters<EntityMetadataDatabaseApi['metadataSourcePreference']>) { return this.entityMetadata.sourcePreference(...args) }
+  metadataArtworkOverride(...args: Parameters<EntityMetadataDatabaseApi['metadataArtworkOverride']>) { return this.entityMetadata.artworkOverride(...args) }
+  metadataJobs(...args: Parameters<EntityMetadataDatabaseApi['metadataJobs']>) { return this.entityMetadata.jobs(...args) }
+  metadataTasks(...args: Parameters<EntityMetadataDatabaseApi['metadataTasks']>) { return metadataTasks(this.sql, ...args) }
+  metadataTaskDemands(...args: Parameters<EntityMetadataDatabaseApi['metadataTaskDemands']>) { return metadataTaskDemands(this.sql, ...args) }
+  metadataTaskSources(...args: Parameters<EntityMetadataDatabaseApi['metadataTaskSources']>) { return this.entityMetadata.taskSources(...args) }
+  metadataRequery(...args: Parameters<EntityMetadataDatabaseApi['metadataRequery']>) { return this.entityMetadata.requery(...args) }
+  metadataCancel(...args: Parameters<EntityMetadataDatabaseApi['metadataCancel']>) { return this.entityMetadata.cancel(...args) }
+  metadataRecover(...args: Parameters<EntityMetadataDatabaseApi['metadataRecover']>) { return this.entityMetadata.recover(...args) }
+  metadataClaim(...args: Parameters<EntityMetadataDatabaseApi['metadataClaim']>) { return this.entityMetadata.claim(...args) }
+  metadataNextAttempt() { return this.entityMetadata.nextAttempt() }
+  metadataFinish(...args: Parameters<EntityMetadataDatabaseApi['metadataFinish']>) { return this.entityMetadata.finish(...args) }
+  legacyMusicBatchBegin(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchBegin']>) { return this.entityMetadata.legacy.begin(...args) }
+  legacyMusicBatchStage(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchStage']>) { return this.entityMetadata.legacy.stage(...args) }
+  legacyMusicBatchPublish(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchPublish']>) { return this.entityMetadata.legacy.publish(...args) }
+  legacyMusicTaskStatus(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicTaskStatus']>) { return this.entityMetadata.legacy.status(...args) }
+  legacyMusicBatchCancel(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchCancel']>) { return this.entityMetadata.legacy.cancel(...args) }
+  private legacyMusic() { return new LibraryDatabaseLegacyMusic({ sql: this.sql,
+    transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+    albumAliases: id => this.getAlbumAliases().get(id) ?? [id], genres: this.genreLegacy }) }
+  genresTree(...args: Parameters<GenreDatabaseApi['genresTree']>) { return this.genres.tree(...args) }
+  genresBrowse(...args: Parameters<GenreBrowseDatabaseApi['genresBrowse']>) { return this.genreBrowse.browse(...args) }
+  genresMembers(...args: Parameters<GenreBrowseDatabaseApi['genresMembers']>) { return this.genreBrowse.members(...args) }
+  genresContainsSources(...args: Parameters<GenreBrowseDatabaseApi['genresContainsSources']>) { return this.genreBrowse.containsSources(...args) }
+  genresFacets(...args: Parameters<GenreBrowseDatabaseApi['genresFacets']>) { return this.genreBrowse.facets(...args) }
+  getGenresRevision() { return this.genres.revision() }
+  getClassificationMetadataRevision() {
+    return Number(this.sql.prepare('SELECT metadata_revision FROM music_browse_state WHERE id=1').get()!.metadata_revision)
+  }
+  genresUnmapped(...args: Parameters<GenreDatabaseApi['genresUnmapped']>) { return this.genres.unmapped(...args) }
+  genresEvidence(...args: Parameters<GenreDatabaseApi['genresEvidence']>) { return this.genres.evidence(...args) }
+  genresEdit(...args: Parameters<GenreDatabaseApi['genresEdit']>) { return this.genres.edit(...args) }
+  genresMap(...args: Parameters<GenreDatabaseApi['genresMap']>) { return this.genres.map(...args) }
+  genresOverride(...args: Parameters<GenreDatabaseApi['genresOverride']>) { return this.genres.override(...args) }
+  genresAdvance(limit = 200, separators?: string) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error('Invalid genre maintenance batch')
+    const legacy = this.genreLegacy.advance(limit)
+    if (legacy.processed === limit)
+      return { revision: this.genres.revision(), processed: limit, pending: true }
+    const result = this.genres.advance(limit - legacy.processed, separators)
+    return { ...result, processed: legacy.processed + result.processed, pending: legacy.pending || result.pending }
+  }
+  legacyMusicStatus(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicStatus']>) { return this.legacyMusic().status(...args) }
+  legacyMusicBegin(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicBegin']>) { return this.legacyMusic().begin(...args) }
+  legacyMusicStage(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicStage']>) { return this.legacyMusic().stage(...args) }
+  legacyMusicPublish(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicPublish']>) { return this.legacyMusic().publish(...args) }
+  legacyMusicRead(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicRead']>) { return this.legacyMusic().read(...args) }
+  legacyMusicEdit(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicEdit']>) { return this.legacyMusic().edit(...args) }
+  legacyMusicHistory(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicHistory']>) { return this.legacyMusic().history(...args) }
+  legacyMusicHistoryRead(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicHistoryRead']>) { return this.legacyMusic().historyRead(...args) }
+  legacyMusicRestore(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicRestore']>) { return this.legacyMusic().restore(...args) }
+  legacyMusicInventory(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicInventory']>) { return this.legacyMusic().inventory(...args) }
+  legacyMusicProvenanceList(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicProvenanceList']>) { return this.legacyMusic().provenanceList(...args) }
+  legacyMusicProvenanceRead(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicProvenanceRead']>) { return this.legacyMusic().provenanceRead(...args) }
+  legacyMusicProvenanceReview(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicProvenanceReview']>) { return this.legacyMusic().provenanceReview(...args) }
   catalogStatus() { return this.catalog.status() }
   catalogAdvance(limit?: number) { return this.catalog.advance(limit) }
   catalogQuery(query: CatalogQuery) { return this.catalog.query(query) }
@@ -482,6 +695,92 @@ export class LibraryDatabase {
     return this.catalog.projectVersions(document, revision)
   }
   catalogResolve(sourceId: string, revision: number) { return this.catalog.resolve(sourceId, revision) }
+  catalogPlaybackSources(...args: Parameters<CatalogUnifiedPlaybackDatabaseApi['catalogPlaybackSources']>) {
+    return readCatalogPlaybackSources(this.sql, (id, revision) => this.catalog.resolve(id, revision), ...args)
+  }
+  private albumBrowse() { return new LibraryDatabaseAlbumBrowse({ sql: this.sql,
+    contentRevision: () => this.getContentRevision(),
+    metadataRevision: () => this.getClassificationMetadataRevision() }) }
+  albumsBrowse(...args: Parameters<AlbumBrowseDatabaseApi['albumsBrowse']>) { return this.albumBrowse().browse(...args) }
+  albumsSources(...args: Parameters<AlbumBrowseDatabaseApi['albumsSources']>) { return this.albumBrowse().sources(...args) }
+  albumsContainsSource(...args: Parameters<AlbumBrowseDatabaseApi['albumsContainsSource']>) { return this.albumBrowse().containsSource(...args) }
+  private ratings() { return new LibraryDatabaseRatings({ sql: this.sql,
+    transaction: action => this.transaction(action) }) }
+  ratingsDetail(...args: Parameters<MusicRatingsDatabaseApi['ratingsDetail']>) { return this.ratings().detail(...args) }
+  ratingsSet(...args: Parameters<MusicRatingsDatabaseApi['ratingsSet']>) { return this.ratings().set(...args) }
+  ratingsHistory(...args: Parameters<MusicRatingsDatabaseApi['ratingsHistory']>) { return this.ratings().history(...args) }
+  ratingsTargets(...args: Parameters<MusicRatingsDatabaseApi['ratingsTargets']>) { return this.ratings().targets(...args) }
+  getRatingsRevision() { return this.ratings().revision() }
+  private preferences() { return new LibraryDatabasePreferences({ sql: this.sql,
+    transaction: action => this.transaction(action) }) }
+  preferencesTargets(...args: Parameters<MusicPreferencesDatabaseApi['preferencesTargets']>) { return this.preferences().targets(...args) }
+  preferencesDetail(...args: Parameters<MusicPreferencesDatabaseApi['preferencesDetail']>) { return this.preferences().detail(...args) }
+  preferencesSet(...args: Parameters<MusicPreferencesDatabaseApi['preferencesSet']>) { return this.preferences().set(...args) }
+  preferencesHistory(...args: Parameters<MusicPreferencesDatabaseApi['preferencesHistory']>) { return this.preferences().history(...args) }
+  preferencesAutomaticEligibility(...args: Parameters<MusicPreferencesDatabaseApi['preferencesAutomaticEligibility']>) { return this.preferences().automaticEligibility(...args) }
+  preferencesTrackStates(...args: Parameters<MusicPreferencesDatabaseApi['preferencesTrackStates']>) { return this.preferences().trackStates(...args) }
+  preferencesPlaylistsLoad(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsLoad']>) { return this.preferences().playlistsLoad(...args) }
+  preferencesPlaylistsMigrate(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsMigrate']>) { return this.preferences().playlistsMigrate(...args) }
+  preferencesPlaylistsMigrationReceipt() { return this.preferences().playlistsMigrationReceipt() }
+  preferencesPlaylistsSave(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsSave']>) { return this.preferences().playlistsSave(...args) }
+  preferencesPlaylistsRestore(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsRestore']>) { return this.preferences().playlistsRestore(...args) }
+  getPreferencesRevision() { return this.preferences().revision() }
+  private personalMusic() { return new LibraryDatabasePersonalMusic({ sql: this.sql, metadata: () => this.getMetadata() }) }
+  musicBackupRevision() { return this.personalMusic().revision() }
+  musicBackupExport(...args: Parameters<MusicPersonalBackupDatabaseApi['musicBackupExport']>) { return this.personalMusic().export(...args) }
+  musicBackupPreview(...args: Parameters<MusicPersonalBackupDatabaseApi['musicBackupPreview']>) { return this.personalMusic().preview(...args) }
+  async musicBackupRestore(bundle: Parameters<MusicPersonalBackupDatabaseApi['musicBackupRestore']>[0]) {
+    const music = this.personalMusic()
+    if (!bundle || !/^[a-zA-Z0-9-]{1,128}$/.test(bundle.restoreId) || !validMusicPersonalBackupRevision(bundle.expectedRevision) ||
+      !['keep-local', 'use-backup'].includes(bundle.conflict) || (bundle.music !== undefined && !validateMusicPersonalBackup(bundle.music)) ||
+      (bundle.library !== undefined && !validatePersonalDomain('library', bundle.library)) ||
+      (bundle.playlists !== undefined && !validatePersonalDomain('playlists', bundle.playlists))) throw new Error('Invalid personal music restore bundle')
+    if (music.restored(bundle.restoreId)) return music.result()
+    music.assertRevision(bundle.expectedRevision)
+    return this.restoreWithSnapshot(bundle.restoreId, bundle.expectedRevision.library,
+      () => music.apply(bundle, () => { if (bundle.library) this.restorePersonalLibraryRecords(bundle.library, bundle.conflict) }),
+      () => music.result(), snapshot => new LibraryDatabasePersonalMusic({ sql: snapshot, metadata: () => this.getMetadata() }).assertRevision(bundle.expectedRevision))
+  }
+  private exploration() { return new LibraryDatabaseExploration({ sql: this.sql,
+    transaction: action => this.sql.isTransaction ? action() : this.transaction(action),
+    contentRevision: () => this.getContentRevision(), metadataRevision: () => this.getClassificationMetadataRevision() }) }
+  explorationLookup(...args: Parameters<MusicExplorationDatabaseApi['explorationLookup']>) { return this.exploration().lookupReference(...args) }
+  explorationBackfillCredits(...args: Parameters<MusicExplorationDatabaseApi['explorationBackfillCredits']>) { return this.exploration().backfillCredits(...args) }
+  explorationState(...args: Parameters<MusicExplorationDatabaseApi['explorationState']>) { return this.exploration().state(...args) }
+  explorationQuery(...args: Parameters<MusicExplorationDatabaseApi['explorationQuery']>) { return this.exploration().query(...args) }
+  explorationDetail(...args: Parameters<MusicExplorationDatabaseApi['explorationDetail']>) { return this.exploration().detail(...args) }
+  explorationRelations(...args: Parameters<MusicExplorationDatabaseApi['explorationRelations']>) { return this.exploration().relations(...args) }
+  explorationParticipation(...args: Parameters<MusicExplorationDatabaseApi['explorationParticipation']>) { return this.exploration().participation(...args) }
+  explorationPerformanceSave(...args: Parameters<MusicExplorationDatabaseApi['explorationPerformanceSave']>) { return this.exploration().performanceSave(...args) }
+  explorationPerformanceDelete(...args: Parameters<MusicExplorationDatabaseApi['explorationPerformanceDelete']>) { return this.exploration().performanceDelete(...args) }
+  explorationIngest(...args: Parameters<MusicExplorationDatabaseApi['explorationIngest']>) { return this.exploration().ingest(...args) }
+  explorationSyncCredits(...args: Parameters<MusicExplorationDatabaseApi['explorationSyncCredits']>) { return this.exploration().syncCredits(...args) }
+  private focus() { return new LibraryDatabaseFocus({ sql: this.sql,
+    transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+    metadataRevision: () => this.getClassificationMetadataRevision(), albumAliases: () => this.getAlbumAliases(),
+    resolve: (sourceId, revision) => this.catalogResolve(sourceId, revision) }) }
+  focusState() { return this.focus().state() }
+  focusQuery(...args: Parameters<MusicFocusDatabaseApi['focusQuery']>) { return this.focus().query(...args) }
+  focusFacets(...args: Parameters<MusicFocusDatabaseApi['focusFacets']>) { return this.focus().facets(...args) }
+  focusPlaybackPage(...args: Parameters<MusicFocusDatabaseApi['focusPlaybackPage']>) { return this.focus().playbackPage(...args) }
+  focusSavedList(...args: Parameters<MusicFocusDatabaseApi['focusSavedList']>) { return this.focus().savedList(...args) }
+  focusSavedCreate(...args: Parameters<MusicFocusDatabaseApi['focusSavedCreate']>) { return this.focus().savedCreate(...args) }
+  focusSavedRename(...args: Parameters<MusicFocusDatabaseApi['focusSavedRename']>) { return this.focus().savedRename(...args) }
+  focusSavedUpdate(...args: Parameters<MusicFocusDatabaseApi['focusSavedUpdate']>) { return this.focus().savedUpdate(...args) }
+  focusSavedDelete(...args: Parameters<MusicFocusDatabaseApi['focusSavedDelete']>) { return this.focus().savedDelete(...args) }
+  private tags() { return new LibraryDatabaseTags({ sql: this.sql,
+    transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+    resolve: (sourceId, revision) => this.catalog.resolve(sourceId, revision) }) }
+  tagsState() { return this.tags().state() }
+  tagsList(...args: Parameters<MusicTagsDatabaseApi['tagsList']>) { return this.tags().list(...args) }
+  tagsEntity(...args: Parameters<MusicTagsDatabaseApi['tagsEntity']>) { return this.tags().entity(...args) }
+  tagsMembers(...args: Parameters<MusicTagsDatabaseApi['tagsMembers']>) { return this.tags().members(...args) }
+  tagsRecordings(...args: Parameters<MusicTagsDatabaseApi['tagsRecordings']>) { return this.tags().recordings(...args) }
+  tagsCreate(...args: Parameters<MusicTagsDatabaseApi['tagsCreate']>) { return this.tags().create(...args) }
+  tagsRename(...args: Parameters<MusicTagsDatabaseApi['tagsRename']>) { return this.tags().rename(...args) }
+  tagsDelete(...args: Parameters<MusicTagsDatabaseApi['tagsDelete']>) { return this.tags().delete(...args) }
+  tagsMemberSet(...args: Parameters<MusicTagsDatabaseApi['tagsMemberSet']>) { return this.tags().memberSet(...args) }
+  tagsPlaybackPage(...args: Parameters<MusicTagsDatabaseApi['tagsPlaybackPage']>) { return this.tags().playbackPage(...args) }
   repairCandidates(
     command: import('../../shared/playlistRepair.ts').LibraryRepairCandidateCommand
   ) {
@@ -680,18 +979,20 @@ export class LibraryDatabase {
       this.replaceDocumentRecords(document, expectedRevision)
     )
   }
-  private async restoreWithSnapshot(
+  private async restoreWithSnapshot<T = LibraryMetadata>(
     restoreId: string,
     expectedRevision: number,
-    restore: () => LibraryMetadata
-  ): Promise<LibraryMetadata> {
+    restore: () => T,
+    replay: () => T = () => this.getMetadata() as T,
+    validateSnapshot?: (snapshot: DatabaseSync) => void
+  ): Promise<T> {
     if (
       !/^[a-zA-Z0-9-]{1,128}$/.test(restoreId) ||
       !Number.isSafeInteger(expectedRevision) ||
       expectedRevision < 0
     )
       throw new Error('Invalid library restore identity or revision')
-    if (this.meta('last_personal_restore') === JSON.stringify(restoreId)) return this.getMetadata()
+    if (this.meta('last_personal_restore') === JSON.stringify(restoreId)) return replay()
     this.removal.assertIdle()
     if (Number(this.meta('revision')) !== expectedRevision)
       throw new Error('Music library changed concurrently; restore was not applied')
@@ -717,13 +1018,14 @@ export class LibraryDatabase {
             expectedRevision
         )
           throw new Error('The existing pre-restore snapshot is not valid for this restore')
+        validateSnapshot?.(snapshot)
       } finally {
         snapshot.close()
       }
     }
     return this.transaction(() => {
       if (this.meta('last_personal_restore') === JSON.stringify(restoreId))
-        return this.getMetadata()
+        return replay()
       if (Number(this.meta('revision')) !== expectedRevision)
         throw new Error('Music library changed concurrently')
       this.removal.assertIdle()
@@ -783,7 +1085,10 @@ export class LibraryDatabase {
       !['keep-local', 'use-backup'].includes(conflict)
     )
       throw new Error('Invalid personal library snapshot or conflict policy')
-    return this.restoreWithSnapshot(restoreId, expectedRevision, () => {
+    return this.restoreWithSnapshot(restoreId, expectedRevision, () => this.restorePersonalLibraryRecords(document, conflict))
+  }
+  /** Used by v1 alone and v2's same-connection bundle, never starts a nested transaction. */
+  private restorePersonalLibraryRecords(document: LocalMusicLibraryDocument, conflict: 'keep-local' | 'use-backup'): LibraryMetadata {
       const merged = mergePersonalDomain(
         'library',
         this.personalLibraryIdentities(),
@@ -816,7 +1121,6 @@ export class LibraryDatabase {
       this.sql.exec('DELETE FROM files WHERE file_key NOT IN (SELECT file_key FROM tracks);')
       this.bump()
       return this.getMetadata()
-    })
   }
   private statement(query: string) {
     let statement = this.statements.get(query)
@@ -1292,7 +1596,7 @@ export class LibraryDatabase {
     validateLibraryQuery(query)
     this.assertContentRevision(query.contentRevision)
     this.assertHistoryRevision(query)
-    if (query.playlistView) return this.playlistViews.query(query)
+    if (query.playlistView) return this.catalogReferences.tracks(this.playlistViews.query(query))
     const { offset, limit } = libraryPageBounds(query.offset, query.limit)
     if (query.anchorId !== undefined) {
       const ids = this.orderedIds(query)
@@ -1360,14 +1664,14 @@ export class LibraryDatabase {
       versions[text(row.id)] = Number(row.version)
       return JSON.parse(text(row.payload)) as LibraryTrackRecord
     })
-    return {
+    return this.catalogReferences.tracks({
       tracks,
       versions,
       total,
       revision: Number(this.meta('revision')),
       offset,
       historyRevision: this.history.revision
-    }
+    })
   }
   private assertContentRevision(expectedRevision?: number): void {
     if (
@@ -1483,15 +1787,17 @@ export class LibraryDatabase {
       throw new Error('Playlist views support track queries, not collection summaries')
     // Search selects collections, not a subset of their members. Counts and
     // album details still describe the complete collection in the requested scope.
-    return this.collections.query(
+    const selection = this.where({ ...query, search: undefined }), aliases = kind === 'albums' ? this.getAlbumAliases() : new Map<string, string[]>()
+    const page = this.collections.query(
       kind,
       query,
       Number(this.meta('revision')),
       JSON.parse(this.meta('folders')),
-      this.where({ ...query, search: undefined }),
-      kind === 'albums' ? this.getAlbumAliases() : new Map(),
+      selection,
+      aliases,
       (sql, params) => this.statement(sql).all(...params) as Row[]
     )
+    return kind === 'albums' || kind === 'artists' ? this.catalogReferences.collections(page, kind, selection, aliases) : page
   }
   createLibraryQueue(query: LibraryQuery, selectedId?: string): LibraryQueueSnapshot {
     validateLibraryQuery(query)

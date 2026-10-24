@@ -47,3 +47,9 @@ JavaScript execution to plugins.
 
 Provider `Track` objects may include optional `bpm?: number` metadata in beats
 per minute. Omit it when the source does not provide a trustworthy tempo value.
+
+Providers may implement optional `fetchArtistMetadata` and `fetchAlbumMetadata`
+handlers returning `PlatformMetadataResult`. Keep native IDs, source language
+(`und` when unknown), attribution and field permissions. The host caps declared
+permissions by its reviewed deployment policy. These methods do not replace
+the string-only `fetchArtistIntro` or the playback list `fetchAlbumTracks`.

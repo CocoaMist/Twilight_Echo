@@ -68,6 +68,19 @@ test('album search is an optional routed search method with the standard search 
   assert.equal(getProviderCallTimeoutMs('searchAlbums'), getProviderCallTimeoutMs('searchSongs'))
 })
 
+test('album identity requires an explicit handler without replacing album tracks', () => {
+  const provider = { id: 'ncm', name: 'NCM', capabilities: ['playlist' as const],
+    supportedMethods: ['fetchAlbumIdentity' as const] }
+  assert.equal(isTwilightMediaProviderMethod('fetchAlbumIdentity'), true)
+  assert.equal(providerSupportsMethod(provider, 'fetchAlbumIdentity'), true)
+  assert.equal(providerSupportsMethod({ ...provider, supportedMethods: [] }, 'fetchAlbumIdentity'), false)
+  assert.equal(providerSupportsMethod({ ...provider, supportedMethods: undefined }, 'fetchAlbumIdentity'), false)
+  assert.equal(providerSupportsMethod({ ...provider, capabilities: [] }, 'fetchAlbumIdentity'), false)
+  assert.equal(getProviderCallTimeoutMs('fetchAlbumIdentity'), getProviderCallTimeoutMs('fetchAlbumTracks'))
+  const host = readFileSync(new URL('./host.ts', import.meta.url), 'utf8')
+  assert.match(host, /'fetchAlbumIdentity'/)
+})
+
 test('playlist paging requires an advertised handler and playlist capability through host routing', () => {
   const provider: TestRunningProvider['providers'][number] = {
     id: 'bili',

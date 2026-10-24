@@ -12,6 +12,7 @@ import {
   type ParsedCueSheet
 } from '../../shared/cue.ts'
 import type { LocalLibraryFileIdentity } from '../../shared/localLibraryScan.ts'
+import { legacyTrackIdentityTags, normalizeTrackIdentityTags, type TrackIdentityTags } from '../../shared/trackIdentification.ts'
 import type {
   LibraryCueDefinitionRecord,
   LibraryScanDependency
@@ -89,11 +90,46 @@ function projectCueTracks(
       (cueTrack.range.virtualPregapSeconds ?? 0) +
       cueTrack.range.endSeconds -
       cueTrack.range.startSeconds
+    const parent = normalizeTrackIdentityTags(baseTrack.identityTags) ?? legacyTrackIdentityTags(baseTrack)
+    // A file-level recording/ISRC describes the whole audio, not each segment.
+    // Retain only album-level IDs; parent observations remain in audio_metadata.
+    const identityTags: TrackIdentityTags = {
+      ...parent,
+      scope: 'cue_track',
+      musicbrainz: parent.musicbrainz
+        ? {
+            artistIds: [],
+            albumArtistIds: parent.musicbrainz.albumArtistIds,
+            releaseId: parent.musicbrainz.releaseId,
+            releaseGroupId: parent.musicbrainz.releaseGroupId
+          }
+        : undefined,
+      isrcs: [],
+      title: cueTrack.title
+        ? { value: cueTrack.title, origin: 'cue' }
+        : { value: `${String(cueTrack.number).padStart(2, '0')}. ${baseTitle}`, origin: 'filename' },
+      artist: cueTrack.performer || parsed.performer
+        ? { value: (cueTrack.performer || parsed.performer)!, origin: 'cue' }
+        : parent.artist,
+      artists: cueTrack.performer || parsed.performer
+        ? { value: [(cueTrack.performer || parsed.performer)!], origin: 'cue' }
+        : undefined,
+      album: parsed.title ? { value: parsed.title, origin: 'cue' } : parent.album,
+      durationSeconds: { value: cueTrack.range.endSeconds - cueTrack.range.startSeconds, origin: 'cue' },
+      trackNumber: { value: cueTrack.number, origin: 'cue' },
+      // The sheet may be partial; its last index is not an album track total.
+      trackTotal: undefined
+    }
     return {
       ...baseTrack,
+      identityTags,
+      isrc: undefined,
       id,
       title: cueTrack.title || `${String(cueTrack.number).padStart(2, '0')}. ${baseTitle}`,
       artist: cueTrack.performer || parsed.performer || baseArtist,
+      artists: cueTrack.performer || parsed.performer
+        ? [{ name: (cueTrack.performer || parsed.performer)! }]
+        : undefined,
       album: parsed.title || baseAlbum,
       filePath: resolve(audioPath),
       fileName,

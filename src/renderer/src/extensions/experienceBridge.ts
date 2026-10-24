@@ -3,6 +3,8 @@ import { corePlugins } from './corePlugins.ts'
 import {
   assertExperienceMethod,
   experienceRequestLimit,
+  EXPERIENCE_MUSIC_OPERATIONS,
+  type ExperienceMusicOperation,
   EXPERIENCE_METHOD_PERMISSIONS,
   type InstalledExperience
 } from '../../../shared/pluginExperience.ts'
@@ -286,24 +288,13 @@ export function createExperienceBridge(
         await core.command('downloads.retry', { id: String(args.id) })
         return null
       case 'music.metadata.operate': {
-        if (
-          ![
-            'status',
-            'task',
-            'preview',
-            'import',
-            'reconcile',
-            'introductions',
-            'credits',
-            'enrich'
-          ].includes(String(args.operation))
-        )
+        if (!EXPERIENCE_MUSIC_OPERATIONS.includes(args.operation as ExperienceMusicOperation))
           throw new Error('Invalid metadata operation')
-        if (args.operation !== 'status' && music.isScanning.value)
+        if (args.operation !== 'status' && args.operation !== 'cancel' && music.isScanning.value)
           throw new Error('曲库正在扫描，请完成后重试资料操作')
         return core.command('extensions.music', {
           id: experience.pluginId,
-          operation: args.operation as 'status' | 'task' | 'preview' | 'import' | 'reconcile' | 'introductions' | 'credits' | 'enrich',
+          operation: args.operation as ExperienceMusicOperation,
           args: (args.body ?? {}) as Record<string, unknown>
         })
       }

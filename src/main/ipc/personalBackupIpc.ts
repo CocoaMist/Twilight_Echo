@@ -15,7 +15,7 @@ import {
   checkRestoreOptions
 } from '../persistence/personalBackup.ts'
 import {
-  createPersonalBackupFromDatabase,
+  createPersonalBackupV1FromDatabase,
   previewRestoreFromDatabase,
   stagePersonalRestoreFromDatabase,
   type PersonalLibraryDatabase
@@ -45,7 +45,7 @@ export function registerPersonalBackupIpc(ipc: IpcMain, database?: PersonalLibra
     assertTrustedIpcSender(event, 'personal backup')
     if (!isRecord(rendererData)) throw new Error('数据无效')
     const backup = database
-      ? await createPersonalBackupFromDatabase(root, rendererData, database)
+      ? await createPersonalBackupV1FromDatabase(root, rendererData, database)
       : createPersonalBackup(root, rendererData)
     const result = await dialog.showSaveDialog({
       title: '导出个人数据备份',
@@ -66,7 +66,9 @@ export function registerPersonalBackupIpc(ipc: IpcMain, database?: PersonalLibra
       filters: [{ name: '个人数据备份', extensions: ['json'] }]
     })
     if (result.canceled || !result.filePaths[0]) return null
-    selected = readBackupFile(result.filePaths[0])
+    const backup = readBackupFile(result.filePaths[0])
+    if (backup.version !== 1) throw new Error('v2 音乐整理备份请在新版设置页通过 Core 预览和恢复')
+    selected = backup
     return database
       ? await previewRestoreFromDatabase(root, selected, rendererData, database)
       : previewRestore(root, selected, rendererData)

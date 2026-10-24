@@ -38,6 +38,7 @@ test('bounded library projections retain row versions and identities without ret
     queryCollections: async (...args: Parameters<typeof db.queryCollections>) =>
       db.queryCollections(...args)
   }
+  while (db.catalogStatus().localPending) db.catalogAdvance()
   const byIds = await executeLibraryRead(database, {
     name: 'library.byIds',
     payload: { ids: ['cue:1'] }
@@ -55,6 +56,10 @@ test('bounded library projections retain row versions and identities without ret
   for (const key of ['filePath', 'fileName', 'lyrics', 'playbackUrl'])
     assert.equal(key in byIds.tracks[0], false)
   assert.equal(byIds.versions['cue:1'], 1)
+  assert.deepEqual(byIds.catalog, db.getTracksByIds(['cue:1']).catalog)
+  assert.equal(byIds.catalog!.tracks[0]!.items.find(i => i.kind === 'recording')!.title, 'First')
+  assert.equal(JSON.stringify(byIds.catalog).includes('D:/Music'), false)
+  assert.equal(JSON.stringify(byIds).includes('user:secret'), false)
   const lookup = await executeLibraryRead(database, {
     name: 'library.paths.lookup',
     payload: { paths: ['D:/Music/album.flac'], revision: byIds.revision }

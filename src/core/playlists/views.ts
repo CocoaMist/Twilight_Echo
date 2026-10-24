@@ -199,13 +199,16 @@ export class CorePlaylistViews {
       if (query.variantRow !== undefined) {
         const row = indexed.find((row) => row.id === query.variantRow)?.row
         selected = row?.visibleVariants.map((v) => v.track) ?? []
-        const available = new Map<TrackData, string[]>()
+        const available = new Map<TrackData, { entries: string[]; next: number }>()
         for (const member of members) {
-          const bucket = available.get(member.track) ?? []
-          bucket.push(member.entryId)
-          available.set(member.track, bucket)
+          const bucket = available.get(member.track)
+          if (bucket) bucket.entries.push(member.entryId)
+          else available.set(member.track, { entries: [member.entryId], next: 0 })
         }
-        entryIds = selected.map((track) => available.get(track)!.shift()!)
+        entryIds = selected.map((track) => {
+          const bucket = available.get(track)!
+          return bucket.entries[bucket.next++]!
+        })
       } else {
         selected = filtered.map(({ row }) => row.selectedVariant.track)
         entryIds = filtered.map(({ id }) => id)

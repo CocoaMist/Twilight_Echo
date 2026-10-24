@@ -1390,7 +1390,7 @@ test('v8 mode migration snapshots WAL and leaves legacy order unbound; backup/DD
   ddlFailure.mock.restore()
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
     assert.deepEqual(upgraded.getLibraryQueue(queue.id), queue)
     assert.deepEqual(upgraded.readLibraryQueue(queue.id), page)
     assert.equal(
@@ -1443,7 +1443,7 @@ test('v2 queue upgrade snapshots WAL first and preserves frozen membership and d
   old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + legacyQueueSchema)
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
     assert.deepEqual(
       upgraded.readLibraryQueue(queue.id).items.map((item) => item.queueEntryId),
       entries
@@ -2094,7 +2094,7 @@ test('v7 to v11 snapshots WAL and preserves existing queue identities, while fai
   full.mock.restore()
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
     assert.deepEqual(upgraded.getLibraryQueue(queue.id), queue)
     assert.deepEqual(upgraded.readLibraryQueue(queue.id), page)
     const backup = readdirSync(root).find((name) => name.includes('.v7-backup-'))!

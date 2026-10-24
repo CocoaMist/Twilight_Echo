@@ -122,7 +122,9 @@ test('missing local files may use another music source; platform/media refusals 
       throw new Error('platform denied')
     }
   })
-  await assert.rejects(refused.recovery.prepare(song('other')), /platform denied/)
+  await assert.rejects(refused.recovery.prepare(song('other')), {
+    code: 'SOURCE_ACCESS_DENIED', message: 'platform denied'
+  })
   assert.deepEqual(refused.searches, [])
   const grant = fixture({
     resolver: createSourceResolver({

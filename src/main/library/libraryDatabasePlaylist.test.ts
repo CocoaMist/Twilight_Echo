@@ -165,7 +165,7 @@ test('v5 upgrade snapshots committed WAL and installs recording indexes without 
   )
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
     assert.deepEqual(upgraded.exportDocument(), document)
     assert.deepEqual(upgraded.getTracksByIds(['one']), page)
     assert.equal(upgraded.queryTracks({ sort: 'lastPlayed' }).historyRevision, 1)

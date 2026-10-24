@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createSourceResolver } from './sourceResolver.ts'
+import { createSourceResolver, prepareNativeSource } from './sourceResolver.ts'
 
 const now = 1_000_000
 const ttl = 8 * 60_000
 const track = { id: 'ncm:123', source: 'ncm', filePath: 'ncm:123' }
+
+test('native preparation distinguishes a missing source from an authorization refusal for files and SACD selectors', async () => {
+  for (const source of ['D:/Music/song.flac', 'D:/Music/disc.iso?area=stereo&track=1']) {
+    assert.equal(await prepareNativeSource(source, async () => null), null)
+    const denied = new Error('platform denied')
+    await assert.rejects(prepareNativeSource(source, async () => { throw denied }), {
+      code: 'SOURCE_ACCESS_DENIED', message: 'platform denied', cause: denied
+    })
+  }
+})
 
 test('subsequent source resolution reads the committed Core quality without rebuilding the resolver', async () => {
   let quality = 'standard'

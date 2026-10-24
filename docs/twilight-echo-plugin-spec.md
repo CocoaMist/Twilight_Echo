@@ -222,8 +222,26 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
   上游不支持排序时可声明 `ui.streamingDiscovery.supportsSort: false`。
   未返回总数的分页响应用 `total: 0` 与真实 `hasMore`，宿主仅显示当前页和前后翻页按钮，不推算总页数。
 - `search` 能力可选提供 `searchAlbums(keywords, limit?, offset?, context?)`，返回
-  `{ items: AlbumSummary[], total: number }`；`AlbumSummary.artist` 是可选展示字段。
+  `{ items: AlbumSummary[], total: number, incomplete?: boolean }`；`AlbumSummary.artist` 是可选展示字段。
   宿主仅对实际注册此方法的音源开放专辑搜索，并通过 request context 传递取消信号。
+  供应商未报告总数、过滤了无效项或响应不完整时设置 `incomplete: true`；不能用当前数组长度证明完整搜索结果。
+- `playlist` 能力可选提供 `fetchAlbumIdentity(albumId, context?)`，返回 SDK 的 `PlatformAlbumIdentity` v1。
+  该方法用于本地与平台的专辑身份核对，须实际注册 handler；旧 `fetchAlbumTracks(): Track[]` 继续负责播放曲目表。
+  返回自身 provider、原生专辑 ID、完整标题和结构化艺人，独立服务总数 `trackCount`、取全标志 `complete`，
+  以及最多 64 轨的原生 ID、完整标题、全部有序艺人、原始精度秒数、实际碟号／曲号和已知 ISRC。
+  曲目 ID 返回服务原始 ID；Core 派生 recording 身份时映射为既有 `provider:id` 引用（如 `101 → ncm:101`，已有前缀不重复添加），人物／专辑仍使用各自的原生 ID。
+  没有总数用 null；没有名称／名单保留空值；时长／碟号／曲号未知用 null，不按数组顺序或单碟默认值推断。
+  `complete` 仅表示取全，不代表字段齐备；超限或部分返回须为 false。不得携带路径、播放 URL 或凭据。
+  Core 只在完整候选集中有唯一整专辑匹配时确认该平台的 release 引用，不由此确认 MB 项目或具体压片；录音／人物再按实际曲序、完整结构化 credit 和各自状态逐层关联，不按同名全库绑定。
+  内置网易云从 `/album` 的 size／songCount 核对取全，保留歌曲的 no／cd 与毫秒精度；缺字段仍进入复核。
+- 平台正文可选提供 `fetchArtistMetadata(id, context?)`（library）与 `fetchAlbumMetadata(id, context?)`（playlist），
+  返回 SDK 的 `PlatformMetadataResult`：`ok` 携带 `PlatformEntityMetadata` v1，或明确返回
+  `not_found / not_provided / unsupported`。请求故障走原异常通道，不用空正文掩盖错误。
+  DTO 保留 provider、原生 ID、artist／release 层次及最多 8 条纯文本（每条最多 20,000 字符），
+  每条保留原语言、来源页面、修订、署名、许可与可选用途声明；来源未说明语言时用 `und`。
+  `display / cache / crossSource / export` 受宿主部署已核准的文字权限进一步限制；未提供 usage 不表示允许所有用途。
+  只有实际注册的新方法才参与能力路由；旧 `fetchArtistIntro(): string` 和 `fetchAlbumTracks(): Track[]` 不改变。
+  内置网易云实现了新人物／专辑正文方法，核对原生 ID，允许匿名请求并传递取消上下文，不推断图片许可或物理压片。
 - 网易云音乐是 Twilight Echo 自带基础 `MediaProvider` 插件：插件 ID 为
   `com.twilightecho.provider.ncm`，provider 前缀固定为 `ncm`，随软件分发并默认启用；
   用户可停用以隔离故障或隐藏在线音源，但不可像第三方插件一样卸载。

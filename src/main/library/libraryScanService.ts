@@ -28,6 +28,8 @@ import { runPlaylistRepairScan } from './playlistRepairScanner.ts'
 import type { RepairScanCall } from '../../shared/localLibraryScan.ts'
 import type { LibraryTrackRecord } from '../../shared/libraryDatabase.ts'
 import { ScanCoverWrites } from './scanCoverWrites.ts'
+import { collectTrackIdentityTags } from './trackIdentityTags.ts'
+import { legacyTrackIdentityTags, normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
 
 type ScanControl = {
   paused: boolean
@@ -766,11 +768,15 @@ async function parseTrack(
   const filePath = file.filePath
   if (cachedAudio) {
     const duration = Number(cachedAudio.duration ?? 0)
+    const cached = {
+      ...cachedAudio,
+      identityTags: normalizeTrackIdentityTags(cachedAudio.identityTags) ?? legacyTrackIdentityTags(cachedAudio)
+    }
     const cueTracks = file.cueSignature
-      ? await cueIndex.derive(filePath, duration, cachedAudio)
+      ? await cueIndex.derive(filePath, duration, cached)
       : null
     return {
-      tracks: cueTracks ?? [{ ...cachedAudio, duration: Math.round(duration) }],
+      tracks: cueTracks ?? [{ ...cached, duration: Math.round(duration) }],
       metadataRead: true,
       audioMetadata: cachedAudio,
       metadataReused: true
@@ -792,7 +798,8 @@ async function parseTrack(
     size: file.size,
     addedAt: Date.now(),
     cover: folderCover,
-    lyrics: null
+    lyrics: null,
+    identityTags: collectTrackIdentityTags({}, undefined, fallback)
   }
 
   // RIFF INFO/BEXT text is frequently stored as legacy GBK/Shift-JIS or UTF-16 without
@@ -838,8 +845,15 @@ async function parseTrack(
       ...metadata.common,
       year: waveMetadata?.year ?? metadata.common.year
     })
+    const identityTags = collectTrackIdentityTags(
+      metadata.common,
+      metadata.format.duration ?? waveMetadata?.duration,
+      fallback,
+      waveMetadata
+    )
     const track: LibraryTrackRecord = {
       ...baseTrack,
+      identityTags,
       title,
       artist,
       album,
@@ -875,6 +889,7 @@ async function parseTrack(
     if (waveMetadata) {
       const track: LibraryTrackRecord = {
         ...baseTrack,
+        identityTags: collectTrackIdentityTags({}, waveMetadata.duration, fallback, waveMetadata),
         title: waveMetadata.title ?? fallback.title,
         artist: waveMetadata.artist ?? fallback.artist,
         album: waveMetadata.album ?? 'Unknown Album',

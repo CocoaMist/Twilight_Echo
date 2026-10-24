@@ -1,3 +1,5 @@
+import type { MusicExplorationDatabaseApi, MusicExplorationState } from '../../shared/musicExploration.ts'
+import type { MusicPersonalBackupDatabaseApi } from '../../shared/musicPersonalBackup.ts'
 import type {
   LocalMusicLibraryDocument,
   LocalLibraryRemovalMode,
@@ -18,6 +20,16 @@ import type { CoreQueueExtensionApi } from '../../shared/corePersonalized.ts'
 import type { CoreHeartQueueApi } from '../../shared/coreHeart.ts'
 import type { CoreSourceRecoveryApi } from '../../shared/coreSourceRecovery.ts'
 import type { CatalogDatabaseApi } from '../../shared/musicCatalog.ts'
+import type { GenreDatabaseApi } from '../../shared/musicGenres.ts'
+import type { GenreBrowseDatabaseApi } from '../../shared/musicGenreBrowse.ts'
+import type { AlbumBrowseDatabaseApi } from '../../shared/musicAlbumBrowse.ts'
+import type { MusicRatingsDatabaseApi } from '../../shared/musicRatings.ts'
+import type { MusicPreferencesDatabaseApi } from '../../shared/musicPreferences.ts'
+import type { MusicTagsDatabaseApi, MusicTagsToken } from '../../shared/musicTags.ts'
+import type { MusicFocusDatabaseApi, MusicFocusState } from '../../shared/musicFocus.ts'
+import type { CatalogUnifiedPlaybackDatabaseApi } from '../../shared/musicUnifiedPlayback.ts'
+import type { EntityMetadataDatabaseApi } from '../../shared/entityMetadata.ts'
+import type { LegacyMusicMetadataDatabaseApi } from '../../shared/legacyMusicMetadata.ts'
 import type {
   LibraryDatabaseApi,
   LibraryMetadata,
@@ -67,12 +79,13 @@ export interface LibraryDatabaseWorkerApi
     CoreVersionsApi,
     CoreStatisticsApi,
     CorePersonalRestoreApi,
+    MusicPersonalBackupDatabaseApi,
     CoreQueueImportApi,
     CoreQueueRestoreApi,
     CoreQueueExtensionApi,
     CoreHeartQueueApi,
     CoreSourceRecoveryApi,
-    CatalogDatabaseApi {
+    CatalogDatabaseApi, AlbumBrowseDatabaseApi, MusicRatingsDatabaseApi, MusicPreferencesDatabaseApi, MusicTagsDatabaseApi, MusicFocusDatabaseApi, MusicExplorationDatabaseApi, CatalogUnifiedPlaybackDatabaseApi, GenreDatabaseApi, GenreBrowseDatabaseApi, EntityMetadataDatabaseApi, LegacyMusicMetadataDatabaseApi {
   insertCorePlaybackQueue(id: string, revision: number, edit: Extract<import('../../shared/libraryDatabase.ts').LibraryQueueEdit, { kind: 'insert' }>): Promise<import('../../shared/libraryDatabase.ts').LibraryQueueEditResult>
   /** Current and SQL-selected successor, read together without exporting metadata or holes. */
   readLibraryQueuePlaybackWindow(
@@ -177,6 +190,30 @@ export interface LibraryDatabaseWorkerApi
 }
 export type DatabaseMethod = keyof LibraryDatabaseWorkerApi
 export const DATABASE_METHODS = new Set<DatabaseMethod>([
+  'musicBackupRevision', 'musicBackupExport', 'musicBackupPreview', 'musicBackupRestore',
+  'identificationHistory', 'identificationRestorePreview', 'identificationRestore', 'metadataTaskSources', 'metadataRequery',
+  'identificationSchedule', 'identificationScheduleStatus',
+  'identificationEnqueue', 'identificationInput', 'identificationPublish', 'identificationDetail', 'identificationCandidates',
+  'identificationPreview', 'identificationDecide', 'identificationDetach', 'identificationInbox',
+  'legacyMusicStatus', 'legacyMusicBegin', 'legacyMusicStage', 'legacyMusicPublish', 'legacyMusicRead', 'legacyMusicEdit', 'legacyMusicInventory', 'legacyMusicHistory', 'legacyMusicHistoryRead', 'legacyMusicRestore',
+  'legacyMusicProvenanceList', 'legacyMusicProvenanceRead', 'legacyMusicProvenanceReview',
+  'legacyMusicBatchBegin', 'legacyMusicBatchStage', 'legacyMusicBatchPublish', 'legacyMusicTaskStatus', 'legacyMusicBatchCancel',
+  'metadataDetail', 'metadataCredits', 'metadataArtwork', 'metadataEnqueue', 'metadataDecide', 'metadataDetach', 'metadataOverride', 'metadataSourcePreference', 'metadataArtworkOverride',
+  'metadataJobs', 'metadataTasks', 'metadataTaskDemands', 'metadataCancel', 'metadataRecover', 'metadataClaim', 'metadataNextAttempt', 'metadataFinish',
+  'genresTree', 'genresUnmapped', 'genresEvidence', 'genresEdit', 'genresMap', 'genresOverride', 'genresAdvance',
+  'genresBrowse', 'genresMembers', 'genresContainsSources',
+  'albumsBrowse', 'albumsSources', 'albumsContainsSource', 'catalogPlaybackSources',
+  'ratingsDetail', 'ratingsSet', 'ratingsHistory',
+  'ratingsTargets',
+  'preferencesTargets', 'preferencesDetail', 'preferencesSet', 'preferencesHistory',
+  'preferencesAutomaticEligibility', 'preferencesTrackStates', 'preferencesPlaylistsLoad', 'preferencesPlaylistsMigrate', 'preferencesPlaylistsSave',
+  'preferencesPlaylistsRestore', 'preferencesPlaylistsMigrationReceipt',
+  'explorationLookup', 'explorationBackfillCredits', 'explorationState', 'explorationQuery', 'explorationDetail', 'explorationRelations', 'explorationParticipation', 'explorationPerformanceSave', 'explorationPerformanceDelete', 'explorationIngest', 'explorationSyncCredits',
+  'focusState', 'focusQuery', 'focusFacets', 'focusPlaybackPage', 'focusSavedList',
+  'focusSavedCreate', 'focusSavedRename', 'focusSavedUpdate', 'focusSavedDelete',
+  'tagsState', 'tagsList', 'tagsEntity', 'tagsMembers', 'tagsRecordings',
+  'tagsCreate', 'tagsRename', 'tagsDelete', 'tagsMemberSet', 'tagsPlaybackPage',
+  'genresFacets',
   'catalogStatus', 'catalogAdvance', 'catalogQuery', 'catalogDetail', 'catalogSources',
   'catalogSync', 'catalogProjectVersions', 'catalogResolve',
   'corePersonalRestore',
@@ -266,6 +303,14 @@ export type LibraryDatabaseWorkerRequest =
   | { kind: 'close'; requestId: string }
 export type LibraryDatabaseWorkerMessage =
   | { kind: 'library-changed'; revision: number }
+  | { kind: 'genres-changed'; revision: number }
+  | { kind: 'ratings-changed'; revision: number }
+  | { kind: 'preferences-changed'; revision: number }
+  | { kind: 'tags-changed'; token: MusicTagsToken }
+  | { kind: 'focus-changed'; state: MusicFocusState }
+  | { kind: 'exploration-changed'; state: MusicExplorationState }
+  | { kind: 'classification-metadata-changed'; revision: number }
+  | { kind: 'genres-invalidated' }
   | { kind: 'ready' }
   | { kind: 'opened' }
   | { kind: 'open-error'; error: string }

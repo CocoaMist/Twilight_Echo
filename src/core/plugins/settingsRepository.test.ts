@@ -13,6 +13,22 @@ const envelope = (value: unknown): SecureValueEnvelope => ({
   ciphertext: JSON.stringify(value)
 })
 
+test('metadata account/config context survives repository restart and changes without decrypting settings', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'core-plugin-metadata-context-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const crypto = { protect: envelope, unprotect: () => { throw new Error('must not read credentials') } }
+  const repository = new PluginSettingsRepository(crypto)
+  assert.equal(repository.identityContext(root), 'absent')
+  await repository.set(root, 'cookie', 'account-a')
+  const first = repository.identityContext(root)
+  assert.equal(new PluginSettingsRepository(crypto).identityContext(root), first)
+  await repository.set(root, 'cookie', 'account-b')
+  const second = repository.identityContext(root)
+  assert.notEqual(second, first)
+  assert.equal(new PluginSettingsRepository(crypto).identityContext(root), second)
+  assert.ok(!second.includes('account-b'))
+})
+
 test('one Core writer serializes concurrent host settings and retains special dictionary keys', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'core-plugin-settings-'))
   t.after(() => rm(root, { recursive: true, force: true }))

@@ -112,7 +112,7 @@ test('v4 upgrade snapshots WAL and builds path indexes without changing content,
   old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + removePathIndex)
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
     assert.deepEqual(upgraded.exportDocument(), before)
     assert.deepEqual(upgraded.getTracksByIds(['t:0', 't:2']).versions, versions)
     assert.deepEqual(

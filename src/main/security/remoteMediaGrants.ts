@@ -7,6 +7,8 @@ export type RemoteMediaKind = 'audio' | 'image'
 export interface RemoteMediaGrant {
   source: string
   kind: RemoteMediaKind
+  /** Expiring metadata images bypass durable/browser caches. */
+  expiresAt?: number
 }
 
 export interface RemoteMediaGrantServiceOptions {
@@ -53,15 +55,17 @@ export class RemoteMediaGrantService {
       options.deterministicImageTokens ?? options.createToken === undefined
   }
 
-  grant(source: string, kind: RemoteMediaKind): string {
+  grant(source: string, kind: RemoteMediaKind, expiresAt?: number): string {
     const normalized = normalizeRemoteMediaSource(source)
+    if (expiresAt !== undefined && (kind !== 'image' || !Number.isSafeInteger(expiresAt) || expiresAt <= this.now()))
+      throw new Error('Remote image permission has expired')
     this.pruneExpired(this.now())
     const token =
       kind === 'image' && this.deterministicImageTokens
-        ? deterministicImageToken(normalized)
+        ? deterministicImageToken(expiresAt === undefined ? normalized : JSON.stringify([normalized, expiresAt]))
         : this.createToken()
     if (!token || /[/?#]/.test(token)) throw new Error('Remote media grant token is invalid')
-    this.grants.set(token, { source: normalized, kind, lastAccessAt: this.now() })
+    this.grants.set(token, { source: normalized, kind, lastAccessAt: this.now(), ...(expiresAt === undefined ? {} : { expiresAt }) })
     const handle = `twilight-media://${kind}/${token}`
     writeDiagnostic(
       'media.remote',
@@ -80,12 +84,12 @@ export class RemoteMediaGrantService {
     if (expectedKind && grant.kind !== expectedKind) {
       throw new Error('Remote media grant kind is not authorized')
     }
-    if (this.now() - grant.lastAccessAt > ttlFor(grant.kind)) {
+    if (this.now() - grant.lastAccessAt > ttlFor(grant.kind) || (grant.expiresAt !== undefined && this.now() >= grant.expiresAt)) {
       this.grants.delete(token)
       throw new Error('Remote media grant has expired')
     }
     grant.lastAccessAt = this.now()
-    return { source: grant.source, kind: grant.kind }
+    return { source: grant.source, kind: grant.kind, ...(grant.expiresAt === undefined ? {} : { expiresAt: grant.expiresAt }) }
   }
 
   revokeAll(): void {
@@ -104,7 +108,7 @@ export class RemoteMediaGrantService {
         return
       }
       const [token, grant] = next.value
-      if (now - grant.lastAccessAt > ttlFor(grant.kind)) this.grants.delete(token)
+      if (now - grant.lastAccessAt > ttlFor(grant.kind) || (grant.expiresAt !== undefined && now >= grant.expiresAt)) this.grants.delete(token)
     }
   }
 }
@@ -117,6 +121,7 @@ export function createRemoteMediaRequestHandler(
   const grants = options.grants ?? remoteMediaGrants
   return (request) =>
     withDiagnosticContext({ requestId: randomUUID() }, async () => {
+      request.signal.throwIfAborted()
       const started = performance.now()
       const context = { ...diagnosticContext() }
       let source: string | undefined = undefined
@@ -162,11 +167,15 @@ export function createRemoteMediaRequestHandler(
         return fail(416, 'range', 'Requested range is not supported')
       }
 
-      const cacheable = grant.kind === 'image' && request.method === 'GET' && !range
+      const cacheable = grant.kind === 'image' && request.method === 'GET' && !range && grant.expiresAt === undefined
       const cacheGeneration = options.imageCache?.generation?.()
       if (cacheable && options.imageCache) {
         try {
           const cached = await options.imageCache.read(grant.source)
+          if (request.signal.aborted) {
+            await cancelRemoteMediaBody(cached)
+            request.signal.throwIfAborted()
+          }
           record('cache.lookup', { hit: Boolean(cached) })
           if (cached) {
             record('response.ready', { status: cached.status, fromCache: true })
@@ -185,32 +194,47 @@ export function createRemoteMediaRequestHandler(
           grant.source,
           {
             method: request.method,
+            signal: request.signal,
             headers: buildUpstreamRequestHeaders(grant.source, grant.kind, range)
           },
           record
         )
       } catch (error) {
+        request.signal.throwIfAborted()
         return fail(502, 'upstream-fetch', 'Remote media request failed', error)
       }
 
       if (!upstream.ok && upstream.status !== 206) {
+        await cancelRemoteMediaBody(upstream)
         return fail(502, 'upstream-status', 'Remote media request failed')
       }
+      if (grant.expiresAt !== undefined) {
+        try { grants.resolve(request.url, 'image') } catch {
+          await cancelRemoteMediaBody(upstream)
+          return fail(403, 'authorization-expired', 'Remote image permission has expired')
+        }
+      }
       if (!isExpectedMediaType(upstream.headers.get('content-type'), grant.kind)) {
+        await cancelRemoteMediaBody(upstream)
         return fail(415, 'content-type', 'Remote media type is not authorized')
       }
 
       const maximumBytes = maxResponseBytesFor(grant.kind)
       const contentLength = parseContentLength(upstream.headers.get('content-length'))
       if (contentLength !== null && contentLength > maximumBytes) {
+        await cancelRemoteMediaBody(upstream)
         return fail(413, 'content-length', 'Remote media response is too large')
       }
 
-      const response = new Response(limitResponseBody(upstream.body, maximumBytes, record), {
-        status: upstream.status,
-        statusText: upstream.statusText,
-        headers: filteredResponseHeaders(upstream.headers)
-      })
+      const response = new Response(
+        limitResponseBody(upstream.body, maximumBytes, record, request.signal),
+        {
+          status: upstream.status,
+          statusText: upstream.statusText,
+          headers: filteredResponseHeaders(upstream.headers)
+        }
+      )
+      if (grant.expiresAt !== undefined) response.headers.set('Cache-Control', 'no-store')
       if (
         cacheable &&
         options.imageCache &&
@@ -221,6 +245,7 @@ export function createRemoteMediaRequestHandler(
       ) {
         try {
           const bytes = new Uint8Array(await response.arrayBuffer())
+          request.signal.throwIfAborted()
           await options.imageCache.write(
             grant.source,
             upstream.headers.get('content-type') ?? '',
@@ -234,6 +259,7 @@ export function createRemoteMediaRequestHandler(
           })
           return new Response(bytes, { status: response.status, headers: response.headers })
         } catch (error) {
+          request.signal.throwIfAborted()
           return fail(502, 'body-or-cache-write', 'Remote image response failed', error)
         }
       }
@@ -413,12 +439,13 @@ function refererForRemoteMediaSource(source: string): string | null {
 async function fetchRemoteMediaWithRedirects(
   fetchImpl: RemoteMediaRequestHandlerOptions['fetch'],
   source: string,
-  init: { method: string; headers?: HeadersInit },
+  init: { method: string; headers?: HeadersInit; signal: AbortSignal },
   record: MediaDiagnostic
 ): Promise<Response> {
   let current = source
   const baseHeaders = headersInitToRecord(init.headers)
   for (let hop = 0; hop <= MAX_REMOTE_MEDIA_REDIRECTS; hop += 1) {
+    init.signal.throwIfAborted()
     // Refresh Referer for each hop so edge hosts still look browser-like.
     const hopHeaders: Record<string, string> = { ...baseHeaders }
     const hopReferer = refererForRemoteMediaSource(current)
@@ -426,6 +453,7 @@ async function fetchRemoteMediaWithRedirects(
     record('upstream.request.start', { hop, address: current })
     const response = await fetchImpl(current, {
       method: init.method,
+      signal: init.signal,
       headers: hopHeaders,
       credentials: 'omit',
       redirect: 'manual'
@@ -441,28 +469,44 @@ async function fetchRemoteMediaWithRedirects(
       },
       response.status >= 400 ? 'warn' : 'debug'
     )
+    if (init.signal.aborted) {
+      await cancelRemoteMediaBody(response)
+      init.signal.throwIfAborted()
+    }
     if (response.status < 300 || response.status >= 400) return response
-    if (hop === MAX_REMOTE_MEDIA_REDIRECTS) {
-      throw new Error('Remote media redirect limit exceeded')
-    }
-    const location = response.headers.get('location')
-    if (!location) throw new Error('Remote media redirect is missing a location')
-    let next: string
     try {
-      next = normalizeRemoteMediaSource(new URL(location, current).toString())
-    } catch {
-      throw new Error('Remote media redirect target is not authorized')
+      if (hop === MAX_REMOTE_MEDIA_REDIRECTS) {
+        throw new Error('Remote media redirect limit exceeded')
+      }
+      const location = response.headers.get('location')
+      if (!location) throw new Error('Remote media redirect is missing a location')
+      let next: string
+      try {
+        next = normalizeRemoteMediaSource(new URL(location, current).toString())
+      } catch {
+        throw new Error('Remote media redirect target is not authorized')
+      }
+      record('upstream.redirect', {
+        hop,
+        address: current,
+        targetUrl: next,
+        status: response.status
+      })
+      current = next
+    } finally {
+      // Release redirects even when the location or hop limit is rejected.
+      await cancelRemoteMediaBody(response)
     }
-    record('upstream.redirect', { hop, address: current, targetUrl: next, status: response.status })
-    // Drop the body so sockets are not held while hopping CDN edge hosts.
-    try {
-      await response.body?.cancel()
-    } catch {
-      // ignore cancel failures
-    }
-    current = next
   }
   throw new Error('Remote media redirect limit exceeded')
+}
+
+async function cancelRemoteMediaBody(response: Response | null): Promise<void> {
+  try {
+    await response?.body?.cancel()
+  } catch {
+    // Disposal must not replace the original network or authorization error.
+  }
 }
 
 function headersInitToRecord(headers?: HeadersInit): Record<string, string> {
@@ -592,7 +636,8 @@ function filteredResponseHeaders(headers: Headers): Headers {
 function limitResponseBody(
   body: ReadableStream<Uint8Array> | null,
   maximumBytes: number,
-  record: MediaDiagnostic
+  record: MediaDiagnostic,
+  signal: AbortSignal
 ): ReadableStream<Uint8Array> | null {
   if (!body) {
     record('body.complete', { bytes: 0 })
@@ -601,13 +646,28 @@ function limitResponseBody(
   const reader = body.getReader()
   let bytesRead = 0
   let settled = false
+  let onAbort: () => void
+  const cleanup = () => signal.removeEventListener('abort', onAbort)
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      onAbort = () => {
+        if (settled) return
+        settled = true
+        cleanup()
+        record('body.cancelled', { bytes: bytesRead }, 'debug')
+        controller.error(signal.reason)
+        void reader.cancel(signal.reason).catch(() => {})
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) onAbort()
+    },
     async pull(controller) {
       try {
         const next = await reader.read()
         if (settled) return
         if (next.done) {
           settled = true
+          cleanup()
           record('body.complete', { bytes: bytesRead })
           controller.close()
           return
@@ -621,6 +681,7 @@ function limitResponseBody(
       } catch (error) {
         if (settled) return
         settled = true
+        cleanup()
         record('body.failed', { bytes: bytesRead, maximumBytes, error }, 'warn')
         controller.error(error)
       }
@@ -628,6 +689,7 @@ function limitResponseBody(
     cancel(reason) {
       if (settled) return
       settled = true
+      cleanup()
       record('body.cancelled', { bytes: bytesRead }, 'debug')
       return reader.cancel(reason)
     }

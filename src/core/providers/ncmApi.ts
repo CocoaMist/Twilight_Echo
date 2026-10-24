@@ -13,7 +13,10 @@ export interface NcmApiRequestOptions {
 }
 export interface NcmApiServiceOptions {
   startServer(): Promise<Server>
-  fetch?: typeof fetch
+  fetch?: (
+    url: string,
+    init: { signal: AbortSignal; headers: Record<string, string> }
+  ) => Promise<Pick<Response, 'status' | 'headers' | 'text'>>
   now?: () => number
   closeTransport?(): Promise<void>
 }
@@ -138,7 +141,7 @@ export class NcmApiService {
       const res = await (this.options.fetch ?? fetch)(url, {
         signal: controller.signal,
         headers
-      } as RequestInit)
+      })
       const responseText = await res.text()
       try {
         return JSON.parse(responseText) as unknown

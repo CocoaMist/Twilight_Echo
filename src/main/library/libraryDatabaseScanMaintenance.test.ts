@@ -291,7 +291,7 @@ test('v9 upgrade snapshots committed WAL before DDL and defers legacy counting a
   // Keep the old writer open with committed schema/data still in WAL.
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 12)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
     assert.equal(
       upgraded.sql.prepare('SELECT checked_files FROM scan_jobs').get()!.checked_files,
       null
@@ -374,7 +374,7 @@ test('v9 snapshot failure or partial scan-column DDL leaves old schema and check
 
 test('future scan schemas remain rejected before writes', (t) => {
   const { db, path } = fixture(t)
-  db.sql.exec('PRAGMA user_version=13')
-  assert.throws(() => new LibraryDatabase(path), /Unsupported.*13/)
-  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 13)
+  db.sql.exec('PRAGMA user_version=29')
+  assert.throws(() => new LibraryDatabase(path), /Unsupported.*29/)
+  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
 })

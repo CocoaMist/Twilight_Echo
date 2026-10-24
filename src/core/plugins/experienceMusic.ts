@@ -12,11 +12,20 @@ import {
 import { AlbumIntroductionProvider } from './rhine-vendor/album-introductions.mjs'
 import { QQCreditsProvider } from './rhine-vendor/qq-credits.mjs'
 import { MusicBrainzProvider } from './rhine-vendor/musicbrainz.mjs'
+import { publicMetadataHttp } from '../library/metadataHttp.ts'
 import {
   introductionPatch,
   creditsPatch,
   selectMetadataAlbums
 } from '../../shared/rhineMetadata.ts'
+import { legacyMusicLookup, type LegacyMusicTaskClient } from '../../shared/legacyMusicTasks.ts'
+import type { LegacyMusicProvenanceOptions, LegacyMusicProvenanceReview } from '../../shared/legacyMusicMetadata.ts'
+
+export interface ExperienceMusicAlbum extends MusicAlbum {
+  /** Core-only source snapshot; not supplied by the experience view. */
+  collectionId?: string
+  contentRevision?: number
+}
 
 interface MusicMetadata {
   albums?: Record<string, Partial<MusicAlbum>>
@@ -26,7 +35,8 @@ interface MusicMetadata {
 }
 export function createExperienceMusic(
   plugins: Pick<TwilightPluginManager, 'list'>,
-  experienceDocument: ReturnType<typeof createExperienceDocuments>
+  experienceDocument: ReturnType<typeof createExperienceDocuments>,
+  tasks?: LegacyMusicTaskClient
 ) {
   let stopping = false
   const workers = new Set<Promise<void>>()
@@ -48,7 +58,7 @@ export function createExperienceMusic(
   async function experienceMusicOperation(
     pluginId: string,
     operation: string,
-    rawAlbums: MusicAlbum[],
+    rawAlbums: ExperienceMusicAlbum[],
     args: Record<string, unknown>
   ) {
     if (stopping) throw new Error('Core is shutting down')
@@ -67,15 +77,39 @@ export function createExperienceMusic(
       artist: album.artist,
       tracks: album.tracks
     }))
+    const durable = tasks && (operation === 'status' || ['task','preview','import','reconcile','restore'].includes(operation))
+      ? await tasks.legacyMusicStatus(pluginId) : null
     if (operation === 'status')
-      return Object.fromEntries(
-        ['introductions', 'credits', 'enrich'].map((key) => [key, jobs.get(`${pluginId}:${key}`)])
-      )
+      return {
+        ...(durable ?? Object.fromEntries(
+          ['introductions', 'credits', 'enrich'].map((key) => [key, jobs.get(`${pluginId}:${key}`)])
+        )),
+        migration: await experienceDocument.migrationStatus(pluginId)
+      }
+    if (operation === 'cancel') {
+      if (!tasks) throw new Error('当前资料入口未提供持久任务取消')
+      if (!legacyMusicLookup(args.operation)) throw new Error('Invalid legacy lookup')
+      return tasks.cancelLegacyMusic(pluginId, args.operation)
+    }
+    if (operation === 'inventory' || operation === 'history')
+      return experienceDocument[operation](pluginId, args.offset as number | undefined, args.limit as number | undefined)
+    if (operation === 'history.read')
+      return experienceDocument.historyRead(pluginId, args.revision as number)
+    if (operation === 'provenance.list')
+      return experienceDocument.provenanceList(pluginId, args as LegacyMusicProvenanceOptions)
+    if (operation === 'provenance.read') {
+      if (Object.keys(args).some(k => !['albumId', 'snapshotRevision'].includes(k))) throw new Error('Invalid provenance review target')
+      return experienceDocument.provenanceRead(pluginId, args.albumId as string, args.snapshotRevision as number)
+    }
+    if (operation === 'provenance.review')
+      return experienceDocument.provenanceReview(pluginId, args as unknown as LegacyMusicProvenanceReview)
     if (
-      ['task', 'preview', 'import', 'reconcile'].includes(operation) &&
-      ['introductions', 'credits', 'enrich'].some((key) => jobs.get(`${pluginId}:${key}`)?.running)
+      ['task', 'preview', 'import', 'reconcile', 'restore'].includes(operation) &&
+      (durable ? Object.values(durable).some(job => job?.running) : ['introductions', 'credits', 'enrich'].some((key) => jobs.get(`${pluginId}:${key}`)?.running))
     )
       throw new Error('资料查询正在进行，请结束后重新导出或预览')
+    if (operation === 'restore')
+      return experienceDocument.restore(pluginId, args.revision as number, args.expectedRevision as number)
     if (operation === 'task') {
       const task = createIntroductionTask(albums, {
         scope: String(args.scope ?? 'missing'),
@@ -142,6 +176,15 @@ export function createExperienceMusic(
       const selected = selectMetadataAlbums(albums, operation, args)
       if (operation === 'enrich' && !metadata.config?.musicBrainzContact)
         throw new Error('请先填写 MusicBrainz 联系邮箱或项目网址')
+      if (tasks) {
+        const sources = new Map(rawAlbums.map(album => [album.id, album]))
+        return tasks.startLegacyMusic(pluginId, operation, document.revision, selected.map(album => {
+          const source = sources.get(album.id)!
+          return { album, collectionId: source.collectionId!, contentRevision: source.contentRevision!, force: args.force === true }
+        }))
+      }
+      // Compatibility for standalone, pre-migration callers that do not inject
+      // a Core task owner. Production always uses the durable owner above.
       const job = {
         running: true,
         completed: 0,
@@ -155,9 +198,11 @@ export function createExperienceMusic(
       jobs.set(key, job)
       const credits = new QQCreditsProvider({ dataDir: plugin.paths.dataDir })
       const introductions = new AlbumIntroductionProvider({
+        fetcher: publicMetadataHttp.fetch,
         contact: () => metadata.config?.musicBrainzContact ?? ''
       })
       const enrichment = new MusicBrainzProvider({
+        fetcher: publicMetadataHttp.fetch,
         contact: metadata.config?.musicBrainzContact ?? ''
       })
       const work = (async () => {
@@ -194,7 +239,7 @@ export function createExperienceMusic(
                 delete patch.description
                 delete patch.descriptionSource
               }
-              await experienceDocument(pluginId, {
+              await experienceDocument.automatic(pluginId, {
                 revision: latest.revision,
                 value: {
                   ...data,
@@ -243,6 +288,7 @@ export function createExperienceMusic(
   }
 
   return Object.assign(experienceMusicOperation, {
+    running: () => workers.size > 0,
     shutdown: async () => {
       stopping = true
       await Promise.all([...workers])

@@ -16,7 +16,7 @@ export const LIBRARY_HISTORY_SCHEMA_SQL = `
   END;
 `
 
-/** IndexedDB remains the history authority. This is a durable, atomic lightweight
+/** Core listening statistics remain the history authority. This is a durable, atomic lightweight
  * projection for indexed library ordering, not a second listening-statistics store. */
 export class LibraryDatabaseHistory {
   private stage: {

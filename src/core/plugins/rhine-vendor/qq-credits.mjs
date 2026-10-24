@@ -10,6 +10,7 @@ const SEARCH = 'music.search.SearchCgiService'
 const PRODUCER = 'music.sociality.KolWorksTag'
 const DAY = 86_400_000
 const sharedQueue = { chain: Promise.resolve(), lastStart: -Infinity, retryAt: 0 }
+// eslint-disable-next-line no-control-regex -- Strip control characters from source metadata.
 const clean = (value) => typeof value === 'string' ? value.normalize('NFKC').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 240) : ''
 const simplified = OpenCC.Converter({ from: 'hk', to: 'cn' })
 const normalize = (value) => simplified(clean(value)).toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '')
@@ -128,10 +129,11 @@ function retryDelay(header, now, fallback) {
 export class QQCreditsProvider {
   constructor({ dataDir, fetcher = globalThis.fetch, intervalMs = 1500, timeoutMs = 10_000,
     now = Date.now, sleep = delay, positiveTtlMs = 30 * DAY, negativeTtlMs = DAY,
-    cooldownMs = 15 * 60_000, errorCooldownMs = 60_000, coordinator } = {}) {
+    cooldownMs = 15 * 60_000, errorCooldownMs = 60_000, coordinator, signal } = {}) {
     if (!dataDir) throw new Error('QQCreditsProvider 需要本地 dataDir')
     this.cachePath = path.join(dataDir, 'qq-credits-cache.json')
     this.fetcher = fetcher
+    this.signal = signal
     this.intervalMs = Math.max(0, intervalMs)
     this.timeoutMs = timeoutMs
     this.now = now
@@ -193,6 +195,7 @@ export class QQCreditsProvider {
 
   async request(module, method, param, parse, force) {
     await this.ready
+    this.signal?.throwIfAborted()
     if (this.loadError) throw this.loadError
     const key = digest(JSON.stringify([module, method, param]))
     const cached = this.cache.entries[key]
@@ -202,6 +205,7 @@ export class QQCreditsProvider {
       if (this.queue.retryAt > this.now()) throw new SourceError('QQ Music 请求处于冷却期，请稍后再试', this.queue.retryAt)
       const wait = this.queue.lastStart + this.intervalMs - this.now()
       if (wait > 0) await this.sleep(wait)
+      this.signal?.throwIfAborted()
       if (this.queue.retryAt > this.now()) throw new SourceError('QQ Music 请求处于冷却期，请稍后再试', this.queue.retryAt)
       // A preceding request may have populated the same cache while queued.
       const current = this.cache.entries[key]
@@ -216,7 +220,10 @@ export class QQCreditsProvider {
           method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', Referer: 'https://y.qq.com/', 'User-Agent': 'RhineLocalMusic/0.3.1 (public music metadata)' },
           body: JSON.stringify(payload), signal: AbortSignal.timeout(this.timeoutMs), redirect: 'error',
         })
-      } catch (error) { return this.suspend(`QQ Music 连接失败或超时：${error.name === 'TimeoutError' ? '请求超时' : '无法连接'}`, this.errorCooldownMs) }
+      } catch (error) {
+        this.signal?.throwIfAborted()
+        return this.suspend(`QQ Music 连接失败或超时：${error.name === 'TimeoutError' ? '请求超时' : '无法连接'}`, this.errorCooldownMs)
+      }
       const header = response.headers?.get?.('retry-after')
       if (response.status === 429) return this.suspend('QQ Music 请求过于频繁（HTTP 429），已停止本轮查询', retryDelay(header, this.now(), this.cooldownMs))
       if (!response.ok) return this.suspend(`QQ Music HTTP ${response.status}，已停止本轮查询`, response.status === 403 ? this.cooldownMs : this.errorCooldownMs)
@@ -258,6 +265,7 @@ export class QQCreditsProvider {
     const progress = (trackTitle = '') => { try { onProgress({ completed, total: tracks.length, trackTitle }) } catch { /* UI callbacks do not change source results. */ } }
     progress()
     for (const track of tracks) {
+      this.signal?.throwIfAborted()
       const metadata = trackMetadata(track, album)
       try {
         const initial = chooseQQTrack(metadata, [])
@@ -277,6 +285,7 @@ export class QQCreditsProvider {
         completed += 1
         progress(metadata.title)
       } catch (failure) {
+        this.signal?.throwIfAborted()
         error = failure.message
         if (failure.retryAt) retryAt = stamp(failure.retryAt)
         progress(metadata.title)

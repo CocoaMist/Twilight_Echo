@@ -9,11 +9,15 @@ import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import {
   LibraryDatabaseServiceClient,
-  type DatabaseUtilityProcess
+  type DatabaseUtilityProcess,
+  type DatabaseServiceOptions
 } from './libraryDatabaseServiceClient.ts'
 import type { LibraryDatabaseWorkerRequest } from './libraryDatabaseProtocol.ts'
 import { getLibraryDatabasePath, LibraryDatabase } from './libraryDatabase.ts'
 import { versionSourceKey } from '../../shared/trackSourceIdentity.ts'
+import { PlatformIdentificationProvider } from '../../core/library/musicIdentificationProvider.ts'
+import type { MusicAlbum } from '../../shared/rhineMusic.ts'
+import { listeningSourceIdentity } from '../../shared/listeningSourceIdentity.ts'
 
 class ManualProcess extends EventEmitter {
   messages: LibraryDatabaseWorkerRequest[] = []
@@ -28,9 +32,457 @@ class ManualProcess extends EventEmitter {
 }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 
-function workerClient(json: string, children: ChildProcess[], changed?: (revision: number) => void) {
+test('personal metadata images, source choices and legacy provenance survive the real worker transport and replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'metadata-personal-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  const open = () => workerClient(json, children, undefined, revision => revisions.push(revision))
+  let client = open()
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const artist = (await client.catalogQuery({ kind: 'artist' })).items[0].id
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII='
+  const before = await client.musicBackupRevision()
+  await client.metadataArtworkOverride({ entityId: artist, revision: 0, mode: 'value', language: 'en', dataUrl: png }, 10)
+  await client.metadataSourcePreference({ entityId: artist, revision: 1, language: 'en', provider: 'wikipedia' }, 11)
+  assert.ok((await client.musicBackupRevision()).metadata > before.metadata)
+  await tick(); assert.ok(revisions.length > 0)
+  const plugin = 'com.example.metadata'
+  const contentRevision = (await client.getMetadata()).revision
+  await client.legacyMusicBegin(plugin, 0, { albums: {} }, 1, contentRevision)
+  await client.legacyMusicStage({ pluginId: plugin, sourceRevision: 0, contentRevision, entries: [
+    { id: 'old', value: { title: 'Old', description: 'User reviewed text', descriptionSource: { name: 'Old marker' } } }
+  ] })
+  await client.legacyMusicPublish(plugin, 0, contentRevision)
+  const pending = await client.legacyMusicProvenanceList(plugin)
+  assert.equal(pending.total, 1)
+  const read = await client.legacyMusicProvenanceRead(plugin, 'old', -1)
+  await client.legacyMusicProvenanceReview(plugin, { expectedRevision: read.revision, albumId: 'old', snapshotRevision: -1,
+    description: read.item.description, disposition: 'manual' })
+  assert.equal((await client.legacyMusicProvenanceList(plugin)).total, 0)
+  const saved = await client.metadataDetail(artist, 'en')
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited; client = open()
+  const detail = await client.metadataDetail(artist, 'en')
+  assert.deepEqual(detail, saved)
+  assert.equal(detail.manualArtwork?.dataUrl, png)
+  assert.equal(detail.sourcePreference?.provider, 'wikipedia')
+  assert.equal((await client.legacyMusicProvenanceRead(plugin, 'old', -1)).item.disposition, 'manual')
+  const portable = await client.musicBackupExport(180 * 1024 * 1024)
+  assert.equal(portable.records.artworkOverrides!.length, 1)
+  assert.equal(portable.records.sourcePreferences![0].provider, 'wikipedia')
+})
+
+test('Focus saved queries, complete revision events and frozen history tokens survive real worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'focus-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], states: import('../../shared/musicFocus.ts').MusicFocusState[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'focus-one', source: 'local', filePath: join(root, 'one.flac'),
+    title: 'One', artist: 'Artist', album: 'Album', duration: 200 }]))
+  const open = () => workerClient(json, children, undefined, undefined, undefined, undefined, undefined, state => states.push(state))
+  let client = open()
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const query = { version: 1 as const, entity: 'recording' as const, where: { source: { provider: 'local' } } }
+  const created = await client.focusSavedCreate({ name: 'Night', query, savedRevision: 0 }, 100)
+  const renamed = await client.focusSavedRename({ id: created.item.id, name: 'Local music', nameRevision: 1 }, 101)
+  const updated = await client.focusSavedUpdate({ id: created.item.id, query: { ...query, where: { text: 'One' } }, queryRevision: 1 }, 102)
+  assert.equal(updated.item.nameRevision, renamed.item.nameRevision)
+  await assert.rejects(client.focusSavedUpdate({ id: created.item.id, query, queryRevision: 1 }, 103), { code: 'STALE_REVISION' })
+  const page = await client.focusQuery({ query: updated.item.query })
+  const facets = await client.focusFacets({ query: updated.item.query, token: page.token, facet: 'provider' })
+  const privatePage = await client.focusPlaybackPage({ query: updated.item.query, token: page.token, anchorSourceId: page.items[0].sourceId! })
+  assert.equal(page.total, 1); assert.equal(facets.items[0].count, 1); assert.equal(privatePage.total, 1)
+  assert.equal(privatePage.items[0].track.filePath, join(root, 'one.flac'))
+  assert.equal(privatePage.items[0].sourceId, page.items[0].sourceId)
+  assert.equal(JSON.stringify(page).includes(root.replaceAll('\\', '\\\\')), false)
+  assert.equal('track' in page.items[0], false)
+  const history = await client.syncListeningHistory({ kind: 'begin', id: 'focus-history', mode: 'replace' })
+  await client.syncListeningHistory({ kind: 'append', id: history.id, sequence: 1,
+    entries: [{ id: listeningSourceIdentity('local', 'focus-one'), lastPlayed: 1000 }] })
+  await client.syncListeningHistory({ kind: 'commit', id: history.id, sequence: 2 })
+  await assert.rejects(client.focusQuery({ query: updated.item.query, token: page.token }), { code: 'STALE_REVISION' })
+  const after = await client.focusQuery({ query: updated.item.query })
+  assert.equal(after.items[0].lastPlayed, 1000)
+  const current = await client.focusState()
+  await tick()
+  assert.deepEqual(states.at(-1), current)
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited; client = open()
+  assert.deepEqual(await client.focusState(), current)
+  assert.deepEqual((await client.focusSavedList({})).items, [updated.item])
+  assert.equal((await client.focusQuery({ query: updated.item.query })).items[0].lastPlayed, 1000)
+  assert.equal((await client.focusSavedDelete({ id: updated.item.id, nameRevision: updated.item.nameRevision, queryRevision: updated.item.queryRevision })).deletedId, updated.item.id)
+  assert.equal((await client.focusSavedList({})).total, 0)
+  assert.equal((await client.getMetadata()).trackCount, 1)
+})
+
+test('tag references, private queue pages and full revision events survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'tags-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], tokens: import('../../shared/musicTags.ts').MusicTagsToken[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'tagged', source: 'local', filePath: join(root, 'tagged.flac'),
+    title: 'Tagged', artist: 'Artist', album: 'Album', duration: 200 }]))
+  const open = () => workerClient(json, children, undefined, undefined, undefined, undefined, token => tokens.push(token))
+  let client = open()
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const release = (await client.catalogQuery({ kind: 'release' })).items[0]
+  const initial = await client.tagsState()
+  const created = await client.tagsCreate({ name: '雨夜', tagsRevision: initial.tagsRevision }, 1000)
+  const assigned = await client.tagsMemberSet({ tagId: created.tag.id, entityId: release.id, present: true, membersRevision: 0 }, 1001)
+  const renamed = await client.tagsRename({ tagId: created.tag.id, name: '夜晚', nameRevision: created.tag.nameRevision }, 1002)
+  assert.equal(renamed.tag.membersRevision, assigned.tag.membersRevision)
+  await assert.rejects(client.tagsMemberSet({ tagId: created.tag.id, entityId: release.id, present: false, membersRevision: 0 }, 1003), { code: 'STALE_REVISION' })
+  assert.equal((await client.tagsEntity({ entityId: release.id })).items[0].id, created.tag.id)
+  const members = await client.tagsMembers({ tagId: created.tag.id, token: renamed.token })
+  const recordings = await client.tagsRecordings({ tagId: created.tag.id, token: renamed.token })
+  const privatePage = await client.tagsPlaybackPage({ tagId: created.tag.id, token: renamed.token })
+  assert.equal(members.total, 1); assert.equal(recordings.total, 1)
+  assert.equal(privatePage.items[0].track.filePath, join(root, 'tagged.flac'))
+  assert.equal(JSON.stringify(recordings).includes(root.replaceAll('\\', '\\\\')), false)
+  assert.equal('track' in recordings.items[0], false)
+  await client.updateConfiguration({ folders: [root], exclusions: [] })
+  const updated = await client.tagsState()
+  assert.equal(updated.tagsRevision, renamed.token.tagsRevision)
+  assert.ok(updated.contentRevision > renamed.token.contentRevision)
+  await assert.rejects(client.tagsRecordings({ tagId: created.tag.id, token: renamed.token }), { code: 'STALE_REVISION' })
+  await tick()
+  assert.deepEqual(tokens.at(-1), updated)
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited
+  client = open()
+  assert.deepEqual(await client.tagsState(), updated)
+  assert.deepEqual((await client.tagsList({})).items, [renamed.tag])
+  assert.deepEqual((await client.tagsMembers({ tagId: created.tag.id })).items, members.items)
+  assert.deepEqual((await client.tagsPlaybackPage({ tagId: created.tag.id })).items, privatePage.items)
+  assert.equal((await client.tagsDelete({ tagId: created.tag.id, nameRevision: renamed.tag.nameRevision, membersRevision: assigned.tag.membersRevision })).deletedId, created.tag.id)
+  assert.equal((await client.tagsList({})).total, 0)
+  assert.equal((await client.getTracksByIds(['tagged'])).tracks.length, 1)
+})
+
+test('preferences migration, bans and revision events survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'preferences-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  const track = { id: 'preferred', source: 'local' as const, filePath: join(root, 'preferred.flac'),
+    title: 'Preferred', artist: 'Artist', album: 'Album', fileName: 'preferred.flac', duration: 200,
+    size: 0, cover: null, lyrics: null }
+  writeFileSync(json, JSON.stringify([track]))
+  let client = workerClient(json, children, undefined, undefined, undefined, revision => revisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const recording = (await client.catalogQuery({ kind: 'recording' })).items[0]
+  const ordinary = { id: 'ordinary', name: '我收藏的音乐', createdAt: '2026-01-01', trackIds: [track.id, track.id] }
+  assert.equal(await client.preferencesPlaylistsMigrationReceipt(), null)
+  const migrated = await client.preferencesPlaylistsMigrate({ version: 2, revision: 7, savedAt: '2026-01-01', data: [
+    { id: 'system', name: 'Original favorites', createdAt: '2026-01-01', isDefault: true,
+      trackIds: [track.id], trackSnapshots: { [track.id]: track } }, ordinary
+  ] }, 1000, { logicalMemberCount: 1 })
+  assert.equal(migrated.revision, 7)
+  assert.deepEqual(migrated.data.find(item => item.id === 'ordinary'), ordinary)
+  const receipt = await client.preferencesPlaylistsMigrationReceipt()
+  assert.equal(receipt!.sourceRevision, 7)
+  assert.equal(receipt!.defaultPlaylistId, 'system')
+  assert.equal(receipt!.rawRowCount, 1)
+  assert.equal(receipt!.logicalMemberCount, 1)
+  assert.equal(receipt!.resolvedRowCount, 1)
+  assert.equal(receipt!.unresolvedRowCount, 0)
+  assert.equal(receipt!.items[0].trackId, track.id)
+  const detail = await client.preferencesDetail(recording.id)
+  assert.equal(detail.value?.state, 'favorite')
+  assert.deepEqual((await client.preferencesTargets({ entityId: recording.id, trackContext: { provider: 'local', id: track.id } })).items.map(item => item.id), [recording.id])
+  assert.equal((await client.preferencesTargets({ entityId: recording.id, trackContext: { provider: 'local', id: 'forged' } })).total, 0)
+  const banned = await client.preferencesSet({ entityId: recording.id, token: detail.token, state: 'ban' }, 1001)
+  await assert.rejects(client.preferencesSet({ entityId: recording.id, token: detail.token, state: 'favorite' }, 1002), { code: 'STALE_REVISION' })
+  const after = await client.preferencesPlaylistsLoad()
+  assert.deepEqual(after!.data.find(item => item.id === 'system')!.trackIds, [])
+  assert.deepEqual(after!.data.find(item => item.id === 'ordinary'), ordinary)
+  assert.deepEqual(await client.preferencesAutomaticEligibility([track]), [false])
+  assert.deepEqual(await client.preferencesTrackStates([track]), ['ban'])
+  const history = await client.preferencesHistory({ entityId: recording.id, limit: 1 })
+  assert.equal(history.items[0].state, 'ban')
+  await tick()
+  assert.equal(revisions.at(-1), banned.token.preferencesRevision)
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited
+  client = workerClient(json, children, undefined, undefined, undefined, revision => revisions.push(revision))
+  assert.deepEqual(await client.preferencesDetail(recording.id), banned)
+  assert.deepEqual(await client.preferencesPlaylistsLoad(), after)
+  assert.deepEqual(await client.preferencesHistory({ entityId: recording.id, limit: 1 }), history)
+  assert.deepEqual(await client.preferencesAutomaticEligibility([track]), [false])
+  assert.deepEqual(await client.preferencesPlaylistsMigrationReceipt(), receipt)
+})
+
+test('personal ratings, clearing history and revision events survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'ratings-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'rated', source: 'local', filePath: join(root, 'rated.flac'),
+    title: 'Rated', artist: 'Artist', album: 'Album' }]))
+  let client = workerClient(json, children, undefined, undefined, revision => revisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const recording = (await client.catalogQuery({ kind: 'recording' })).items[0]
+  const album = (await client.catalogQuery({ kind: 'release' })).items[0]
+  const detail = await client.ratingsDetail(recording.id)
+  assert.deepEqual((await client.ratingsTargets({ entityId: recording.id })).items.map(item => item.id), [recording.id])
+  assert.deepEqual((await client.ratingsTargets({ entityId: recording.id, trackContext: { provider: 'local', id: 'rated' } })).items.map(item => item.id), [recording.id])
+  assert.equal((await client.ratingsTargets({ entityId: recording.id, trackContext: { provider: 'local', id: 'not-this-source' } })).total, 0)
+  const set = await client.ratingsSet({ entityId: recording.id, token: detail.token, steps: 7 }, 1000)
+  await assert.rejects(client.ratingsSet({ entityId: recording.id, token: detail.token, steps: 9 }, 1001), { code: 'STALE_REVISION' })
+  const cleared = await client.ratingsSet({ entityId: recording.id, token: set.token, steps: null }, 1002)
+  assert.equal((await client.ratingsDetail(album.id)).value, null)
+  const history = await client.ratingsHistory({ entityId: recording.id, limit: 1 })
+  assert.equal(history.total, 2)
+  assert.equal(history.items[0].steps, null)
+  await tick()
+  assert.equal(revisions.at(-1), cleared.token.ratingsRevision)
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited
+  client = workerClient(json, children, undefined, undefined, revision => revisions.push(revision))
+  assert.deepEqual(await client.ratingsDetail(recording.id), cleared)
+  assert.deepEqual(await client.ratingsHistory({ entityId: recording.id, limit: 1 }), history)
+  const old = await client.ratingsHistory({ entityId: recording.id, limit: 1, offset: 1 })
+  assert.equal(old.items[0].steps, 7)
+})
+
+test('album version reads and private unified playback fences use the real database worker transport', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'album-version-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'),
+    title: 'One', artist: 'Artist', album: 'Album', genre: 'Jazz' }]))
+  const client = workerClient(json, children)
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  while ((await client.genresAdvance()).pending) { /* production bounded projection */ }
+  const release = (await client.catalogQuery({ kind: 'release' })).items[0]
+  const page = await client.albumsBrowse({ entityId: release.id, limit: 1 })
+  const scope = { entityId: release.id, releaseId: page.currentRelease!.id, token: page.token }
+  const sources = await client.albumsSources(scope)
+  assert.equal(sources.total, 1)
+  const sourceId = sources.items[0].sourceId
+  assert.equal(await client.albumsContainsSource(scope, sourceId), true)
+  assert.equal(await client.albumsContainsSource(scope, 'not-a-source'), false)
+  const privatePage = await client.catalogPlaybackSources({ sourceId, revision: page.token.catalogRevision })
+  assert.equal(privatePage.items[0].inLibrary, true)
+  assert.equal(privatePage.items[0].track?.filePath, join(root, 'one.flac'))
+  const classification = await client.genresBrowse({ kind: 'recording', source: 'local' })
+  const frozen = { entityId: classification.items[0].id, source: 'local', token: classification.token }
+  assert.deepEqual(await client.genresContainsSources(frozen, [sourceId]), [sourceId])
+  const artist = (await client.catalogQuery({ kind: 'artist' })).items[0]
+  await client.metadataOverride({ entityId: artist.id, revision: 0, mode: 'value', value: 'Updated introduction', language: 'en' }, Date.now())
+  await assert.rejects(client.albumsSources(scope), { code: 'STALE_REVISION' })
+  await assert.rejects(client.albumsContainsSource(scope, sourceId), { code: 'STALE_REVISION' })
+  await assert.rejects(client.genresContainsSources(frozen, [sourceId]), { code: 'STALE_REVISION' })
+})
+
+test('genre evidence, mappings and explicit empty overrides survive database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'genre-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = []
+  const metadataRevisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'genre-one', source: 'local', filePath: join(root, 'one.flac'),
+    title: 'One', artist: 'Artist', album: 'Album', genre: 'Jazz;Local oddity' }]))
+  let client = workerClient(json, children, undefined, revision => metadataRevisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  while ((await client.genresAdvance(2, ';')).pending) { /* bounded index batches */ }
+  const recording = (await client.catalogQuery({ kind: 'recording' })).items[0]
+  const source = (await client.catalogSources({ entityId: recording.id })).items[0]
+  const target = { kind: 'source' as const, id: source.id }
+  const raw = await client.genresEvidence({ target })
+  assert.deepEqual(raw.selection.genreIds, ['genre:jazz'])
+  const unmapped = await client.genresUnmapped({ provider: 'local' })
+  assert.equal(unmapped.items[0].value, 'Local oddity')
+  const mapped = await client.genresMap({ provider: 'local', value: 'Local oddity',
+    genreId: 'genre:folk', revision: unmapped.revision })
+  await client.genresOverride({ target, revision: mapped.revision, genreIds: [] })
+  const browse = await client.genresBrowse({ kind: 'recording', limit: 20 })
+  assert.equal(browse.total, 1)
+  assert.equal(browse.items[0].genres.total, 0)
+  const members = await client.genresMembers({ entityId: recording.id, token: browse.token })
+  assert.equal(members.items[0].sourceId, source.id)
+  const facets = await client.genresFacets({ kind: 'recording', dimension: 'format', token: browse.token })
+  assert.equal(facets.token.contextKey, browse.token.contextKey)
+  const before = await client.genresEvidence({ target })
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy()
+  await exited
+  client = workerClient(json, children, undefined, revision => metadataRevisions.push(revision))
+  const after = await client.genresEvidence({ target })
+  await assert.rejects(client.genresBrowse({ kind: 'recording', token: browse.token }), { code: 'STALE_REVISION' })
+  const recovered = await client.genresBrowse({ kind: 'recording' })
+  assert.equal(recovered.items[0].id, recording.id)
+  assert.equal(recovered.items[0].genres.total, 0)
+  assert.deepEqual(after, before)
+  assert.deepEqual(after.selection.override, [])
+  assert.deepEqual(after.items[0].raw, { format: 'text', value: 'Jazz;Local oddity', separators: ';' })
+  const reset = await client.genresOverride({ target, revision: after.revision, genreIds: null })
+  assert.deepEqual(new Set(reset.genreIds), new Set(['genre:jazz', 'genre:folk']))
+  // The old string filter still matches exact split values, not stable IDs.
+  assert.equal((await client.queryTracks({ genre: 'Jazz', genreSeparators: ';' })).total, 1)
+  assert.equal((await client.queryTracks({ genre: 'genre:jazz', genreSeparators: ';' })).total, 0)
+  const fresh = await client.genresBrowse({ kind: 'recording' })
+  const artist = (await client.catalogQuery({ kind: 'artist' })).items[0]
+  const detail = await client.metadataDetail(artist.id, 'en')
+  await client.metadataOverride({ entityId: artist.id, revision: detail.revision, language: 'en', mode: 'value', value: 'Updated introduction' }, Date.now())
+  await client.getMetadata()
+  await tick()
+  assert.ok(metadataRevisions.at(-1)! > fresh.token.metadataRevision)
+  await assert.rejects(client.genresBrowse({ kind: 'recording', token: fresh.token }), { code: 'STALE_REVISION' })
+})
+
+test('catalog references, identity inbox and candidate decisions survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'catalog-reference-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  let client = workerClient(json, children)
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const page = await client.getTracksByIds(['one', 'one'])
+  const albums = await client.queryCollections('albums')
+  const context = { type: 'collection' as const, collection: 'albums' as const, id: albums.items[0].id }
+  const entities = await client.catalogQuery({ kind: 'release', context })
+  assert.equal(page.catalog!.tracks.length, 2)
+  assert.deepEqual(page.catalog!.tracks[0], page.catalog!.tracks[1])
+  assert.equal(albums.items[0].catalog!.items.find(i => i.kind === 'release')!.id, entities.items[0].id)
+  const artistId = page.catalog!.tracks[0]!.items.find(i => i.kind === 'artist')!.id
+  await client.metadataOverride({ entityId: artistId, revision: 0, mode: 'value', value: 'Stored introduction', language: 'en' }, 1000)
+  const [candidate] = await client.identificationPublish(await client.identificationInput(artistId), [{
+    provider: 'ncm', name: 'Artist', summary: '', matcherVersion: 'manual',
+    references: [{ provider: 'ncm', kind: 'artist', idType: 'native', value: '42' }],
+    evidence: { origin: 'search', matches: ['name'], missing: ['manual'], conflicts: [], incomplete: true, provenance: 'fixture' }
+  }], 1001)
+  const inbox = await client.identificationInbox({ kind: 'artist', offset: 0, limit: 20 })
+  assert.equal(inbox.total, 1)
+  assert.equal(inbox.items[0].entity.id, artistId)
+  assert.equal(inbox.items[0].candidateCount, 1)
+  assert.deepEqual(inbox.items[0].sample, { provider: 'local', title: 'One', album: 'Album' })
+  assert.equal((await client.metadataJobs({})).total, 0)
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited
+  client = workerClient(json, children)
+  assert.deepEqual(await client.getTracksByIds(['one','one']), page)
+  assert.deepEqual(await client.queryCollections('albums'), albums)
+  assert.deepEqual(await client.catalogQuery({ kind: 'release', context, revision: entities.revision }), entities)
+  assert.equal((await client.metadataDetail(artistId, 'en', { sourceProvider: 'local' })).introduction!.value, 'Stored introduction')
+  assert.deepEqual(await client.identificationInbox({ kind: 'artist', offset: 0, limit: 20 }), inbox)
+  const review = { candidateId: candidate.id, revision: candidate.revision, linkRevision: candidate.linkRevision }
+  assert.equal((await client.identificationPreview(review)).canConfirm, true)
+  const confirmed = await client.identificationDecide({ ...review, decision: 'confirm' }, 1002)
+  assert.equal((await client.identificationInbox({})).total, 0)
+  const secondExit = once(children.at(-1)!, 'exit')
+  client.destroy(); await secondExit
+  client = workerClient(json, children)
+  assert.deepEqual(await client.identificationDetail(artistId), confirmed)
+  const confirmedInbox = await client.identificationInbox({ state: 'confirmed', limit: 1 })
+  assert.equal(confirmedInbox.total, 1)
+  assert.equal(confirmedInbox.items[0].entity.id, artistId)
+  assert.equal((await client.metadataDetail(artistId, 'en', { sourceProvider: 'local' })).introduction!.value, 'Stored introduction')
+  assert.deepEqual(await client.getTracksByIds(['one','one']), page)
+  const [task] = await client.identificationEnqueue({ entityId: artistId, batchId: 'task-center',
+    providers: [{ id: 'platform.ncm', matcherVersion: 'fixture' }] }, 3000)
+  await client.identificationEnqueue({ entityId: artistId, batchId: 'other-consumer',
+    providers: [{ id: 'platform.ncm', matcherVersion: 'fixture' }] }, 3000)
+  const taskPage = await client.metadataTasks({ filter: 'active', batchId: 'task-center', limit: 1 })
+  assert.equal(taskPage.items[0].id, task.id)
+  assert.equal(taskPage.items[0].entity!.id, artistId)
+  assert.equal(taskPage.items[0].demandCount, 2)
+  const demandPage = await client.metadataTaskDemands({ jobId: task.id, limit: 1 })
+  assert.equal(demandPage.total, 2)
+  const taskExit = once(children.at(-1)!, 'exit')
+  client.destroy(); await taskExit
+  client = workerClient(json, children)
+  assert.deepEqual(await client.metadataTasks({ filter: 'active', batchId: 'task-center', limit: 1 }), taskPage)
+  assert.deepEqual(await client.metadataTaskDemands({ jobId: task.id, limit: 1 }), demandPage)
+  assert.equal(await client.metadataCancel(task.id, 'task-center', 3001), true)
+  assert.equal((await client.metadataTasks({ filter: 'active' })).items[0].demandCount, 1)
+  assert.equal((await client.metadataTaskDemands({ jobId: task.id })).items[0].batchId, 'other-consumer')
+  await client.metadataCancel(task.id, 'other-consumer', 3002)
+  const history = await client.identificationHistory({ entityId: artistId, limit: 1 })
+  const historySeq = history.items[0].seq
+  await client.identificationDetach(confirmed.link!.id, confirmed.link!.revision, 3003)
+  const detached = await client.identificationHistory({ entityId: artistId, limit: 1 })
+  const restore = { entityId: artistId, historySeq, inputVersion: detached.inputVersion,
+    linkRevision: detached.current.link!.revision }
+  assert.equal((await client.identificationRestorePreview(restore)).canRestore, true)
+  const historyExit = once(children.at(-1)!, 'exit')
+  client.destroy(); await historyExit
+  client = workerClient(json, children)
+  assert.equal((await client.identificationRestorePreview(restore)).canRestore, true)
+  await client.identificationRestore(restore, 3004)
+  await assert.rejects(client.identificationRestore(restore, 3005), /变化/)
+  assert.equal((await client.identificationHistory({ entityId: artistId })).items[0].restoredFrom, historySeq)
+  const enrichment = await client.metadataEnqueue({ entityId: artistId, type: 'enrich', provider: 'platform.ncm',
+    providerContext: 'worker-fixture', language: 'en', batchId: 'enrich' }, 4000)
+  const enrichmentWork = (await client.metadataClaim(4000))!
+  assert.equal(enrichmentWork.job.id, enrichment.id)
+  await client.metadataFinish(enrichmentWork, { state: 'failed', reason: 'fixture' }, 4001)
+  const sources = await client.metadataTaskSources({ jobId: enrichment.id, limit: 1 })
+  assert.equal(sources.items[0].entity.id, artistId)
+  const source = sources.items[0]
+  const requery = { demandId: 'worker-requery', batchId: 'enrich', items: [{ jobId: enrichment.id,
+    generation: enrichment.generation, entityId: artistId, inputVersion: source.inputVersion,
+    linkRevision: source.linkRevision }] }
+  await client.metadataRequery(requery, { 'platform.ncm': 'worker-fixture' }, 4002)
+  const requeryExit = once(children.at(-1)!, 'exit')
+  client.destroy(); await requeryExit
+  client = workerClient(json, children)
+  assert.equal((await client.identificationDetail(artistId)).references[0].value, '42')
+  assert.equal((await client.metadataTasks({ batchId: 'worker-requery' })).total, 1)
+  const recovered = (await client.metadataClaim(4003))!
+  assert.equal(recovered.job.id, enrichment.id)
+  assert.equal(recovered.job.generation, enrichment.generation + 1)
+  assert.equal(recovered.job.requeryConsumers![0].entityId, artistId)
+  await client.metadataFinish(recovered, { state: 'completed', outcome: 'not_found', facts: [] }, 4004)
+  assert.equal((await client.metadataDetail(artistId, 'en', { sourceProvider: 'local' })).introduction!.value, 'Stored introduction')
+})
+
+function workerClient(json: string, children: ChildProcess[], changed?: (revision: number) => void, classificationMetadataChanged?: (revision: number) => void, ratingsChanged?: (revision: number) => void, preferencesChanged?: (revision: number) => void, tagsChanged?: DatabaseServiceOptions['tagsChanged'], focusChanged?: DatabaseServiceOptions['focusChanged'], explorationChanged?: DatabaseServiceOptions['explorationChanged']) {
   return new LibraryDatabaseServiceClient({
     changed,
+    classificationMetadataChanged,
+    ratingsChanged,
+    preferencesChanged,
+    tagsChanged,
+    focusChanged,
+    explorationChanged,
     serviceEntry: fileURLToPath(new URL('./libraryDatabaseService.ts', import.meta.url)),
     libraryFilePath: json,
     fork: (entry) => {
@@ -46,6 +498,176 @@ function workerClient(json: string, children: ChildProcess[], changed?: (revisio
     }
   })
 }
+
+test('legacy query publication, input fences, results and cancellation survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'legacy-query-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album', duration: 200 }]))
+  let client = workerClient(json, children)
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  const replace = async () => {
+    client.destroy(); await once(children.at(-1)!, 'exit'); client = workerClient(json, children)
+    await client.getMetadata()
+    await client.metadataRecover(1001)
+  }
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance(200)
+  const collections = await client.queryCollections('albums', { limit: 200 }), contentRevision = collections.revision
+  const pluginId = 'com.example.rhine', id = 'legacy-album', collectionId = collections.items[0].id
+  const album: MusicAlbum = { id, title: 'Album', artist: 'Artist', year: 2000, genreId: 'unknown', rawGenres: [],
+    folder: '', producers: [], offline: false, tracks: [{ id: 'one', albumId: id, title: 'One', artist: 'Artist', duration: 200,
+      audioUrl: '', relativePath: '', browserPlayable: true, format: 'flac' }] }
+  const seed = { album, collectionId, contentRevision, force: false }
+  await client.legacyMusicBegin(pluginId, 7, { albums: {} }, 0, contentRevision)
+  await client.legacyMusicPublish(pluginId, 7, contentRevision)
+  await client.legacyMusicBatchBegin({ id: 'incomplete', pluginId, operation: 'credits', expected: 2, documentRevision: 7 }, 1000)
+  await client.legacyMusicBatchStage('incomplete', [seed], 1000)
+  await client.legacyMusicBatchBegin({ id: 'published', pluginId, operation: 'introductions', expected: 1, documentRevision: 7 }, 1000)
+  await client.legacyMusicBatchStage('published', [seed], 1000)
+  await client.legacyMusicBatchPublish('published', 1000)
+  const lost = (await client.metadataClaim(1000))!
+  assert.equal(lost.legacy!.collectionId, collectionId)
+  assert.equal('album' in (await client.metadataJobs({ jobId: lost.job.id })).items[0].legacy!, false)
+  await replace()
+  assert.equal((await client.legacyMusicTaskStatus(pluginId, 'credits'))!.state, 'abandoned')
+  assert.equal((await client.legacyMusicTaskStatus(pluginId, 'introductions'))!.running, true)
+  const result = { state: 'legacy_result' as const, taskState: 'completed' as const, outcome: 'matched' as const, reason: null,
+    lookup: { operation: 'introductions' as const, value: { status: 'matched' as const, description: 'Durable introduction',
+      descriptionSource: { name: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Album' } } } }
+  assert.equal(await client.metadataFinish(lost, result, 1002), false)
+  const resumed = (await client.metadataClaim(1002))!
+  assert.ok(resumed.job.generation > lost.job.generation)
+  assert.equal(await client.metadataFinish(resumed, result, 1003), true)
+  await client.legacyMusicBatchBegin({ id: 'cancel', pluginId, operation: 'credits', expected: 1, documentRevision: 8 }, 1004)
+  await client.legacyMusicBatchStage('cancel', [seed], 1004)
+  await client.legacyMusicBatchPublish('cancel', 1004)
+  await client.legacyMusicBatchCancel(pluginId, 'credits', 1005)
+  await replace()
+  assert.equal((await client.legacyMusicTaskStatus(pluginId, 'introductions'))!.updated, 1)
+  assert.equal((await client.legacyMusicTaskStatus(pluginId, 'credits'))!.cancelled, 1)
+  assert.equal(((await client.legacyMusicRead(pluginId))!.value.albums as Record<string, MusicAlbum>)[id].description, 'Durable introduction')
+  assert.deepEqual((await client.legacyMusicHistory(pluginId)).revisions, [8, 7])
+})
+
+test('legacy source migration, publication, history and bindings survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'legacy-music-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], changes: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  let client = workerClient(json, children, revision => changes.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance(200)
+  const collections = await client.queryCollections('albums', { limit: 200 }), revision = collections.revision
+  const before = [...changes], pluginId = 'com.example.rhine'
+  const staged = { pluginId, sourceRevision: 7, contentRevision: revision, entries: [
+    { id: 'old-one', value: { description: 'Imported', localNote: 'Keep' }, collectionId: collections.items[0].id }
+  ] }
+  await client.legacyMusicBegin(pluginId, 7, { proofs: { keep: 'edition' }, albums: {} }, 2, revision)
+  await client.legacyMusicStage(staged)
+  client.destroy(); await once(children.at(-1)!, 'exit'); client = workerClient(json, children, revision => changes.push(revision))
+  assert.equal(await client.legacyMusicRead(pluginId), null)
+  assert.equal((await client.legacyMusicStatus(pluginId))?.staged, 1)
+  await client.legacyMusicStage(staged)
+  await client.legacyMusicStage({ ...staged, entries: [{ id: 'orphan', value: { localNote: 'Orphan' } }] })
+  await client.legacyMusicPublish(pluginId, 7, revision)
+  const original = (await client.legacyMusicRead(pluginId))!
+  const inventory = await client.legacyMusicInventory(pluginId)
+  const entityId = inventory.items.find(item => item.id === 'old-one')!.bindings[0].entityId
+  assert.equal((await client.metadataDetail(entityId, 'en')).introduction?.value, 'Imported')
+  await client.legacyMusicEdit(pluginId, { revision: 7, value: { albums: {} } })
+  client.destroy(); await once(children.at(-1)!, 'exit'); client = workerClient(json, children, revision => changes.push(revision))
+  assert.equal((await client.legacyMusicRead(pluginId))?.revision, 8)
+  assert.deepEqual(await client.legacyMusicHistory(pluginId), { total: 1, revisions: [7] })
+  assert.deepEqual(await client.legacyMusicHistoryRead(pluginId, 7), original)
+  assert.deepEqual((await client.legacyMusicRestore(pluginId, 7, 8)).value, original.value)
+  assert.deepEqual(await client.legacyMusicInventory(pluginId), inventory)
+  await tick()
+  // Each replacement announces its initial revision. None of these metadata
+  // mutations may advance that content revision.
+  assert.deepEqual(new Set(changes), new Set(before))
+})
+
+test('automatic identification outbox, history cursor and demands survive real database worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(),'identification-schedule-worker-')), json=join(root,'library.json')
+  const children: ChildProcess[]=[]
+  writeFileSync(json,JSON.stringify([{id:'one',source:'local',filePath:join(root,'one.flac'),title:'One',artist:'Artist'}]))
+  let client=workerClient(json,children)
+  t.after(async()=>{
+    client.destroy()
+    for(const child of children) if(child.exitCode===null&&child.signalCode===null) await once(child,'exit')
+    rmSync(root,{recursive:true,force:true})
+  })
+  await client.getMetadata(); await client.catalogAdvance(200)
+  const request={enabled:true,newImports:true,history:true,providers:[{id:'platform.ncm',matcherVersion:'fixture-v1',kinds:['artist' as const]}]}
+  await client.identificationSchedule(request,1000)
+  const progress=await client.identificationScheduleStatus(), work=(await client.metadataClaim(1000))!
+  assert.equal(work.automatic!.origin,'new')
+  client.destroy(); await once(children[0],'exit'); client=workerClient(json,children)
+  await client.metadataRecover(2000)
+  assert.deepEqual(await client.identificationScheduleStatus(),progress)
+  assert.equal((await client.metadataJobs({})).total,1)
+  const resumed=(await client.metadataClaim(2000))!
+  assert.equal(resumed.job.id,work.job.id)
+  assert.equal(resumed.job.generation,work.job.generation+1)
+  assert.equal(await client.metadataFinish(work,{state:'identified',proposals:[],incomplete:false,reasons:[]},2001,request),false)
+  assert.equal(await client.metadataFinish(resumed,{state:'identified',proposals:[],incomplete:false,reasons:[]},2002,request),true)
+  await client.identificationSchedule(request,2003)
+  assert.equal((await client.metadataJobs({})).items[0].state,'completed')
+})
+
+test('confirmed-identity enrichment outbox and language/context demands survive real worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'automatic-enrichment-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist' }]))
+  let client = workerClient(json, children)
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  const replace = async () => {
+    client.destroy(); await once(children.at(-1)!, 'exit'); client = workerClient(json, children)
+    await client.getMetadata(); await client.metadataRecover(2000)
+  }
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance(200)
+  const entityId = (await client.catalogQuery({ kind: 'artist' })).items[0].id
+  const request = { enabled: true, newImports: true, history: false, providers: [], enrichment: {
+    language: 'zh-Hant' as const, providers: [{ id: 'platform.ncm', context: 'account-a', kinds: ['artist' as const] }]
+  } }
+  await client.identificationSchedule(request, 1000)
+  const [candidate] = await client.identificationPublish(await client.identificationInput(entityId), [{
+    provider: 'ncm', name: 'Artist', summary: '', matcherVersion: 'manual',
+    references: [{ provider: 'ncm', kind: 'artist', idType: 'native', value: '42' }],
+    evidence: { origin: 'search', matches: [], missing: ['manual'], conflicts: [], incomplete: true, provenance: 'fixture' }
+  }], 1001)
+  await client.identificationDecide({ candidateId: candidate.id, revision: candidate.revision, linkRevision: candidate.linkRevision, decision: 'confirm' }, 1002)
+  await replace()
+  assert.equal((await client.identificationScheduleStatus()).pending, 1)
+  await client.identificationSchedule(request, 2000)
+  const work = (await client.metadataClaim(2000))!
+  assert.equal(work.job.language, 'zh-Hant')
+  assert.equal(work.job.providerContext, 'account-a')
+  assert.equal(work.automatic!.origin, 'new')
+  await replace()
+  const resumed = (await client.metadataClaim(2000))!
+  assert.equal(resumed.job.id, work.job.id)
+  assert.equal(resumed.job.generation, work.job.generation + 1)
+  const result = { state: 'completed' as const, outcome: 'not_found' as const, facts: [] }
+  assert.equal(await client.metadataFinish(work, result, 2001, request), false)
+  assert.equal(await client.metadataFinish(resumed, result, 2001, request), true)
+  await client.identificationSchedule(request, 2002)
+  assert.equal((await client.metadataJobs({})).total, 1)
+  assert.equal((await client.metadataJobs({})).items[0].state, 'completed')
+})
 
 test('catalog worker transport persists derived identity without publishing library content changes', async t => {
   const root = mkdtempSync(join(tmpdir(), 'catalog-worker-')), json = join(root, 'library.json')
@@ -72,6 +694,218 @@ test('catalog worker transport persists derived identity without publishing libr
   await client.catalogProjectVersions({ version: 1, tracks: { versions: [], families: [] }, albums: { versions: [], families: [] } }, 0)
   await tick()
   assert.deepEqual(revisions, before)
+})
+
+test('entity metadata traverses the real database worker, survives its replacement and never publishes scan revisions', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'metadata-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  let client = workerClient(json, children, revision => revisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata(); await client.catalogAdvance(200)
+  const artist = (await client.catalogQuery({ kind: 'artist' })).items[0].id
+  const before = [...revisions], mbid = 'a223958d-5c56-4b2c-a30a-87e357bc121b'
+  const job = await client.metadataEnqueue({ type: 'resolve', entityId: artist, mbid, language: 'en', batchId: 'durable' }, 1000)
+  assert.equal(await client.metadataNextAttempt(), 1000)
+  await client.metadataClaim(1000)
+  client.destroy()
+  await once(children[0], 'exit')
+  client = workerClient(json, children, revision => revisions.push(revision))
+  await client.metadataRecover(2000)
+  const work = (await client.metadataClaim(2000))!
+  assert.equal(work.job.generation, job.generation + 1)
+  await client.metadataFinish(work, { state: 'needs_review', candidate: { mbid, name: 'Artist', type: 'Person', disambiguation: '', wikidataId: null, evidence: { provider: 'musicbrainz', externalId: mbid, url: `https://musicbrainz.org/artist/${mbid}`, license: 'CC0-1.0', licenseUrl: 'https://creativecommons.org/publicdomain/zero/1.0/', attribution: 'MusicBrainz contributors', revision: '', retrievedAt: 2000 } } }, 2001)
+  const candidate = (await client.identificationCandidates({ entityId: artist })).items[0]
+  assert.equal(candidate.references[0].value, mbid)
+  const review = { candidateId: candidate.id, revision: candidate.revision, linkRevision: candidate.linkRevision }
+  assert.equal((await client.identificationPreview(review)).canConfirm, true)
+  const detail = await client.metadataDecide({ jobId: job.id, generation: work.job.generation, decision: 'confirm' }, 2002)
+  assert.ok(detail.targetId)
+  assert.equal((await client.identificationDetail(artist)).link!.targetId, detail.targetId)
+  await client.metadataOverride({ entityId: artist, revision: detail.revision, mode: 'value', value: 'User introduction', language: 'en' }, 2003)
+  const enriched = await client.metadataEnqueue({ type: 'enrich', entityId: artist, language: 'en', batchId: 'one' }, 2004)
+  assert.equal(await client.metadataCancel(enriched.id, 'one', 2005), true)
+  const saved = await client.metadataDetail(artist, 'en')
+  assert.equal(saved.introduction!.value, 'User introduction')
+  await client.metadataDetach(artist, saved.revision, 2006)
+  const input = await client.identificationInput(artist)
+  const [native] = await client.identificationPublish(input, [{ provider: 'ncm', name: 'Artist', summary: '', matcherVersion: 'fixture-v1',
+    references: [{ provider: 'ncm', kind: 'artist', idType: 'native', value: '42' }],
+    evidence: { origin: 'search', matches: [], missing: [], conflicts: [], incomplete: false, provenance: 'fixture' } }], 2007)
+  const nativeDetail = await client.identificationDecide({ candidateId: native.id, revision: native.revision, linkRevision: native.linkRevision, decision: 'confirm' }, 2008)
+  await client.identificationDetach(nativeDetail.link!.id, nativeDetail.link!.revision, 2009)
+  assert.equal((await client.identificationDetail(artist)).link!.state, 'detached')
+  assert.equal((await client.metadataJobs({ jobId: enriched.id })).items[0].state, 'cancelled')
+  await tick()
+  // Worker replacement emits its initial current revision once, no new revision.
+  assert.ok(revisions.every(revision => before.includes(revision)))
+})
+
+test('generic identification demands and input fences traverse a replaced real database worker', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'identification-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  let client = workerClient(json, children, revision => revisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata(); await client.catalogAdvance(200)
+  const entityId = (await client.catalogQuery({ kind: 'artist' })).items[0].id
+  const before = [...revisions]
+  const request = { entityId, batchId: 'one', providers: [{ id: 'platform.ncm', matcherVersion: 'fixture-v1' }] }
+  const [job] = await client.identificationEnqueue(request, 1000)
+  await client.identificationEnqueue({ ...request, batchId: 'two' }, 1000)
+  const old = (await client.metadataClaim(1000))!
+  assert.equal(old.identification!.entityId, entityId)
+  client.destroy(); await once(children[0], 'exit')
+  client = workerClient(json, children, revision => revisions.push(revision))
+  await client.metadataRecover(2000)
+  const work = (await client.metadataClaim(2000))!
+  assert.equal(work.job.generation, job.generation + 1)
+  const result = { state: 'identified' as const, incomplete: true, reasons: ['first_page_only'], proposals: [{
+    provider: 'ncm', name: 'Artist', summary: '', matcherVersion: 'fixture-v1',
+    references: [{ provider: 'ncm', kind: 'artist' as const, idType: 'native', value: '42' }],
+    evidence: { origin: 'search' as const, matches: ['name'], missing: ['verified_identity'], conflicts: [], incomplete: true, provenance: 'fixture' }
+  }] }
+  assert.equal(await client.metadataFinish(old, result, 2001), false)
+  assert.equal(await client.metadataFinish(work, result, 2001), true)
+  const saved = (await client.metadataJobs({ entityId })).items[0]
+  assert.equal(saved.state, 'needs_review'); assert.equal(saved.identification!.incomplete, true)
+  const candidate = (await client.identificationCandidates({ entityId })).items[0]
+  assert.equal(candidate.id, saved.identification!.candidateIds[0])
+  assert.equal((await client.identificationDetail(entityId)).link!.state, 'unresolved')
+  assert.equal(await client.metadataCancel(job.id, 'one', 2002), true)
+  assert.equal((await client.metadataJobs({ entityId })).items[0].state, 'needs_review')
+  await client.identificationDecide({ candidateId: candidate.id, revision: candidate.revision, linkRevision: candidate.linkRevision, decision: 'confirm' }, 2003)
+  assert.equal((await client.metadataJobs({ entityId })).items[0].state, 'completed')
+  assert.ok(revisions.every(revision => before.includes(revision)))
+})
+
+test('verified native identification commits automatically across the real worker and preserves detach after replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'auto-identification-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, '[]')
+  let client = workerClient(json, children, revision => revisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  let batch = await client.catalogSync({ kind: 'begin', revision: 1 })
+  batch = await client.catalogSync({ kind: 'append', ...batch, tracks: [{
+    id: 'ncm:7', source: 'ncm', filePath: '', fileName: '', title: 'Song', artist: 'Artist', album: 'Album',
+    artists: [{ id: 42, name: 'Artist' }], duration: 200, size: 0, cover: null, lyrics: null
+  }] })
+  await client.catalogSync({ kind: 'commit', ...batch })
+  const entityId = (await client.catalogQuery({ kind: 'artist', source: 'ncm' })).items[0].id, before = [...revisions]
+  const request = { entityId, batchId: 'native', providers: [{ id: 'platform.ncm', matcherVersion: 'native-test' }] }
+  const [job] = await client.identificationEnqueue(request, 1000), work = (await client.metadataClaim(1000))!
+  const ref = { provider: 'ncm', kind: 'artist' as const, idType: 'native', value: '42' }
+  const result = { state: 'identified' as const, incomplete: false, reasons: [], proposals: [{
+    provider: 'ncm', name: 'Artist', summary: '', matcherVersion: 'native-test', references: [ref],
+    evidence: { origin: 'provider_native' as const, matches: ['provider_native_id'], missing: [], conflicts: [], incomplete: false,
+      provenance: 'indexed_source', verification: { method: 'provider_native' as const, reference: ref,
+        sourceIds: work.identification!.sources!.map(s => s.sourceId) } }
+  }] }
+  assert.equal(await client.metadataFinish(work, result, 1001), true)
+  const original = await client.identificationDetail(entityId)
+  assert.deepEqual(original.link!.confirmation, { mode: 'automatic', rule: 'provider_native' })
+  client.destroy(); await once(children[0], 'exit'); client = workerClient(json, children, revision => revisions.push(revision))
+  await client.metadataRecover(2000)
+  assert.equal(await client.metadataClaim(2000), null)
+  assert.deepEqual(await client.identificationDetail(entityId), original)
+  assert.equal((await client.metadataJobs({ jobId: job.id })).items[0].state, 'completed')
+  await client.identificationDetach(original.link!.id, original.link!.revision, 2001)
+  await client.identificationEnqueue({ ...request, batchId: 'after-detach' }, 2002)
+  const after = (await client.metadataClaim(2002))!
+  assert.equal(await client.metadataFinish(after, result, 2003), true)
+  assert.equal((await client.identificationDetail(entityId)).link!.state, 'detached')
+  assert.equal((await client.identificationCandidates({ entityId })).items[0].suppressed, true)
+  assert.ok(revisions.every(revision => before.includes(revision)))
+})
+
+test('real NCM album evidence crosses the database worker and survives replacement without changing local playback', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'platform-album-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], requests: string[] = []
+  const ncm = await import(new URL('../../../resources/plugins/ncm-provider/index.mjs', import.meta.url).href)
+  let handlers!: {
+    searchAlbums(query: string, limit: number, offset: number, context: { signal: AbortSignal }): Promise<unknown>
+    fetchAlbumIdentity(id: string, context: { signal: AbortSignal }): Promise<unknown>
+  }
+  const songs = [1, 2].map(n => ({ id: 100 + n, name: `Song ${n}`, ar: [{ id: 7, name: 'Artist' }],
+    al: { id: 42, name: 'Album' }, cd: '01', no: n, dt: 200250 }))
+  await ncm.activate({
+    twilight: { providers: { register: async (p: typeof handlers) => { handlers = p } }, internal: { ncm: {
+      request: async (path: string, cookie: string, options: { signal: AbortSignal }) => {
+        assert.ok(!cookie); options.signal.throwIfAborted()
+        const url = new URL(path, 'https://fixture.invalid'); requests.push(url.pathname)
+        if (url.pathname === '/cloudsearch') return { code: 200, result: {
+          albums: [{ id: 42, name: 'Album', size: 2, artists: [{ id: 7, name: 'Artist' }] }], albumCount: 1
+        } }
+        if (url.pathname === '/album') return { code: 200, album: {
+          id: 42, name: 'Album', size: 2, artists: [{ id: 7, name: 'Artist' }]
+        }, songs }
+        throw new Error(`unexpected endpoint ${url.pathname}`)
+      }
+    } } },
+    settings: { get: async (key?: string) => key ? undefined : {}, set: async () => {}, delete: async () => {} },
+    logger: { debug() {}, info() {}, warn() {}, error() {} }
+  })
+  writeFileSync(json, JSON.stringify(songs.map((s, i) => ({
+    id: `local-${i + 1}`, source: 'local', filePath: join(root, `${i + 1}.flac`), fileName: `${i + 1}.flac`,
+    title: s.name, artist: 'Artist', album: 'Album', duration: 200, size: 0, cover: null, lyrics: null,
+    identityTags: { version: 1, scope: 'audio_file', title: { value: s.name, origin: 'audio_tag' },
+      artists: { value: ['Artist'], origin: 'audio_tag' }, album: { value: 'Album', origin: 'audio_tag' },
+      durationSeconds: { value: 200.25, origin: 'audio_tag' }, trackNumber: { value: s.no, origin: 'audio_tag' },
+      trackTotal: { value: 2, origin: 'audio_tag' }, discNumber: { value: 1, origin: 'audio_tag' },
+      discTotal: { value: 1, origin: 'audio_tag' } }
+  }))))
+  let client = workerClient(json, children)
+  t.after(async () => {
+    ncm.deactivate(); client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata(); await client.catalogAdvance(200)
+  const entityId = (await client.catalogQuery({ kind: 'release' })).items[0].id
+  const p = new PlatformIdentificationProvider('ncm', {
+    inventory: () => [{ id: 'ncm', enabled: true, configuration: '1', supportedMethods: ['searchAlbums', 'fetchAlbumIdentity'] }],
+    search: async (_id, method, query, limit, offset, signal) => {
+      assert.equal(method, 'searchAlbums'); return handlers.searchAlbums(query, limit, offset, { signal })
+    },
+    albumIdentity: async (_id, id, signal) => handlers.fetchAlbumIdentity(id, { signal })
+  })
+  const request = { entityId, batchId: 'platform-album', providers: [{ id: p.id, matcherVersion: p.matcherVersion }] }
+  await client.identificationEnqueue(request, 1000)
+  const work = (await client.metadataClaim(1000))!
+  const result = await p.recall(work.identification!, new AbortController().signal)
+  assert.equal(await client.metadataFinish(work, { state: 'identified', ...result }, 1001), true)
+  const original = await client.identificationDetail(entityId)
+  assert.deepEqual(original.link!.confirmation, { mode: 'automatic', rule: 'platform_album_tracks' })
+  const memberResults = (await client.metadataJobs({ entityId })).items[0].identification!.members!
+  assert.equal(memberResults.length, 4)
+  assert.ok(memberResults.every(m => m.state === 'confirmed'))
+  const memberDetails = await Promise.all(memberResults.map(m => client.identificationDetail(m.entityId)))
+  assert.ok(memberDetails.every(d => d.link!.confirmation?.rule === 'album_member'))
+  assert.deepEqual(memberDetails.filter(d => d.kind === 'recording').map(d => d.references[0].value).sort(), ['ncm:101', 'ncm:102'])
+  assert.ok(memberDetails.filter(d => d.kind === 'artist').every(d => d.references[0].value === '7'))
+  assert.deepEqual(requests, ['/cloudsearch', '/album'])
+  client.destroy(); await once(children[0], 'exit'); client = workerClient(json, children)
+  await client.metadataRecover(2000)
+  assert.equal(await client.metadataClaim(2000), null)
+  assert.deepEqual(await client.identificationDetail(entityId), original)
+  assert.deepEqual((await client.metadataJobs({ entityId })).items[0].identification!.members, memberResults)
+  for (const detail of memberDetails) assert.deepEqual(await client.identificationDetail(detail.entityId), detail)
+  const input = await client.identificationInput(entityId)
+  assert.ok(input.sources!.every(s => s.provider === 'local' && s.tags.durationSeconds!.value === 200.25))
+  assert.deepEqual((await client.getTracksByIds(['local-1', 'local-2'])).tracks.map(t => t.source), ['local', 'local'])
 })
 
 test('database worker publishes content changes without position polling or duplicate read notifications', async (t) => {
@@ -1635,3 +2469,158 @@ test(
     assert.equal((await restarted.getTracksByIds(['one'])).tracks[0].title, 'Persistent patch')
   }
 )
+
+
+test('portable favorites reattachment publishes one real worker preference event and an immediately readable view', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'portable-favorite-events-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = [], refreshes: Array<ReturnType<LibraryDatabaseServiceClient['preferencesPlaylistsLoad']>> = []
+  const tracks = [1, 2].map(n => ({ id: `portable-${n}`, source: 'local' as const, filePath: join(root, `${n}.flac`), fileName: `${n}.flac`, title: `Track ${n}`, artist: 'Artist', album: `Album ${n}`, duration: 200, size: 0, cover: null, lyrics: null }))
+  const document = { version: 2 as const, revision: 0, folders: [], exclusions: [], tracks }
+  const seed = new LibraryDatabase(':memory:')
+  let music: ReturnType<LibraryDatabase['musicBackupExport']>
+  try {
+    seed.replaceDocument(document)
+    while (seed.catalogStatus().localPending) seed.catalogAdvance()
+    seed.preferencesPlaylistsMigrate({ version: 2, revision: 1, savedAt: '2026-01-01', data: [{ id: 'favorites', name: 'Favorites', isDefault: true, createdAt: '2026-01-01', trackIds: [tracks[0].id], trackSnapshots: { [tracks[0].id]: tracks[0] } }] }, 100)
+    const source = seed.sql.prepare('SELECT id FROM catalog_sources WHERE track_id=?').get(tracks[1].id)!
+    seed.sql.prepare("INSERT INTO music_genre_overrides VALUES('source',?,'[\"genre:jazz\"]')").run(String(source.id))
+    music = seed.musicBackupExport(4 * 1024 * 1024)
+  } finally { seed.close() }
+  writeFileSync(json, '[]')
+  const client = workerClient(json, children, undefined, undefined, undefined, revision => {
+    revisions.push(revision)
+    refreshes.push(client.preferencesPlaylistsLoad())
+  })
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  await client.musicBackupRestore({ restoreId: 'offline-events', conflict: 'use-backup', music, expectedRevision: await client.musicBackupRevision(), now: 200 })
+  const before = await client.musicBackupRevision()
+  await Promise.all(refreshes)
+  const eventCount = revisions.length, refreshCount = refreshes.length
+  assert.ok((await client.preferencesPlaylistsLoad())!.data[0].trackIds[0].startsWith('offline_favorite_'))
+  // This exact source has portable genres but no favorite placeholder to replace.
+  await client.replaceDocument({ ...document, tracks: [tracks[1]] })
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  assert.equal((await client.musicBackupRevision()).preferences, before.preferences)
+  assert.equal(revisions.length, eventCount)
+  const recording = (await client.catalogQuery({ kind: 'recording' })).items[0], source = (await client.catalogSources({ entityId: recording.id })).items[0]
+  assert.deepEqual((await client.genresEvidence({ target: { kind: 'source', id: source.id } })).selection.override, ['genre:jazz'])
+  await client.replaceDocument(document)
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const after = await client.musicBackupRevision()
+  const views = await Promise.all(refreshes.slice(refreshCount))
+  assert.equal(after.preferences, before.preferences + 1)
+  assert.deepEqual(revisions.slice(eventCount), [after.preferences])
+  assert.equal(views.length, 1)
+  assert.deepEqual(views[0]!.data[0].trackIds, [tracks[0].id], 'the event consumer sees the real source without restart or manual refresh')
+  // The receipt remains portable, but no current placeholder means no new event.
+  await client.replaceDocument(document)
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  assert.equal((await client.musicBackupRevision()).preferences, after.preferences)
+  assert.deepEqual(revisions.slice(eventCount), [after.preferences])
+})
+
+test('personal music backup crosses the real worker and restores clears once across an unknown ACK and restart', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'personal-music-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'backup-one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  let client = workerClient(json, children)
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const recording = (await client.catalogQuery({ kind: 'recording' })).items[0]
+  let detail = await client.ratingsDetail(recording.id)
+  detail = await client.ratingsSet({ entityId: recording.id, token: detail.token, steps: 8 }, 1000)
+  await client.ratingsSet({ entityId: recording.id, token: detail.token, steps: null }, 1001)
+  const tag = await client.tagsCreate({ name: 'Portable', tagsRevision: (await client.tagsState()).tagsRevision }, 1002)
+  await client.tagsMemberSet({ tagId: tag.tag.id, entityId: recording.id, present: true, membersRevision: tag.tag.membersRevision }, 1003)
+  const revision = await client.musicBackupRevision()
+  const data = await client.musicBackupExport(4 * 1024 * 1024)
+  assert.deepEqual(await client.musicBackupRevision(), revision, 'export changes no personal revision')
+  assert.equal(data.version, 1)
+  assert.equal(data.records.ratings[0].steps, null)
+  detail = await client.ratingsDetail(recording.id)
+  await client.ratingsSet({ entityId: recording.id, token: detail.token, steps: 2 }, 1004)
+  const preview = await client.musicBackupPreview(data)
+  assert.ok(preview.conflicts > 0)
+  assert.equal(preview.missingSources, 0)
+  const bundle = { restoreId: 'portable-worker-once', conflict: 'use-backup' as const, expectedRevision: preview.revision, music: data, now: 1005 }
+  await client.musicBackupRestore(bundle)
+  assert.equal((await client.ratingsDetail(recording.id)).value?.steps, null)
+  assert.equal((await client.tagsMembers({ tagId: tag.tag.id })).items[0].id, recording.id)
+  detail = await client.ratingsDetail(recording.id)
+  await client.ratingsSet({ entityId: recording.id, token: detail.token, steps: 9 }, 1006)
+  const historyCount = (await client.ratingsHistory({ entityId: recording.id })).total
+  await client.musicBackupRestore(bundle)
+  assert.equal((await client.ratingsDetail(recording.id)).value?.steps, 9, 'replay never overwrites later edits')
+  const exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited
+  client = workerClient(json, children)
+  await client.getMetadata()
+  await client.musicBackupRestore(bundle)
+  assert.equal((await client.ratingsDetail(recording.id)).value?.steps, 9)
+  assert.equal((await client.ratingsHistory({ entityId: recording.id })).total, historyCount)
+  assert.equal((await client.queryTracks({ limit: 10 })).total, 1)
+})
+
+test('exploration exact lookup, roles, work and manual ordered performances survive real worker replacement', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'exploration-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], states: import('../../shared/musicExploration.ts').MusicExplorationState[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'explore-one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  const open = () => workerClient(json, children, undefined, undefined, undefined, undefined, undefined, undefined, state => states.push(state))
+  let client = open()
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  while ((await client.catalogStatus()).localPending) await client.catalogAdvance()
+  const recording = (await client.catalogQuery({ kind: 'recording' })).items[0]
+  const recordingRef = { provider: 'musicbrainz', kind: 'recording' as const, idType: 'mbid', value: '00000000-0000-0000-0000-000000000001' }
+  const personRef = { ...recordingRef, kind: 'artist' as const, value: '00000000-0000-0000-0000-000000000020' }
+  const workRef = { ...recordingRef, kind: 'work' as const, value: '00000000-0000-0000-0000-000000000010' }
+  const [candidate] = await client.identificationPublish(await client.identificationInput(recording.id), [{
+    provider: 'musicbrainz', name: 'One', summary: '', matcherVersion: 'manual', references: [recordingRef],
+    evidence: { origin: 'search', matches: ['name'], missing: ['manual'], conflicts: [], incomplete: true, provenance: 'fixture' }
+  }], 1000)
+  await client.identificationDecide({ candidateId: candidate.id, revision: candidate.revision, linkRevision: candidate.linkRevision, decision: 'confirm' }, 1001)
+  const attribution = { provider: 'musicbrainz', externalId: personRef.value, url: 'https://musicbrainz.org', license: 'CC0', licenseUrl: '', attribution: 'MusicBrainz', revision: '1', retrievedAt: 1000 }
+  await client.explorationIngest({ owner: recordingRef, provider: 'musicbrainz-details', setKey: 'worker-test',
+    nodes: [{ reference: recordingRef, title: 'One' }, { reference: personRef, title: 'Exact person' }, { reference: workRef, title: 'Real work' }],
+    relations: [{ from: workRef, to: recordingRef, kind: 'work_recording', order: 0, attribution },
+      { from: personRef, to: workRef, kind: 'credit', order: 0, attribution, credit: { personRef, name: 'Exact person', targetRef: workRef, role: 'composer', rawRole: 'composer', relationTypeId: 'composer-id', direction: 'backward', order: 0, joinphrase: '', attributes: [], begin: '', end: '', attribution } }], truncated: false })
+  const person = (await client.explorationLookup({ reference: personRef })).entity!, work = (await client.explorationLookup({ reference: workRef })).entity!
+  assert.equal(person.inLibrary, true); assert.equal(work.inLibrary, true)
+  const participation = await client.explorationParticipation({ entityId: person.id, roles: ['composer'] })
+  assert.equal(participation.total, 1); assert.equal(participation.items[0].entity.id, work.id)
+  assert.equal((await client.explorationParticipation({ entityId: person.id, roles: ['producer'] })).total, 0)
+  assert.equal((await client.explorationRelations({ entityId: work.id, direction: 'outgoing' })).items[0].entity.id, recording.id)
+  assert.equal((await client.explorationQuery({ kinds: ['performance'] })).total, 0)
+  const performance = await client.explorationPerformanceSave({ title: 'Confirmed concert', workId: work.id, recordingIds: [recording.id, recording.id], revision: (await client.explorationState()).revision })
+  await assert.rejects(client.explorationQuery({ token: participation.token }), { code: 'STALE_REVISION' })
+  const movements = await client.explorationRelations({ entityId: performance.entity!.id, direction: 'outgoing', relations: ['performance_recording'] })
+  assert.deepEqual(movements.items.map(x => x.relation.order), [0, 1]); assert.equal(movements.items[0].entity.id, recording.id)
+  await tick(); assert.deepEqual(states.at(-1), await client.explorationState())
+  const before = await client.explorationState(), exited = once(children.at(-1)!, 'exit')
+  client.destroy(); await exited; client = open(); await client.getMetadata()
+  assert.deepEqual(await client.explorationState(), before)
+  assert.equal((await client.explorationLookup({ reference: workRef })).entity!.id, work.id)
+  assert.equal((await client.explorationDetail({ entityId: performance.entity!.id })).entity!.title, 'Confirmed concert')
+  assert.equal((await client.explorationRelations({ entityId: performance.entity!.id, direction: 'outgoing', relations: ['performance_recording'] })).total, 2)
+  await assert.rejects(client.explorationPerformanceDelete({ id: performance.entity!.id, revision: before.revision - 1 }), { code: 'STALE_REVISION' })
+  assert.equal(await client.explorationPerformanceDelete({ id: performance.entity!.id, revision: before.revision }), true)
+  assert.equal((await client.explorationDetail({ entityId: performance.entity!.id })).entity!.inLibrary, false)
+  assert.equal((await client.explorationQuery({ kinds: ['performance'] })).total, 0)
+  assert.equal((await client.queryTracks({ limit: 10 })).total, 1)
+  assert.equal(JSON.stringify(participation).includes(root.replaceAll('\\', '\\\\')), false)
+  assert.deepEqual(await client.explorationBackfillCredits(1), { processed: 0, pending: false })
+})

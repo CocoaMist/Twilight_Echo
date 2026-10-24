@@ -23,6 +23,7 @@ import {
   LISTENING_STATS_RETRY_DELAY_MS,
   LISTENING_STATS_MAX_TRACKS,
   buildLastPlayedByTrackId,
+  buildLastPlayedBySource,
   cloneTrack,
   compactListeningStatsForPersistence,
   compareMostListenedTracks,
@@ -92,7 +93,7 @@ export class CoreStatisticsService {
     return this.revision
   }
   historySnapshot(): ReadonlyMap<string, number> {
-    return buildLastPlayedByTrackId(this.stats)
+    return new Map([...buildLastPlayedByTrackId(this.stats), ...buildLastPlayedBySource(this.stats)])
   }
   exportData(): ListeningStats {
     return structuredClone(this.stats)
