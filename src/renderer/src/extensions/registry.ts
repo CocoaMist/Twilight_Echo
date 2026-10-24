@@ -11,6 +11,7 @@ export type UiContributionKind =
   | 'settingsPanel'
   | 'localSidebarItem'
   | 'streamingHome'
+  | 'titleBarButton'
 
 export interface UiContribution {
   experience?: InstalledExperience
@@ -45,14 +46,15 @@ interface PluginExtensionContribution {
 
 const uiContributions = ref<UiContribution[]>([])
 const themeContributions = ref<ThemeContribution[]>([])
+const experienceContributions = ref<InstalledExperience[]>([])
 const syncInFlight = ref<Promise<void> | null>(null)
 let listenerSetup = false
-
 export function useExtensionRegistry(options: { listen?: boolean } = {}) {
   if (options.listen !== false) setupExtensionChangeListener()
   return {
     uiContributions: computed(() => uiContributions.value),
     themeContributions: computed(() => themeContributions.value),
+    experiences: computed(() => experienceContributions.value),
     syncExtensions
   }
 }
@@ -81,8 +83,13 @@ export async function syncExtensions(): Promise<void> {
 
   syncInFlight.value = (async () => {
     const entries = await core.query('extensions.list', {})
+    const experiences = await core.query('extensions.experiences', {})
+    experienceContributions.value = experiences as InstalledExperience[]
     const nextUi: UiContribution[] = []
-    for (const experience of await core.query('extensions.experiences', {})) {
+    for (const experience of experiences) {
+      // Panel experiences are opened from their plugin's titlebar button in a
+      // flyout; they intentionally stay out of sidebar navigation.
+      if (experience.launch === 'panel') continue
       nextUi.push({
         pluginId: experience.pluginId,
         id: experience.id,

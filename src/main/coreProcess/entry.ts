@@ -4,7 +4,7 @@ import { CoreCastService } from '../../core/cast/service.ts'
 import { CoreNcmCloudTransferService } from '../../core/ncm/cloudTransferService.ts'
 import { RemoteHttpServer } from '../../core/cast/httpServer.ts'
 import { createCastBackend } from '../../core/cast/backend.ts'
-import { stat, access } from 'node:fs/promises'
+import { stat, access, readFile } from 'node:fs/promises'
 import { CoreLibraryMaintenance } from '../../core/library/maintenanceService.ts'
 import { CoreGenresService } from '../../core/library/genresService.ts'
 import { CoreMusicRatingsService } from '../../core/library/ratingsService.ts'
@@ -28,7 +28,7 @@ import { createSettingsImportEffects } from '../../core/settings/importEffects.t
 import { ThemeLibraryRepository } from '../../core/persistence/themeLibraryRepository.ts'
 import { createDefaultThemeLibraryDocument } from '../../shared/theme.ts'
 import { effectiveAutoMixMode } from '../../shared/twilightAutoMix.ts'
-import { CORE_SPECIALIZED_SETTINGS } from '../../shared/coreSettings.ts'
+import { CORE_SPECIALIZED_SETTINGS, type CoreSettingsEdit } from '../../shared/coreSettings.ts'
 import { CorePlaylistService } from '../../core/playlists/service.ts'
 import { CoreBookmarksService } from '../../core/bookmarks/service.ts'
 import { CoreLyricsService } from '../../core/lyrics/service.ts'
@@ -99,6 +99,9 @@ import { createNcmApiRuntime } from '../ncm/runtimeAdapter.ts'
 import { createNcmCache } from '../../core/providers/ncmCache.ts'
 import { join, dirname, basename } from 'node:path'
 import { resolve } from 'node:path'
+import type { LibraryQuery } from '../../shared/libraryDatabase.ts'
+import type { CorePlaylistEdit } from '../../shared/corePlaylists.ts'
+import type { TrackData } from '../../shared/track.ts'
 import { CoreSettingsRepository } from '../../core/persistence/settingsRepository.ts'
 import { CoreAudioOutputService } from '../../core/audio/outputService.ts'
 import { CoreDspService } from '../../core/audio/dspService.ts'
@@ -1208,8 +1211,87 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
           ),
         stop: () => control(() => playback.stop()),
         next: () => control(() => playback.navigate(1)),
-        previous: () => control(() => playback.navigate(-1))
-      }
+        previous: () => control(() => playback.navigate(-1)),
+        playTracks: (ids, startIndex) =>
+          control(() =>
+            playback.fromQuery({ ids, sort: 'insertion' }, ids[startIndex] ?? ids[0], true)
+          ),
+        setVolume: (volume) => control(() => playback.setVolume(volume)),
+        seek: (position) => control(() => playback.seek(position)),
+        setPlayMode: (mode) => control(() => playback.setMode(mode))
+      },
+      libraryApi: {
+        queryTracks: (query) => database!.queryTracks(query as LibraryQuery),
+        getTracksByIds: (ids) => database!.getTracksByIds(ids),
+        patchTracks: (patches) => database!.patchTracks(patches),
+        getCover: async (trackId) => {
+          const page = await database!.getTracksByIds([trackId])
+          const cover = (page.tracks?.[0] as { cover?: unknown } | undefined)?.cover
+          if (typeof cover !== 'string' || !cover) return null
+          if (cover.startsWith('data:')) {
+            return cover.length <= 8 * 1024 * 1024 ? cover : null
+          }
+          if (!cover.startsWith('cover://')) return null
+          const fileName = cover.slice('cover://'.length).split(/[?#]/, 1)[0]
+          if (
+            !fileName ||
+            fileName.includes('/') ||
+            fileName.includes('\\') ||
+            fileName.includes('..') ||
+            !/\.(jpe?g|png|webp|gif)$/i.test(fileName)
+          )
+            return null
+          try {
+            const bytes = await readFile(join(config.coverCacheDir ?? '', fileName))
+            if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) return null
+            const type = /\.png$/i.test(fileName)
+              ? 'image/png'
+              : /\.webp$/i.test(fileName)
+                ? 'image/webp'
+                : /\.gif$/i.test(fileName)
+                    ? 'image/gif'
+                    : 'image/jpeg'
+            return `data:${type};base64,${bytes.toString('base64')}`
+          } catch {
+            return null
+          }
+        },
+        listPlaylists: async () =>
+          playlists.list(0, 200, playlists.getRevision()) as unknown,
+        createPlaylist: async (name) => {
+          const created = await playlists.edit(playlists.getRevision(), {
+            kind: 'create',
+            name
+          } as CorePlaylistEdit)
+          return created
+        },
+        addTracksToPlaylist: async (playlistId, trackIds) => {
+          const page = await database!.getTracksByIds(trackIds)
+          const tracks = (page.tracks ?? []) as unknown as TrackData[]
+          if (!tracks.length) throw new Error('曲目不存在或已不可用')
+          return playlists.edit(playlists.getRevision(), {
+            kind: 'add',
+            id: playlistId,
+            tracks
+          } as CorePlaylistEdit)
+        },
+        removeTracksFromPlaylist: async (playlistId, trackIds) =>
+          playlists.edit(playlists.getRevision(), {
+            kind: 'remove',
+            id: playlistId,
+            ids: trackIds
+          } as CorePlaylistEdit)
+      },
+      appSettingsApi: {
+        get: () => settings.read(),
+        update: async (patch) => {
+          await settingsService.editOwned(patch as CoreSettingsEdit['patch'])
+          return settings.read()
+        }
+      },
+      hostCaptureApi: {
+        captureScreenshot: () => platform!.call('host.captureScreenshot', {})
+      },
     })
   }
   const importProviders = () =>

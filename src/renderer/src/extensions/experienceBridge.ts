@@ -648,6 +648,14 @@ export function createExperienceBridge(
       case 'plugins.uninstall':
         await corePlugins.uninstall(String(args.id))
         return null
+      case 'plugin.request': {
+        if (args.request === undefined || args.request === null || typeof args.request !== 'object' || Array.isArray(args.request))
+          throw new Error('Invalid plugin request')
+        return core.command('extensions.pluginRequest', {
+          id: experience.pluginId,
+          request: args.request
+        })
+      }
       case 'host.panel':
         if (args.name === 'plugins') assertExperienceMethod('plugins.list', experience.permissions)
         openPanel(String(args.name))
@@ -719,6 +727,13 @@ export function createExperienceBridge(
     }
   }
   port.start()
+  // Live events pushed by the plugin's own background code (utility process)
+  // arrive as core 'plugin-experience' messages and are forwarded to the iframe.
+  const unsubscribePluginEvents = core.subscribe((message) => {
+    if (disposed || message.kind !== 'plugin-experience' || message.pluginId !== experience.pluginId)
+      return
+    send('plugin', { event: message.event, value: message.value })
+  })
   if (experience.permissions.includes('player:observe')) {
     stops.push(
       watch(
@@ -754,6 +769,7 @@ export function createExperienceBridge(
   return () => {
     disposed = true
     clearInterval(timer)
+    unsubscribePluginEvents()
     stops.forEach((stop) => stop())
     port.close()
   }

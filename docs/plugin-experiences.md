@@ -15,6 +15,11 @@ plugins continue to use their original lifecycle. An experience requires type
 }
 ```
 
+An experience entry may set `"launch": "panel"` to keep it out of sidebar
+navigation. Panel experiences are opened by the plugin's `titleBarButton`
+contribution and mounted by the host in a right-side flyout overlay instead of
+the main content area.
+
 A declarative experience needs no `main` process. Entry files must exist inside
 the installed package. Assets are served from the entry directory through
 `plugin-ui://<plugin-id>/<version>/...`, only while that installed version is
@@ -79,6 +84,26 @@ The existing network permission is still required for queries. Explicit source
 prohibitions apply, but the new automatic-identification opt-in is not a new
 prerequisite for these manual operations. Implementation and acceptance gaps are recorded in
 [M2.4](D:/Project/Twilight_Echo/docs/unified-music-library-m2.4.md).
+
+## Talking to the plugin's own background code (`plugin.request`)
+
+The experience sandbox has no network access. A plugin that also ships a
+`main` entry (utility process) can expose background logic to its iframe:
+
+- The iframe calls the bridge method `plugin.request` with a JSON request
+  (requires the plugin's `network` permission; payload ≤ 256 KiB).
+- The host relays it over the plugin service port into the plugin process,
+  where handlers registered via `context.twilight.experience.onRequest(handler)`
+  answer it (long timeouts: agent loops may legitimately stream for minutes).
+- The plugin pushes live events back with
+  `context.twilight.experience.emit(event, value)`; they travel to the mounted
+  iframe as bridge events `{ event: 'plugin', value: { event, value } }` and
+  are dropped while the iframe is unmounted, so background state should stay
+  authoritative in the plugin process and be re-synced via `plugin.request`.
+
+API keys, proxy-aware fetch and screenshot/cover bytes all belong in the
+plugin process behind this relay; they never need to enter the renderer.
+
 
 The host owns the playback engine and queue. Opening, closing or replacing a
 view must not implicitly stop playback. The sample Rhine experience fetches

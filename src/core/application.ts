@@ -190,6 +190,22 @@ export class CoreApplication {
         client.send({ kind: 'plugin-notice', epoch: this.dependencies.epoch, notice })
     }
   }
+  private readonly pluginExperienceEvent = (event: {
+    pluginId: string
+    event: string
+    value: unknown
+  }) => {
+    for (const client of this.clients.values()) {
+      if (client.identity.permissions.includes('extensions:execute'))
+        client.send({
+          kind: 'plugin-experience',
+          epoch: this.dependencies.epoch,
+          pluginId: event.pluginId,
+          event: event.event,
+          value: event.value
+        })
+    }
+  }
   private migrationRequired = true
   private active = 0
   private initialized = false
@@ -201,6 +217,7 @@ export class CoreApplication {
     this.dependencies = dependencies
     dependencies.plugins?.on('changed', this.pluginsChanged)
     dependencies.plugins?.on('notice', this.pluginNotice)
+    dependencies.plugins?.on('experience-event', this.pluginExperienceEvent)
   }
   async initialize(): Promise<void> {
     this.migrationRequired = !(await this.dependencies.state.coreStateStatus()).complete
@@ -1714,6 +1731,16 @@ export class CoreApplication {
           case 'extensions.music': return experiences.music(request.payload.id, request.payload.operation, request.payload.args)
           case 'extensions.export': return experiences.export(request.payload.id, request.payload.name, request.payload.content)
         }
+        break
+      }
+      case 'extensions.pluginRequest': {
+        if (!this.dependencies.plugins) throw failure('FAILED', 'Plugin runtime unavailable')
+        const { id, request: pluginRequest } = request.payload
+        if (typeof id !== 'string' || !id || id.length > 128)
+          throw failure('INVALID_REQUEST', 'Invalid plugin id')
+        if (pluginRequest === undefined || typeof pluginRequest !== 'object')
+          throw failure('INVALID_REQUEST', 'Invalid plugin request')
+        return this.dependencies.plugins.callExperienceRequest(id, pluginRequest)
       }
       case 'plugins.installSource':
         if (!this.dependencies.plugins) throw failure('FAILED', 'Plugin runtime unavailable')
@@ -2010,6 +2037,7 @@ export class CoreApplication {
     this.shuttingDown = true
     this.dependencies.plugins?.off('changed', this.pluginsChanged)
     this.dependencies.plugins?.off('notice', this.pluginNotice)
+    this.dependencies.plugins?.off('experience-event', this.pluginExperienceEvent)
     await this.dependencies.queueSubmission?.shutdown()
     await this.dependencies.playlistSubmission?.shutdown()
     await this.dependencies.presentation?.shutdown()

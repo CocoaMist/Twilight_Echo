@@ -331,6 +331,8 @@ export type TwilightUiContributionKind =
   | 'settingsPanel'
   | 'localSidebarItem'
   | 'streamingHome'
+  /** Titlebar icon button rendered next to the appearance entry. Host-owned flyout target. */
+  | 'titleBarButton'
 
 export interface TwilightUiContribution {
   id: string
@@ -401,6 +403,12 @@ export type PluginHostRequest =
       requestId: string
       reason: string
     }
+  | {
+      /** Delivers an experience iframe RPC to the owning plugin's background code. */
+      kind: 'experience-request'
+      requestId: string
+      request: unknown
+    }
 
 export type PluginHostResponse =
   | {
@@ -437,10 +445,13 @@ export type PluginHostResponse =
         | 'overlay'
         | 'library'
         | 'settings'
+        | 'appSettings'
+        | 'host'
       method:
         | 'get'
         | 'set'
         | 'delete'
+        | 'update'
         | 'getPlaybackInfo'
         | 'play'
         | 'pause'
@@ -448,11 +459,24 @@ export type PluginHostResponse =
         | 'stop'
         | 'next'
         | 'previous'
+        | 'playTracks'
+        | 'setVolume'
+        | 'seek'
+        | 'setPlayMode'
         | 'register'
         | 'registerUi'
         | 'registerTheme'
         | 'notify'
         | 'importPlaylists'
+        | 'queryTracks'
+        | 'getTracksByIds'
+        | 'patchTracks'
+        | 'getCover'
+        | 'listPlaylists'
+        | 'createPlaylist'
+        | 'addTracksToPlaylist'
+        | 'removeTracksFromPlaylist'
+        | 'captureScreenshot'
         | 'ncmRequest'
         | 'ncmOfficialLogin'
         | 'ncmGetCachedSong'
@@ -495,6 +519,24 @@ export type PluginHostResponse =
       requestId: string
       ok: false
       error: string
+    }
+  | {
+      kind: 'experience-result'
+      requestId: string
+      ok: true
+      value: unknown
+    }
+  | {
+      kind: 'experience-result'
+      requestId: string
+      ok: false
+      error: string
+    }
+  | {
+      /** Pushed to the host so it can forward live events to the experience iframe. */
+      kind: 'experience-event'
+      event: string
+      value: unknown
     }
 
 export type PluginHostApiResult =

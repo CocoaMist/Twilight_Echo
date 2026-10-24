@@ -3,6 +3,12 @@ export interface PluginExperience {
   name: string
   entry: string
   bridgeVersion: 1 | 2
+  /**
+   * How the host surfaces this experience. `page` (default) lists it in the
+   * sidebar navigation; `panel` hides it from navigation — the plugin opens it
+   * through its own `titleBarButton` and the host mounts it in a flyout.
+   */
+  launch?: 'page' | 'panel'
 }
 
 export interface InstalledExperience extends PluginExperience {
@@ -75,8 +81,16 @@ export function normalizeExperiences(manifest: {
       throw new Error('Experience entry must be a packaged HTML file')
     if (bridgeVersion !== 1 && bridgeVersion !== 2)
       throw new Error('Unsupported experience bridge version')
+    if (value.launch !== undefined && value.launch !== 'page' && value.launch !== 'panel')
+      throw new Error('Experience launch must be page or panel')
     ids.add(id)
-    return { id, name: name.trim(), entry, bridgeVersion }
+    return {
+      id,
+      name: name.trim(),
+      entry,
+      bridgeVersion,
+      ...(value.launch === 'panel' ? { launch: 'panel' as const } : {})
+    }
   })
 }
 
@@ -190,7 +204,13 @@ export const EXPERIENCE_METHOD_PERMISSIONS: Record<string, string> = {
   'window.mini': 'ui:inject',
   'window.tray': 'ui:inject',
   'window.lyrics': 'ui:inject',
-  'host.panel': 'app:settings'
+  'host.panel': 'app:settings',
+  /**
+   * Calls the owning plugin's background code (utility process) with a JSON
+   * request. The iframe itself has no network access, so this relay is how an
+   * experience reaches proxy-aware fetch, API keys and durable background work.
+   */
+  'plugin.request': 'network'
 }
 
 /** Imports have a larger explicit envelope; ordinary commands remain small. */

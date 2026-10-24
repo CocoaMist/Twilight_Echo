@@ -131,7 +131,8 @@ export function normalizeUiContribution(
       'playerBarButton',
       'settingsPanel',
       'localSidebarItem',
-      'streamingHome'
+      'streamingHome',
+      'titleBarButton'
     ].includes(kind)
   ) {
     throw new Error('未知 UI 扩展点')

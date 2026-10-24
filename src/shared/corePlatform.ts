@@ -95,6 +95,7 @@ export interface CorePlatformOperations extends CoreModelPackPlatformOperations 
   'overlay.hide': { input: { pluginId: string }; output: void }
   'overlay.isOwner': { input: { pluginId: string }; output: boolean }
   'overlay.configure': { input: { pluginId: string; config: unknown }; output: DynamicIslandConfig }
+  'host.captureScreenshot': { input: Record<string, never>; output: string | null }
   'paths.authorizeAudio': { input: { source: string }; output: string }
   'paths.prepareAudio': { input: { source: string }; output: string | null }
   'paths.authorizeLibraryDirectory': { input: { path: string }; output: string }
@@ -448,6 +449,7 @@ export function validCorePlatformPayload(request: CorePlatformRequest): boolean 
     case 'playlists.chooseImportFile':
     case 'lyrics.chooseImportFile':
     case 'lyrics.chooseExportFile':
+    case 'host.captureScreenshot':
       return Object.keys(payload).length === 0
     case 'overlay.show':
     case 'overlay.hide':

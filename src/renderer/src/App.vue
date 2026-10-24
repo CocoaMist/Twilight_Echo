@@ -108,6 +108,7 @@ import {
   type StreamingMetadataNavigationRequest
 } from './utils/streamingArtistResolution'
 const AppNoticeHost = defineAsyncComponent(() => import('./components/AppNoticeHost.vue'))
+const ExperienceFlyout = defineAsyncComponent(() => import('./components/ExperienceFlyout.vue'))
 import LiquidGlassDefs from './components/LiquidGlassDefs.vue'
 import { resolvePlayerBarPresentation } from '../../shared/playerBar.ts'
 import type { AppBackgroundPage } from './types/settings'
@@ -1254,6 +1255,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     ref="noticeHostRef"
     @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
   />
+  <ExperienceFlyout />
   <BackgroundAppearanceCustomizer v-if="appearanceEditorOpen" />
 </template>
 

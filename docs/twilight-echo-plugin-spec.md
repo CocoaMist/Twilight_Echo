@@ -144,6 +144,23 @@ primary 损坏时从 backup 恢复并向用户显示告警；两份都损坏时�
 - 未声明 `library:write` 时网关拒绝调用。该命名空间是可选能力，旧宿主不提供，
   插件调用前必须自行探测。
 
+API v4 宿主为带后台逻辑的插件（AI 助手、批量整理工具等）追加以下命名空间，全部在
+主进程侧按 manifest 权限**强制校验**，参数有白名单与大小上限（详见
+`@twilight-echo/plugin-api` typings 与 PLUGIN_README §7.1）：
+
+- `twilight.library` 扩展：`queryTracks(query)` / `getTracksByIds(ids)`（`library:read`；
+  返回含 bpm、响度增益与格式的完整曲目 payload）、`patchTracks(patches)`（`library:write`；
+  乐观锁 `expectedVersion`，可写字段白名单：title/artist/album/genre/releaseDate/lyrics/bpm 等）、
+  `getCover(trackId)`（封面 data URL）、`listPlaylists / createPlaylist / addTracksToPlaylist /
+  removeTracksFromPlaylist`（`library:write`）。
+- `twilight.player` 扩展：`playTracks(ids, startIndex)` / `setVolume(0..1)` / `seek(s)` /
+  `setPlayMode(mode)`（`player:control`）。
+- `twilight.appSettings.get() / update(patch)`（`app:settings`；与设置页同一写入通道）。
+- `twilight.host.captureScreenshot()`（`app:settings`；主窗口压缩 JPEG data URL，null 表示不可用）。
+- `twilight.experience.onRequest(handler)` / `emit(event, value)`：experience iframe 经桥方法
+  `plugin.request`（需 `network` 权限）把 JSON 请求送进本插件后台代码，事件反向推送。
+  中继请求超时 15 分钟（长任务合法），iframe 卸载期间事件丢弃——后台状态必须以插件进程为准。
+
 汽水音乐 provider 可使用可选的 `twilight.qishuiAuth` 宿主桥接完成二维码登录。
 该桥接只返回二维码 DTO、上游轮询 JSON 与登录会话 Cookie，并由主进程托管动态安全参数和
 隐藏验证窗口；插件不能通过它访问 Electron、执行任意 JavaScript 或请求任意地址。只有

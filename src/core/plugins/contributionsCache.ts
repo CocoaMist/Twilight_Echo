@@ -36,7 +36,8 @@ const UI_CONTRIBUTION_KINDS = new Set([
   'playerBarButton',
   'settingsPanel',
   'localSidebarItem',
-  'streamingHome'
+  'streamingHome',
+  'titleBarButton'
 ])
 
 export interface PluginContributionsSnapshot {

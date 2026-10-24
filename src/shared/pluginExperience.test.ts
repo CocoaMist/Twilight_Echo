@@ -108,3 +108,25 @@ test('service operations require their own grants, not just UI access', () => {
     assert.doesNotThrow(() => assertExperienceMethod(method, [permission]))
   }
 })
+
+test('plugin.request relays experience calls to plugin background code under network grant', () => {
+  assert.throws(() => assertExperienceMethod('plugin.request', ['ui:inject']))
+  assert.throws(() => assertExperienceMethod('plugin.request', ['library:read']))
+  assert.doesNotThrow(() => assertExperienceMethod('plugin.request', ['network']))
+})
+
+test('panel launch keeps an experience out of sidebar navigation', () => {
+  const panelManifest = {
+    ...manifest,
+    contributes: { experiences: [{ ...experience, launch: 'panel' }] }
+  }
+  const normalized = normalizeExperiences(panelManifest)
+  assert.equal(normalized[0].launch, 'panel')
+  assert.equal(normalizeExperiences(manifest)[0].launch, undefined)
+  assert.throws(() =>
+    normalizeExperiences({
+      ...manifest,
+      contributes: { experiences: [{ ...experience, launch: 'flyout' }] }
+    })
+  )
+})

@@ -431,6 +431,7 @@ export interface CoreCommands extends CorePlaylistCommands, CoreRemoteCommands {
   'extensions.document.edit': { id: string; update: CoreExperienceDocument }
   'extensions.music': { id: string; operation: import('./pluginExperience.ts').ExperienceMusicOperation; args: Record<string, unknown> }
   'extensions.export': { id: string; name: string; content: string }
+  'extensions.pluginRequest': { id: string; request: unknown }
   'extensions.execute': { command: string; args: unknown[] }
   'statistics.clear': CoreStatisticsClear
   'scan.start': { mode: LocalLibraryScanMode; roots?: string[]; restoreExcluded?: boolean }
@@ -752,6 +753,9 @@ export interface CoreStateEvent {
 }
 export type CoreClientMessage = CoreResponse | CoreStateEvent | CoreVisualizationEvent | {
   kind: 'plugin-notice'; epoch: string; notice: PluginNotice
+} | {
+  /** Live event pushed by a plugin's background code to its mounted experience iframe. */
+  kind: 'plugin-experience'; epoch: string; pluginId: string; event: string; value: unknown
 }
 
 const OPERATIONS: Record<
@@ -1047,6 +1051,7 @@ const OPERATIONS: Record<
   'extensions.document.edit': { kind: 'command', permission: 'library:write' },
   'extensions.music': { kind: 'command', permission: 'library:write' },
   'extensions.export': { kind: 'command', permission: 'library:read' },
+  'extensions.pluginRequest': { kind: 'command', permission: 'extensions:execute' },
   'plugins.log': { kind: 'query', permission: 'plugins:manage' },
   'plugins.enable': { kind: 'command', permission: 'plugins:manage' },
   'plugins.disable': { kind: 'command', permission: 'plugins:manage' },

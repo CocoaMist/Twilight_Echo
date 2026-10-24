@@ -245,6 +245,21 @@ export function createElectronCoreSupervisor(
       'overlay.hide': async ({ pluginId }) => hideDynamicIsland(pluginId),
       'overlay.configure': async ({ pluginId, config }) => configureDynamicIsland(pluginId, config),
       'overlay.isOwner': async ({ pluginId }) => isDynamicIslandOwner(pluginId),
+      'host.captureScreenshot': async () => {
+        const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed()) ?? null
+        if (!window) return null
+        const image = await window.webContents.capturePage()
+        if (image.isEmpty()) return null
+        // Keep vision payloads small: downscale to at most 1280px wide, JPEG q80.
+        const size = image.getSize()
+        const resized =
+          size.width > 1280
+            ? image.resize({ width: 1280 })
+            : size.height > 1600
+              ? image.resize({ height: 1600 })
+              : image
+        return `data:image/jpeg;base64,${resized.toJPEG(80).toString('base64')}`
+      },
       'paths.authorizeAudio': ({ source }) => resolveAuthorizedAudioSource(source),
       'paths.prepareAudio': async ({ source }) => {
         try {

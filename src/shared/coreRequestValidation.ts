@@ -1622,6 +1622,8 @@ export function validCorePayload(name: CoreOperation, payload: unknown): boolean
         Array.isArray(payload.args) &&
         payload.args.length <= 16
       )
+    case 'extensions.pluginRequest':
+      return keys(p, ['id', 'request']) && pluginId(p.id) && isBoundedCoreJson(p.request, 256 * 1024)
     case 'state.snapshot':
     case 'imports.previewFile':
     case 'statistics.summary':

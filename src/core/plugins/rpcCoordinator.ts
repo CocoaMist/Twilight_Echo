@@ -53,7 +53,7 @@ export const DEFAULT_PLUGIN_RPC_IDEMPOTENCY_TTL_MS = 5 * 60_000
 export const DEFAULT_MAX_PLUGIN_RPC_LATE_RESULTS = 256
 export const DEFAULT_MAX_PLUGIN_RPC_IDEMPOTENCY_RECORDS = 512
 
-export type PluginRpcKind = 'provider' | 'ui-command'
+export type PluginRpcKind = 'provider' | 'ui-command' | 'experience'
 
 export interface PluginRpcIdempotency {
   /** A namespace chosen by the caller, usually plugin/provider/method. */

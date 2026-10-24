@@ -24,6 +24,10 @@ type ProviderHandler = Partial<
   Record<TwilightMediaProviderMethod, (...args: unknown[]) => Promise<unknown> | unknown>
 >
 type CommandHandler = (...args: unknown[]) => Promise<unknown> | unknown
+type ExperienceRequestHandler = (
+  request: unknown,
+  context: PluginInvocationContext
+) => Promise<unknown> | unknown
 
 interface PluginInvocationContext {
   /** Aborted when the caller times out or the plugin is stopped. */
@@ -58,6 +62,10 @@ interface TwilightPluginContext {
       stop: () => Promise<void>
       next: () => Promise<void>
       previous: () => Promise<void>
+      playTracks: (ids: string[], startIndex?: number) => Promise<void>
+      setVolume: (volume: number) => Promise<void>
+      seek: (position: number) => Promise<void>
+      setPlayMode: (mode: 'sequential' | 'listLoop' | 'repeat' | 'shuffle') => Promise<void>
     }
     providers: {
       register: (
@@ -79,6 +87,7 @@ interface TwilightPluginContext {
           | 'settingsPanel'
           | 'localSidebarItem'
           | 'streamingHome'
+          | 'titleBarButton'
         title: string
         description?: string
         icon?: string
@@ -111,6 +120,40 @@ interface TwilightPluginContext {
       importPlaylists: (request: {
         playlists: Array<{ name: string; paths: string[] }>
       }) => Promise<void>
+      /** Paged/filtered track query over the local library. Requires `library:read`. */
+      queryTracks: (query?: Record<string, unknown>) => Promise<unknown>
+      /** Fetch full track payloads by id. Requires `library:read`. */
+      getTracksByIds: (ids: string[]) => Promise<unknown>
+      /** Optimistic-lock metadata patches (title/artist/album/genre/lyrics/bpm…). Requires `library:write`. */
+      patchTracks: (
+        patches: Array<{ id: string; expectedVersion: number; patch: Record<string, unknown> }>
+      ) => Promise<unknown>
+      /** Cover art bytes for one track as a data URL, or null. Requires `library:read`. */
+      getCover: (trackId: string) => Promise<unknown>
+      /** Local playlist summaries. Requires `library:read`. */
+      listPlaylists: () => Promise<unknown>
+      createPlaylist: (name: string) => Promise<unknown>
+      addTracksToPlaylist: (playlistId: string, trackIds: string[]) => Promise<unknown>
+      removeTracksFromPlaylist: (playlistId: string, trackIds: string[]) => Promise<unknown>
+    }
+    /** Application settings read/write. Requires `app:settings`. */
+    appSettings: {
+      get: () => Promise<unknown>
+      update: (patch: Record<string, unknown>) => Promise<unknown>
+    }
+    /** Host window capabilities. `captureScreenshot` requires `app:settings`. */
+    host: {
+      /** Compressed JPEG data URL of the main window, or null when unavailable. */
+      captureScreenshot: () => Promise<unknown>
+    }
+    /**
+     * Relay between this plugin's experience iframe and its background code.
+     * The iframe has no network access; it reaches proxy-aware fetch, API keys
+     * and long-running jobs through these calls.
+     */
+    experience: {
+      onRequest: (handler: ExperienceRequestHandler) => () => void
+      emit: (event: string, value: unknown) => void
     }
     themes: {
       register: (theme: {
@@ -224,6 +267,7 @@ let activePlugin: PluginModule | null = null
 const eventHandlers = new Map<string, Set<(payload: unknown) => void>>()
 const providerHandlers = new Map<string, ProviderHandler>()
 const commandHandlers = new Map<string, CommandHandler>()
+const experienceHandlers = new Set<ExperienceRequestHandler>()
 const pendingApiCalls = new Map<
   string,
   {
@@ -244,6 +288,8 @@ channel.on('message', (message) => {
     void callProviderHandler(message)
   } else if (message.kind === 'ui-command') {
     void callCommandHandler(message)
+  } else if (message.kind === 'experience-request') {
+    void callExperienceHandler(message)
   } else if (message.kind === 'cancel') {
     cancelPluginCall(message.requestId, message.reason)
   } else if (message.kind === 'api-result') {
@@ -294,6 +340,7 @@ async function deactivatePlugin(requestId: string): Promise<void> {
     eventHandlers.clear()
     providerHandlers.clear()
     commandHandlers.clear()
+    experienceHandlers.clear()
     post({ kind: 'deactivated', requestId })
   }
 }
@@ -321,7 +368,12 @@ function createContext(
       togglePause: () => callPlayerApi('togglePause').then(() => undefined),
       stop: () => callPlayerApi('stop').then(() => undefined),
       next: () => callPlayerApi('next').then(() => undefined),
-      previous: () => callPlayerApi('previous').then(() => undefined)
+      previous: () => callPlayerApi('previous').then(() => undefined),
+      playTracks: (ids, startIndex) =>
+        callPlayerApi('playTracks', [ids, startIndex]).then(() => undefined),
+      setVolume: (volume) => callPlayerApi('setVolume', [volume]).then(() => undefined),
+      seek: (position) => callPlayerApi('seek', [position]).then(() => undefined),
+      setPlayMode: (mode) => callPlayerApi('setPlayMode', [mode]).then(() => undefined)
     },
     providers: {
       register: async (provider) => {
@@ -365,7 +417,43 @@ function createContext(
        * UI thread.
        */
       importPlaylists: (request) =>
-        callLibraryApi('importPlaylists', [request]).then(() => undefined)
+        callLibraryApi('importPlaylists', [request]).then(() => undefined),
+      queryTracks: (query) => callLibraryApi('queryTracks', [query]),
+      getTracksByIds: (ids) => callLibraryApi('getTracksByIds', [ids]),
+      patchTracks: (patches) => callLibraryApi('patchTracks', [patches]),
+      getCover: (trackId) => callLibraryApi('getCover', [trackId]),
+      listPlaylists: () => callLibraryApi('listPlaylists', []),
+      createPlaylist: (name) => callLibraryApi('createPlaylist', [name]),
+      addTracksToPlaylist: (playlistId, trackIds) =>
+        callLibraryApi('addTracksToPlaylist', [playlistId, trackIds]),
+      removeTracksFromPlaylist: (playlistId, trackIds) =>
+        callLibraryApi('removeTracksFromPlaylist', [playlistId, trackIds])
+    },
+    appSettings: {
+      get: () => {
+        requireLocalPermission(permissions, 'app:settings')
+        return callAppSettingsApi('get', [])
+      },
+      update: (patch) => {
+        requireLocalPermission(permissions, 'app:settings')
+        return callAppSettingsApi('update', [patch])
+      }
+    },
+    host: {
+      captureScreenshot: () => {
+        requireLocalPermission(permissions, 'app:settings')
+        return callHostApi('captureScreenshot', [])
+      }
+    },
+    experience: {
+      onRequest: (handler) => {
+        experienceHandlers.add(handler)
+        return () => experienceHandlers.delete(handler)
+      },
+      emit: (event, value) => {
+        if (!event || typeof event !== 'string' || event.length > 128) return
+        post({ kind: 'experience-event', event, value })
+      }
     },
     themes: {
       register: async () => {
@@ -453,9 +541,10 @@ function requireLocalPermission(
 }
 
 function callPlayerApi(
-  method: Extract<PluginHostResponse, { kind: 'api-call' }>['method']
+  method: Extract<PluginHostResponse, { kind: 'api-call' }>['method'],
+  args: unknown[] = []
 ): Promise<unknown> {
-  return callApi('player', method, [])
+  return callApi('player', method, args)
 }
 
 function callProviderApi(
@@ -484,6 +573,20 @@ function callLibraryApi(
   args: unknown[]
 ): Promise<unknown> {
   return callApi('library', method, args)
+}
+
+function callAppSettingsApi(
+  method: Extract<PluginHostResponse, { kind: 'api-call' }>['method'],
+  args: unknown[]
+): Promise<unknown> {
+  return callApi('appSettings', method, args)
+}
+
+function callHostApi(
+  method: Extract<PluginHostResponse, { kind: 'api-call' }>['method'],
+  args: unknown[]
+): Promise<unknown> {
+  return callApi('host', method, args)
 }
 
 function callInternalNcmApi(
@@ -611,6 +714,29 @@ async function callCommandHandler(
     const err = error instanceof Error ? error : new Error(String(error))
     post({ kind: 'ui-command-result', requestId: message.requestId, ok: false, error: err.message })
     reportError(error)
+  } finally {
+    clearPluginCall(message.requestId, controller)
+  }
+}
+
+async function callExperienceHandler(
+  message: Extract<PluginHostRequest, { kind: 'experience-request' }>
+): Promise<void> {
+  const controller = beginPluginCall(message.requestId)
+  try {
+    const handler = experienceHandlers.values().next().value
+    if (typeof handler !== 'function') {
+      throw new Error('插件未注册 twilight.experience.onRequest 处理器')
+    }
+    const value = await handler(message.request, {
+      signal: controller.signal
+    } satisfies PluginInvocationContext)
+    if (controller.signal.aborted) return
+    post({ kind: 'experience-result', requestId: message.requestId, ok: true, value })
+  } catch (error) {
+    if (controller.signal.aborted) return
+    const err = error instanceof Error ? error : new Error(String(error))
+    post({ kind: 'experience-result', requestId: message.requestId, ok: false, error: err.message })
   } finally {
     clearPluginCall(message.requestId, controller)
   }

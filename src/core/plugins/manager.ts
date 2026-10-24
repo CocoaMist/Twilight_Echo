@@ -138,6 +138,35 @@ export interface TwilightPluginManagerOptions {
     stop: () => Promise<void> | void
     next: () => Promise<void> | void
     previous: () => Promise<void> | void
+    /** Optional v4 extensions; the manager reports a clear error when absent. */
+    playTracks?: (ids: string[], startIndex: number) => Promise<void> | void
+    setVolume?: (volume: number) => Promise<void> | void
+    seek?: (position: number) => Promise<void> | void
+    setPlayMode?: (mode: 'sequential' | 'listLoop' | 'repeat' | 'shuffle') => Promise<void> | void
+  }
+  /**
+   * Library access for plugin background code (`twilight.library`), gated by
+   * `library:read` / `library:write`. Provided by the process that owns the
+   * library database and playlist service.
+   */
+  libraryApi?: {
+    queryTracks: (query: Record<string, unknown>) => Promise<unknown>
+    getTracksByIds: (ids: string[]) => Promise<unknown>
+    patchTracks: (patches: Array<{ id: string; expectedVersion: number; patch: Record<string, unknown> }>) => Promise<unknown>
+    getCover: (trackId: string) => Promise<unknown>
+    listPlaylists: () => Promise<unknown>
+    createPlaylist: (name: string) => Promise<unknown>
+    addTracksToPlaylist: (playlistId: string, trackIds: string[]) => Promise<unknown>
+    removeTracksFromPlaylist: (playlistId: string, trackIds: string[]) => Promise<unknown>
+  }
+  /** Application settings access (`twilight.appSettings`), gated by `app:settings`. */
+  appSettingsApi?: {
+    get: () => Promise<unknown> | unknown
+    update: (patch: Record<string, unknown>) => Promise<unknown>
+  }
+  /** Main-window screenshot capture (`twilight.host.captureScreenshot`), gated by `app:settings`. */
+  hostCaptureApi?: {
+    captureScreenshot: () => Promise<unknown>
   }
   /**
    * Host-owned dynamic island window bridge. Plugins reach it through
@@ -269,6 +298,9 @@ export class TwilightPluginManager extends EventEmitter {
   private readonly autoMixEnabled: TwilightPluginManagerOptions['autoMixEnabled']
   private readonly applyNativeDspPluginChain: TwilightPluginManagerOptions['applyNativeDspPluginChain']
   private readonly player: TwilightPluginManagerOptions['player']
+  private readonly libraryApi: TwilightPluginManagerOptions['libraryApi']
+  private readonly appSettingsApi: TwilightPluginManagerOptions['appSettingsApi']
+  private readonly hostCaptureApi: TwilightPluginManagerOptions['hostCaptureApi']
   private readonly dynamicIsland: TwilightPluginManagerOptions['dynamicIsland']
   private readonly running = new Map<string, RunningPlugin>()
   private readonly hibernated = new Map<string, HibernatedPlugin>()
@@ -309,6 +341,9 @@ export class TwilightPluginManager extends EventEmitter {
     this.autoMixEnabled = options.autoMixEnabled
     this.applyNativeDspPluginChain = options.applyNativeDspPluginChain
     this.player = options.player
+    this.libraryApi = options.libraryApi
+    this.appSettingsApi = options.appSettingsApi
+    this.hostCaptureApi = options.hostCaptureApi
     this.dynamicIsland = options.dynamicIsland
     const idleTimeoutMs = options.hostIdleTimeoutMs ?? DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS
     this.hostIdle =
@@ -1500,6 +1535,16 @@ export class TwilightPluginManager extends EventEmitter {
     if (message.kind === 'ui-command-result') {
       this.handleUiCommandResult(id, message)
     }
+    if (message.kind === 'experience-result') {
+      this.rpcCalls.complete<{ pluginId: string }>(id, message.requestId, message)
+    }
+    if (message.kind === 'experience-event') {
+      this.emit('experience-event', {
+        pluginId: id,
+        event: message.event,
+        value: message.value
+      })
+    }
   }
 
   private async handleApiCall(
@@ -1566,7 +1611,10 @@ export class TwilightPluginManager extends EventEmitter {
         }
       }
       if (message.namespace === 'library') {
-        if (message.method !== 'importPlaylists') throw new Error('未知音乐库 API')
+        if (message.method !== 'importPlaylists') {
+          const value = await this.handleLibraryTracksApiCall(id, message)
+          return { kind: 'api-result', requestId: message.requestId, ok: true, value }
+        }
         this.requirePermission(id, 'library:write', 'library.importPlaylists')
         const request = normalizePluginPlaylistImportRequest(message.args[0])
         const notice = { ...request, pluginId: id } satisfies PluginPlaylistImportNotice
@@ -1602,6 +1650,39 @@ export class TwilightPluginManager extends EventEmitter {
         }
         return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
       }
+      if (message.namespace === 'appSettings') {
+        if (!this.appSettingsApi) throw new Error('宿主未提供应用设置访问')
+        this.requirePermission(id, 'app:settings', `appSettings.${message.method}`)
+        if (message.method === 'get') {
+          return {
+            kind: 'api-result',
+            requestId: message.requestId,
+            ok: true,
+            value: await this.appSettingsApi.get()
+          }
+        }
+        if (message.method === 'update') {
+          const patch = normalizePluginAppSettingsPatch(message.args[0])
+          return {
+            kind: 'api-result',
+            requestId: message.requestId,
+            ok: true,
+            value: await this.appSettingsApi.update(patch)
+          }
+        }
+        throw new Error('未知应用设置 API')
+      }
+      if (message.namespace === 'host') {
+        if (message.method !== 'captureScreenshot') throw new Error('未知宿主 API')
+        this.requirePermission(id, 'app:settings', 'host.captureScreenshot')
+        if (!this.hostCaptureApi) throw new Error('宿主未提供截图能力')
+        return {
+          kind: 'api-result',
+          requestId: message.requestId,
+          ok: true,
+          value: await this.hostCaptureApi.captureScreenshot()
+        }
+      }
       if (message.namespace !== 'player') throw new Error('未知 API 命名空间')
       const method = message.method
       if (method === 'getPlaybackInfo') {
@@ -1615,7 +1696,38 @@ export class TwilightPluginManager extends EventEmitter {
       }
       if (['play', 'pause', 'togglePause', 'stop', 'next', 'previous'].includes(method)) {
         this.requirePermission(id, 'player:control', `player.${method}`)
-        await this.player[method as keyof typeof this.player]()
+        const transport = this.player[method as 'play' | 'pause' | 'togglePause' | 'stop' | 'next' | 'previous']
+        await transport()
+        return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
+      }
+      if (method === 'playTracks') {
+        this.requirePermission(id, 'player:control', 'player.playTracks')
+        if (!this.player.playTracks) throw new Error('宿主未提供队列播放能力')
+        const { ids, startIndex } = normalizePluginPlayTracksArgs(message.args)
+        await this.player.playTracks(ids, startIndex)
+        return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
+      }
+      if (method === 'setVolume') {
+        this.requirePermission(id, 'player:control', 'player.setVolume')
+        if (!this.player.setVolume) throw new Error('宿主未提供音量控制能力')
+        await this.player.setVolume(normalizePluginUnitRatio(message.args[0], '音量'))
+        return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
+      }
+      if (method === 'seek') {
+        this.requirePermission(id, 'player:control', 'player.seek')
+        if (!this.player.seek) throw new Error('宿主未提供进度控制能力')
+        await this.player.seek(normalizePluginNonNegativeNumber(message.args[0], '进度'))
+        return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
+      }
+      if (method === 'setPlayMode') {
+        this.requirePermission(id, 'player:control', 'player.setPlayMode')
+        if (!this.player.setPlayMode) throw new Error('宿主未提供播放模式切换能力')
+        const rawMode = String(message.args[0] ?? '')
+        if (!['sequential', 'listLoop', 'repeat', 'shuffle'].includes(rawMode))
+          throw new Error('未知播放模式')
+        await this.player.setPlayMode(
+          rawMode as 'sequential' | 'listLoop' | 'repeat' | 'shuffle'
+        )
         return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
       }
       throw new Error('未知播放器 API')
@@ -1929,6 +2041,89 @@ export class TwilightPluginManager extends EventEmitter {
         `插件 ${running.descriptor.id} 未声明 ${permission} 权限，不能调用 ${capability}`
       )
     }
+  }
+
+  /** `library.*` reads and writes beyond playlist import; every method is permission-gated. */
+  private async handleLibraryTracksApiCall(
+    id: string,
+    message: Extract<PluginHostResponse, { kind: 'api-call' }>
+  ): Promise<unknown> {
+    if (!this.libraryApi) throw new Error('宿主未提供音乐库访问')
+    const method = message.method
+    if (method === 'queryTracks') {
+      this.requirePermission(id, 'library:read', 'library.queryTracks')
+      return this.libraryApi.queryTracks(normalizePluginLibraryQuery(message.args[0]))
+    }
+    if (method === 'getTracksByIds') {
+      this.requirePermission(id, 'library:read', 'library.getTracksByIds')
+      return this.libraryApi.getTracksByIds(normalizePluginTrackIds(message.args[0], 500))
+    }
+    if (method === 'getCover') {
+      this.requirePermission(id, 'library:read', 'library.getCover')
+      return this.libraryApi.getCover(normalizePluginIdString(message.args[0], '曲目 id'))
+    }
+    if (method === 'listPlaylists') {
+      this.requirePermission(id, 'library:read', 'library.listPlaylists')
+      return this.libraryApi.listPlaylists()
+    }
+    if (method === 'patchTracks') {
+      this.requirePermission(id, 'library:write', 'library.patchTracks')
+      return this.libraryApi.patchTracks(normalizePluginTrackPatches(message.args[0]))
+    }
+    if (method === 'createPlaylist') {
+      this.requirePermission(id, 'library:write', 'library.createPlaylist')
+      const name = normalizePluginName(message.args[0], '歌单名称', 80)
+      return this.libraryApi.createPlaylist(name)
+    }
+    if (method === 'addTracksToPlaylist') {
+      this.requirePermission(id, 'library:write', 'library.addTracksToPlaylist')
+      return this.libraryApi.addTracksToPlaylist(
+        normalizePluginIdString(message.args[0], '歌单 id'),
+        normalizePluginTrackIds(message.args[1], 1000)
+      )
+    }
+    if (method === 'removeTracksFromPlaylist') {
+      this.requirePermission(id, 'library:write', 'library.removeTracksFromPlaylist')
+      return this.libraryApi.removeTracksFromPlaylist(
+        normalizePluginIdString(message.args[0], '歌单 id'),
+        normalizePluginTrackIds(message.args[1], 1000)
+      )
+    }
+    throw new Error('未知音乐库 API')
+  }
+
+  /**
+   * Relays one experience iframe RPC into the owning plugin's background code
+   * (`twilight.experience.onRequest`). Long timeouts on purpose: agent loops
+   * and batch jobs legitimately run for minutes while streaming progress
+   * through `experience-event` messages.
+   */
+  async callExperienceRequest(pluginId: string, request: unknown): Promise<unknown> {
+    const descriptor = (await this.list()).find((plugin) => plugin.id === pluginId)
+    if (!descriptor) throw new Error('插件未安装')
+    if (!descriptor.enabled) throw new Error('插件未启用')
+    const running = await this.ensureRunningForCall(pluginId)
+    this.hostIdle?.touch(pluginId)
+    const requestId = randomUUID()
+    return this.rpcCalls.request<unknown, { pluginId: string }>({
+      requestId,
+      pluginId,
+      kind: 'experience',
+      timeoutMs: 15 * 60 * 1000,
+      metadata: { pluginId },
+      dispatch: () => {
+        this.assertRunningPlugin(running)
+        running.process.postMessage({
+          kind: 'experience-request',
+          requestId,
+          request
+        } satisfies PluginHostRequest)
+      },
+      cancel: (reason) => this.cancelHostRpc(running, requestId, reason),
+      onTimeout: () => {
+        this.appendLog(running.descriptor, 'error', '插件 experience 请求超时')
+      }
+    })
   }
 
   private resolveThemeStylesheet(descriptor: TwilightPluginDescriptor, stylesheet: string): string {
@@ -2517,4 +2712,172 @@ async function safeReadDir(path: string): Promise<string[]> {
 
 function ensureParent(path: string): void {
   mkdirSync(dirname(path), { recursive: true })
+}
+
+/** Library-query keys plugins may set; anything else is rejected, not ignored. */
+const PLUGIN_LIBRARY_QUERY_KEYS = new Set([
+  'search',
+  'searchFileName',
+  'artist',
+  'albumId',
+  'genre',
+  'genreSeparators',
+  'ids',
+  'sort',
+  'direction',
+  'offset',
+  'limit',
+  'filters',
+  'contentRevision'
+])
+const PLUGIN_LIBRARY_SORTS = new Set([
+  'title',
+  'artist',
+  'album',
+  'format',
+  'trackNumber',
+  'duration',
+  'sampleRate',
+  'addedAt',
+  'recentlyAdded',
+  'lastPlayed',
+  'insertion',
+  'unifiedSearch'
+])
+/** Metadata fields a plugin may patch; identity, paths and internal fields stay host-owned. */
+const PLUGIN_TRACK_PATCH_FIELDS = new Set([
+  'title',
+  'artist',
+  'artists',
+  'album',
+  'albumArtist',
+  'albumId',
+  'genre',
+  'releaseDate',
+  'trackNumber',
+  'discNumber',
+  'lyrics',
+  'translatedLyrics',
+  'romanizedLyrics',
+  'bpm'
+])
+
+function normalizePluginLibraryQuery(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的曲库查询')
+  const query: Record<string, unknown> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!PLUGIN_LIBRARY_QUERY_KEYS.has(key)) continue
+    if (key === 'ids') {
+      query.ids = normalizePluginTrackIds(raw, 500)
+    } else if (key === 'offset') {
+      query.offset = normalizePluginNonNegativeNumber(raw, 'offset')
+    } else if (key === 'limit') {
+      const limit = normalizePluginNonNegativeNumber(raw, 'limit')
+      if (limit < 1 || limit > 500) throw new Error('limit 必须在 1..500')
+      query.limit = limit
+    } else if (key === 'sort') {
+      if (!PLUGIN_LIBRARY_SORTS.has(String(raw))) throw new Error('无效的排序字段')
+      query.sort = raw
+    } else if (key === 'direction') {
+      if (raw !== 'asc' && raw !== 'desc') throw new Error('无效的排序方向')
+      query.direction = raw
+    } else if (key === 'filters') {
+      if (raw === undefined || raw === null) continue
+      if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('无效的筛选条件')
+      const filters: Record<string, unknown> = {}
+      for (const [filterKey, filterValue] of Object.entries(
+        raw as Record<string, unknown>
+      )) {
+        if (!['lossless', 'dsd', 'sampleRate', 'bitDepth', 'folder', 'provider'].includes(filterKey))
+          continue
+        if (filterValue === null || filterValue === undefined) continue
+        filters[filterKey] = filterValue
+      }
+      query.filters = filters
+    } else if (typeof raw === 'string' || typeof raw === 'number') {
+      if (typeof raw === 'string' && raw.length > 512) throw new Error('查询字段过长')
+      query[key] = raw
+    } else if (raw !== undefined && raw !== null) {
+      throw new Error(`无效的查询字段：${key}`)
+    }
+  }
+  if (JSON.stringify(query).length > 64 * 1024) throw new Error('曲库查询过大')
+  return query
+}
+
+function normalizePluginTrackIds(value: unknown, max: number): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > max)
+    throw new Error(`曲目 id 列表必须在 1..${max} 之间`)
+  return value.map((item) => normalizePluginIdString(item, '曲目 id'))
+}
+
+function normalizePluginIdString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.length || value.length > 256)
+    throw new Error(`无效的${label}`)
+  return value
+}
+
+function normalizePluginName(value: unknown, label: string, max: number): string {
+  if (typeof value !== 'string') throw new Error(`无效的${label}`)
+  const trimmed = value.trim()
+  if (!trimmed.length || trimmed.length > max) throw new Error(`无效的${label}`)
+  return trimmed
+}
+
+function normalizePluginTrackPatches(value: unknown): Array<{
+  id: string
+  expectedVersion: number
+  patch: Record<string, unknown>
+}> {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 500)
+    throw new Error('曲目补丁列表必须在 1..500 之间')
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('无效的曲目补丁')
+    const record = item as Record<string, unknown>
+    const patchSource = record.patch
+    if (!patchSource || typeof patchSource !== 'object' || Array.isArray(patchSource))
+      throw new Error('无效的曲目补丁内容')
+    const patch: Record<string, unknown> = {}
+    for (const [key, patchValue] of Object.entries(patchSource)) {
+      if (!PLUGIN_TRACK_PATCH_FIELDS.has(key)) continue
+      if (patchValue === undefined) continue
+      patch[key] = patchValue
+    }
+    if (!Object.keys(patch).length) throw new Error('曲目补丁不包含可写字段')
+    if (JSON.stringify(patch).length > 64 * 1024) throw new Error('曲目补丁过大')
+    return {
+      id: normalizePluginIdString(record.id, '曲目 id'),
+      expectedVersion: normalizePluginNonNegativeNumber(
+        record.expectedVersion,
+        'expectedVersion'
+      ),
+      patch
+    }
+  })
+}
+
+function normalizePluginPlayTracksArgs(args: unknown[]): { ids: string[]; startIndex: number } {
+  const ids = normalizePluginTrackIds(args[0], 10000)
+  const startIndex = normalizePluginNonNegativeNumber(args[1] ?? 0, '起始索引')
+  if (!Number.isInteger(startIndex) || startIndex >= ids.length) throw new Error('起始索引越界')
+  return { ids, startIndex }
+}
+
+function normalizePluginUnitRatio(value: unknown, label: string): number {
+  const number = normalizePluginNonNegativeNumber(value, label)
+  if (number > 1) throw new Error(`${label}必须在 0..1`)
+  return number
+}
+
+function normalizePluginNonNegativeNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+    throw new Error(`无效的${label}`)
+  return value
+}
+
+function normalizePluginAppSettingsPatch(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的设置补丁')
+  if (JSON.stringify(value).length > 256 * 1024) throw new Error('设置补丁过大')
+  return value as Record<string, unknown>
 }
