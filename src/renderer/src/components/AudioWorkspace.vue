@@ -25,8 +25,9 @@ const diagnosticsError = ref('')
 const dirty = ref(false)
 const masterBusy = ref(false)
 const switching = ref(false)
-const { audioProcessing, audioEngineReady } = storeToRefs(useAudioOutputDspStore())
+const { audioProcessing, audioEngineReady, dspGraphStatus } = storeToRefs(useAudioOutputDspStore())
 const outputStore = useAudioOutputDspStore()
+const effectiveStatus = computed(() => status.value ?? dspGraphStatus?.value ?? null)
 const detached = ref(false)
 const editorWindow = useDspEditorWindow((value) => {
   detached.value = value
@@ -41,7 +42,7 @@ const processingBypassed = computed(
   () => audioProcessing.value.directMode || !audioProcessing.value.dspEnabled
 )
 const eqLive = computed(() => !processingBypassed.value && audioProcessing.value.eqEnabled)
-const applyLabel = computed(() => dspApplyLabel(status.value))
+const applyLabel = computed(() => dspApplyLabel(effectiveStatus.value))
 const engineLabel = computed(() =>
   audioProcessing.value.directMode
     ? 'Direct 直通'
@@ -51,7 +52,7 @@ const engineLabel = computed(() =>
 )
 const engineTone = computed(() => {
   if (!audioEngineReady.value) return 'offline'
-  if (status.value?.applyState === 'failed') return 'error'
+  if (effectiveStatus.value?.applyState === 'failed') return 'error'
   if (processingBypassed.value) return 'bypassed'
   return applyLabel.value === '已生效' ? 'live' : 'pending'
 })
@@ -206,22 +207,12 @@ defineExpose({ requestLeave: leave })
           reading
         />
         <header class="workspace-header">
-          <div class="workspace-identity">
-            <span class="workspace-mark" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path
-                  class="mark-wave"
-                  d="M2.5 12h3.2l2.1-5.6 3.6 11.2 3-8.4 1.9 4.6 1.3-1.8h3.9"
-                />
-              </svg>
-            </span>
-            <h1>DSP 工作台</h1>
-          </div>
           <nav class="workspace-tabs" aria-label="DSP 工作台">
             <button
-              v-for="item in dspWorkspaceTabs"
+              v-for="(item, index) in dspWorkspaceTabs"
               :key="item.id"
               :data-mode="item.mode"
+              :data-step="String(index + 1).padStart(2, '0')"
               :title="item.hint"
               :aria-current="tab === item.id ? 'page' : undefined"
               :disabled="switching || rack?.busy || equalizer?.busy"
@@ -243,23 +234,6 @@ defineExpose({ requestLeave: leave })
           </nav>
           <div class="workspace-actions">
             <button
-              class="workspace-power"
-              :class="{ enabled: audioProcessing.dspEnabled }"
-              :aria-pressed="audioProcessing.dspEnabled"
-              aria-label="DSP 总开关"
-              :title="audioProcessing.dspEnabled ? '点击旁路全部 DSP 处理' : '点击开启 DSP 处理'"
-              :disabled="masterBusy || switching || rack?.busy || rack?.loading || equalizer?.busy"
-              @click="toggleMaster"
-            >
-              <span class="power-switch" aria-hidden="true"><i></i></span
-              ><span class="power-copy"
-                ><strong>DSP</strong
-                ><small>{{
-                  masterBusy ? '切换中' : audioProcessing.dspEnabled ? '处理中' : '已旁路'
-                }}</small></span
-              >
-            </button>
-            <button
               class="workspace-popout"
               :title="detached ? '收回主窗口' : '在独立窗口中调节'"
               @click="detached ? editorWindow.dock() : popout()"
@@ -269,6 +243,36 @@ defineExpose({ requestLeave: leave })
             </button>
           </div>
         </header>
+        <aside class="workspace-status" aria-label="音频链路与硬件参数总览">
+          <div class="status-rail-head">
+            <div class="status-rail-title-row">
+              <span class="rail-info-title">
+                <i class="pi pi-info-circle" aria-hidden="true"></i>
+                <strong>音频信息</strong>
+              </span>
+              <span class="engine-state" :data-tone="engineTone"
+                ><i :class="['state-dot', { ready: audioEngineReady }]" aria-hidden="true"></i
+                >{{ engineLabel }}</span
+              >
+            </div>
+            <div class="status-rail-kicker">
+              <span class="rail-kicker-tag">SIGNAL PIPELINE</span>
+              <span class="status-revision" title="引擎确认的版本 / 请求的版本"
+                >ACK {{ effectiveStatus?.appliedRevision ?? effectiveStatus?.revision ?? 0 }} /
+                {{ effectiveStatus?.requestedRevision ?? effectiveStatus?.revision ?? 0 }}</span
+              >
+            </div>
+          </div>
+          <DspSignalOverview
+            :status="effectiveStatus"
+            :scene-state="sceneState"
+            :scene-name="sceneName"
+            :disabled="switching || masterBusy || !!rack?.busy || !!equalizer?.busy"
+            @node="focusNode"
+            @output="selectTab('output')"
+            @navigate="selectTab"
+          />
+        </aside>
         <div ref="contentRef" class="workspace-content" :data-workspace-tab="tab">
           <div class="workspace-page" :data-tab="tab">
             <p
@@ -359,23 +363,6 @@ defineExpose({ requestLeave: leave })
             />
           </div>
         </div>
-        <footer class="workspace-status">
-          <span class="engine-state" :data-tone="engineTone"
-            ><i :class="['state-dot', { ready: audioEngineReady }]" aria-hidden="true"></i
-            >{{ engineLabel }}</span
-          >
-          <DspSignalOverview
-            :status="status"
-            :scene-state="sceneState"
-            :scene-name="sceneName"
-            :disabled="switching || masterBusy || !!rack?.busy || !!equalizer?.busy"
-            @node="focusNode"
-            @output="selectTab('output')"
-          />
-          <span class="status-revision" title="引擎确认的版本 / 请求的版本"
-            >ACK {{ status?.appliedRevision ?? '—' }} / {{ status?.requestedRevision ?? '—' }}</span
-          >
-        </footer>
       </main>
     </Teleport>
   </div>

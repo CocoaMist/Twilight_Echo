@@ -27,6 +27,12 @@ const result = shallowRef<DspAuditionResult | null>(null)
 const message = ref('记录 A 快照后，将当前草稿作为 B。首版支持无处理与一个内置 EQ。')
 let generation = 0
 let timer: ReturnType<typeof setInterval> | null = null
+
+function snapshotGraph(graph: DspGraphConfig): DspGraphConfig {
+  // Draft graphs contain nested Vue proxies; cross the JSON data boundary before cloning.
+  return JSON.parse(JSON.stringify(graph)) as DspGraphConfig
+}
+
 const unsupportedReason = computed(() => {
   if (!props.a || !props.b) return '先记录 A 快照，再编辑 B 草稿。'
   const track = player.currentTrack.value
@@ -46,9 +52,9 @@ const unsupportedReason = computed(() => {
     return '仅支持保持原声道的单 / 双声道 PCM。'
   if (info?.crossfadeActive || (info?.playbackRate ?? 1) !== 1) return '交叉淡化或变速时无法测量。'
   try {
-    normalizeAuditionGraph(props.a)
-    normalizeAuditionGraph(props.b)
-    if (props.current) normalizeAuditionGraph(props.current)
+    normalizeAuditionGraph(snapshotGraph(props.a))
+    normalizeAuditionGraph(snapshotGraph(props.b))
+    if (props.current) normalizeAuditionGraph(snapshotGraph(props.current))
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
@@ -130,8 +136,8 @@ async function measure(): Promise<void> {
       revision: (await auditionState()).revision,
       startSeconds: start.value,
       endSeconds,
-      a: JSON.parse(JSON.stringify(props.a)),
-      b: JSON.parse(JSON.stringify(props.b))
+      a: snapshotGraph(props.a),
+      b: snapshotGraph(props.b)
     })
     if (generation !== requestGeneration) return
     result.value = (await auditionState()).result
@@ -159,7 +165,11 @@ async function select(side: 'a' | 'b'): Promise<void> {
   busy.value = true
   const currentGeneration = generation
   try {
-    await core.command('audio.audition.select', { revision: auditionRevision ?? (await auditionState()).revision, id: result.value.id, side })
+    await core.command('audio.audition.select', {
+      revision: auditionRevision ?? (await auditionState()).revision,
+      id: result.value.id,
+      side
+    })
     const next = (await auditionState()).result
     if (generation === currentGeneration) result.value = next
   } catch (error) {

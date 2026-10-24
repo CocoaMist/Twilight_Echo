@@ -959,7 +959,28 @@ export function mapSpectrumToVisualizerBars(
     const fract = binIndexDecimal - indexLow
     const valLow = spectrum[indexLow] || 0
     const valHigh = spectrum[indexHigh] || 0
-    const value = valLow + (valHigh - valLow) * fract
+    let value = valLow + (valHigh - valLow) * fract
+
+    const lowFreq =
+      minFrequency * Math.pow(frequencyRatio, Math.max(0, i - 0.5) / frequencyStepCount)
+    const highFreq =
+      minFrequency * Math.pow(frequencyRatio, Math.min(frequencyStepCount, i + 0.5) / frequencyStepCount)
+    const bandStart = Math.max(0, Math.min(maxBinIndex, Math.ceil(lowFreq / binWidth)))
+    const bandEnd = Math.max(0, Math.min(maxBinIndex, Math.floor(highFreq / binWidth)))
+    if (bandEnd >= bandStart && highFreq / binWidth - lowFreq / binWidth >= 1.25) {
+      let bandMax = value
+      let bandSum = 0
+      let bandCount = 0
+      for (let bin = bandStart; bin <= bandEnd; bin += 1) {
+        const binVal = spectrum[bin] || 0
+        if (binVal > bandMax) bandMax = binVal
+        bandSum += binVal
+        bandCount += 1
+      }
+      const bandMean = bandCount > 0 ? bandSum / bandCount : value
+      value = Math.max(value, bandMax * 0.72 + bandMean * 0.28)
+    }
+
     bars[i] = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0))
   }
 

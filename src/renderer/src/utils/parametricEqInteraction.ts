@@ -95,7 +95,18 @@ export function projectSpectrumLevels(
   const count = Math.max(16, Math.min(pointCount, 960))
   const nyquist = sampleRate * 0.5
   const maxFrequency = Math.min(PARAMETRIC_EQ_MAX_FREQUENCY, nyquist * 0.98)
-  const levels = new Float32Array(count)
+  const raw = new Float32Array(count)
+  let minSource = 1
+  let maxSource = 0
+  for (let i = 0; i < spectrum.length; i += 1) {
+    const v = clampEqValue(spectrum[i] ?? 0, 0, 1)
+    if (v < minSource) minSource = v
+    if (v > maxSource) maxSource = v
+  }
+  if (minSource > maxSource) {
+    minSource = 0
+    maxSource = 1
+  }
   for (let index = 0; index < count; index += 1) {
     const x = (index / (count - 1)) * 100
     const frequency = percentToFrequency(x)
@@ -120,7 +131,65 @@ export function projectSpectrumLevels(
       rawMagnitude = Math.max(rawMagnitude, spectrum[bin] ?? 0)
     }
     const magnitude = frequency > maxFrequency ? 0 : clampEqValue(rawMagnitude, 0, 1)
-    levels[index] = magnitude
+    raw[index] = magnitude
+  }
+
+  // Fractional-octave envelope bridging above the bass region prevents deep
+  // inter-harmonic FFT bin notches (-80 dB sawtooth spikes between harmonics)
+  // while preserving sharp isolated upper-frequency peaks and bass accuracy.
+  const octavesPerStep =
+    Math.log2(PARAMETRIC_EQ_MAX_FREQUENCY / PARAMETRIC_EQ_MIN_FREQUENCY) / Math.max(1, count - 1)
+  const radiusSteps = Math.max(2, Math.min(48, Math.ceil(0.55 / octavesPerStep)))
+  const sigmaOctaves = 0.22
+  const invTwoSigmaSq = 0.5 / (sigmaOctaves * sigmaOctaves)
+  const peakEnv = new Float32Array(count)
+  for (let index = 0; index < count; index += 1) {
+    let env = raw[index]
+    const start = Math.max(0, index - radiusSteps)
+    const end = Math.min(count - 1, index + radiusSteps)
+    for (let neighbor = start; neighbor <= end; neighbor += 1) {
+      const candidate = raw[neighbor]
+      if (candidate <= env) continue
+      const deltaOct = (neighbor - index) * octavesPerStep
+      const decayed = candidate * Math.exp(-(deltaOct * deltaOct) * invTwoSigmaSq)
+      if (decayed > env) env = decayed
+    }
+    peakEnv[index] = env
+  }
+
+  let smoothEnv = peakEnv
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = new Float32Array(count)
+    for (let index = 0; index < count; index += 1) {
+      const left = smoothEnv[Math.max(0, index - 1)]
+      const center = smoothEnv[index]
+      const right = smoothEnv[Math.min(count - 1, index + 1)]
+      next[index] = left * 0.25 + center * 0.5 + right * 0.25
+    }
+    smoothEnv = next
+  }
+
+  const levels = new Float32Array(count)
+  for (let index = 0; index < count; index += 1) {
+    const x = (index / (count - 1)) * 100
+    const frequency = percentToFrequency(x)
+    if (frequency > maxFrequency) {
+      levels[index] = 0
+      continue
+    }
+    const rawLevel = raw[index]
+    const envelopeBlend = clampEqValue((frequency - 85) / 65, 0, 1)
+    if (envelopeBlend <= 0) {
+      levels[index] = rawLevel
+      continue
+    }
+    const localAvg =
+      raw[Math.max(0, index - 1)] * 0.25 + rawLevel * 0.5 + raw[Math.min(count - 1, index + 1)] * 0.25
+    const impulseKeep = clampEqValue((rawLevel - 0.88) / 0.12, 0, 1)
+    const detailLevel = localAvg + (rawLevel - localAvg) * impulseKeep
+    const bridged = smoothEnv[index] * 0.86 + detailLevel * 0.14
+    const value = rawLevel + (bridged - rawLevel) * envelopeBlend
+    levels[index] = clampEqValue(value, minSource, maxSource)
   }
   return levels
 }

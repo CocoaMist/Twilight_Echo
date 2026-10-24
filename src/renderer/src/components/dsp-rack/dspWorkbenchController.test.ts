@@ -19,6 +19,33 @@ const script = stripTypeScriptTypes(
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve))
 const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 
+test('signal codec uses runtime and public format without private playback paths', () => {
+  const source = readFileSync(new URL('./DspSignalOverview.vue', import.meta.url), 'utf8')
+  const codec = source.match(/const sourceCodec = computed\(\(\) => \{[\s\S]*?\n\}\)/)![0]
+  const evaluate = (
+    track: Record<string, unknown>,
+    playback: Record<string, unknown> = {},
+    output: Record<string, unknown> = {}
+  ) =>
+    runInNewContext(`${codec}; sourceCodec.value`, {
+      computed: (read: () => unknown) => ({
+        get value() {
+          return read()
+        }
+      }),
+      currentTrack: { value: track },
+      playbackInfo: { value: playback },
+      outputInfo: { value: output }
+    })
+  assert.equal(evaluate({ format: ' flac ' }), 'FLAC')
+  assert.equal(evaluate({ format: 'SACD ISO' }), 'SACD ISO')
+  assert.equal(evaluate({ format: 'ALAC' }, { codec: 'unknown' }), 'ALAC')
+  assert.equal(evaluate({ format: 'FLAC' }, { codec: 'Opus' }), 'OPUS')
+  assert.equal(evaluate({}, { isDsd: true, dsdMode: 'dop' }), 'DSD DoP')
+  assert.equal(evaluate({ filePath: 'private.flac' }), 'PCM')
+  assert.equal(evaluate({ format: '未知' }), 'PCM')
+})
+
 test('workbench templates compile, including multi-action event handlers', () => {
   for (const file of [
     '../AudioWorkspace.vue',
@@ -222,7 +249,7 @@ function setup() {
       },
       activeElement: null
     },
-    window: { api: { audioEngine: api }, confirm: () => confirm },
+    window: { api: { audioEngine: api }, confirm: () => confirm }, createCoreAudioUi: () => api, useCoreConnection: () => ({}),
     setTimeout,
     clearTimeout,
     defineProps: () => ({ tab: 'chain', visible: false }),

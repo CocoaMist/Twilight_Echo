@@ -50,7 +50,10 @@ export function useEqSpectrum(source: {
   function animate(now: number): void {
     frame = 0
     const target = source.levels()
-    if (ownerDocument().hidden || !source.visible() || source.frozen() || !target) return
+    if (ownerDocument().hidden || !source.visible() || source.frozen() || !target) {
+      lastTime = 0
+      return
+    }
     const motion = ownerDocument().documentElement.dataset.teMotion
     if (motion === 'reduced' || motion === 'off') {
       displayed.set(target)
@@ -58,7 +61,8 @@ export function useEqSpectrum(source: {
       lastTime = 0
       return
     }
-    const moving = smoothSpectrum(displayed, target, lastTime ? now - lastTime : 16.7, speed.value)
+    const elapsedMs = lastTime > 0 ? Math.min(100, Math.max(1, now - lastTime)) : 16.7
+    const moving = smoothSpectrum(displayed, target, elapsedMs, speed.value)
     lastTime = now
     draw()
     if (moving)

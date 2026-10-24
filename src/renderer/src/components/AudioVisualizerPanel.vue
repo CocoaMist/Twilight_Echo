@@ -36,6 +36,8 @@ const CONTROL_VISUALIZATION_PAUSE_MS = 220
 let releaseVisualization: (() => void) | null = null
 let visualizerUnmounted = false
 let visualizationPausedUntil = 0
+const smoothedVisualizerBars = new Float32Array(VISUALIZER_BAR_COUNT)
+let hasSmoothedVisualizerFrame = false
 const tempoEstimator = new AudioTempoEstimator()
 let lastPostedTempo: TempoEstimate = { source: 'analyzing', confidence: 0 }
 let lastPlaybackPosition: number | null = null
@@ -99,6 +101,54 @@ function postTempo(tempo: TempoEstimate): void {
 function resetTempoEstimator(): void {
   tempoEstimator.reset()
   lastPostedTempo = { source: 'analyzing', confidence: 0 }
+  smoothedVisualizerBars.fill(0)
+  hasSmoothedVisualizerFrame = false
+}
+
+function stabilizeVisualizerBars(bars: Float32Array, active: boolean): void {
+  const count = bars.length
+  if (!active || count === 0) {
+    smoothedVisualizerBars.fill(0)
+    hasSmoothedVisualizerFrame = false
+    return
+  }
+  const bridged = new Float32Array(count)
+  for (let i = 0; i < count; i += 1) {
+    const current = Math.max(0, Math.min(1, Number.isFinite(bars[i]) ? bars[i] : 0))
+    if (i < 16) {
+      bridged[i] = current
+      continue
+    }
+    const left1 = Math.max(0, Math.min(1, bars[Math.max(0, i - 1)] || 0))
+    const right1 = Math.max(0, Math.min(1, bars[Math.min(count - 1, i + 1)] || 0))
+    const left2 = Math.max(0, Math.min(1, bars[Math.max(0, i - 2)] || 0))
+    const right2 = Math.max(0, Math.min(1, bars[Math.min(count - 1, i + 2)] || 0))
+    const pairBridge = Math.max(
+      Math.min(left1, right1) * 0.9,
+      (left1 + right1) * 0.44,
+      Math.min(left2, right2) * 0.76
+    )
+    const blend = Math.min(1, (i - 16) / 24)
+    const valleyFilled = current + Math.max(0, pairBridge - current) * (0.72 * blend)
+    bridged[i] = Math.max(0, Math.min(1, valleyFilled))
+  }
+  for (let i = 0; i < count; i += 1) {
+    const prev = bridged[Math.max(0, i - 1)]
+    const curr = bridged[i]
+    const next = bridged[Math.min(count - 1, i + 1)]
+    const spatial = i < 20 ? curr : prev * 0.2 + curr * 0.6 + next * 0.2
+    if (!hasSmoothedVisualizerFrame || i >= smoothedVisualizerBars.length) {
+      bars[i] = spatial
+      if (i < smoothedVisualizerBars.length) smoothedVisualizerBars[i] = spatial
+    } else {
+      const prior = smoothedVisualizerBars[i]
+      const alpha = spatial >= prior ? 0.52 : 0.24
+      const nextVal = prior + (spatial - prior) * alpha
+      smoothedVisualizerBars[i] = nextVal
+      bars[i] = nextVal
+    }
+  }
+  hasSmoothedVisualizerFrame = true
 }
 
 function publishVisualizationFrame(): void {
@@ -114,6 +164,7 @@ function publishVisualizationFrame(): void {
       return
     }
     const bars = Float32Array.from(v.visualizerBars ?? [])
+    stabilizeVisualizerBars(bars, v.active)
     const waveform = Float32Array.from(v.waveform)
     const tempo = tempoEstimator.pushFrame({
       timestamp: performance.now(),

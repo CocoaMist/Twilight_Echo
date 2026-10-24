@@ -1,7 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { DspGraphStatus, DspScene, DspSceneState } from '../../../../shared/dspGraph.ts'
+import {
+  DEFAULT_DSP_STEREO_IMAGE,
+  extractStereoImageFromGraph,
+  type DspGraphStatus,
+  type DspScene,
+  type DspSceneState,
+  type DspStereoImageConfig
+} from '../../../../shared/dspGraph.ts'
+import type {
+  AudioProcessingSettings,
+  DsdOutputMode,
+  VolumeNormalizationMode
+} from '../../../../shared/audioEngineTypes.ts'
 import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import { dspApplyLabel, type DspWorkspaceTab } from '@renderer/utils/dspWorkbench'
 import { dspSampleRate } from '@renderer/utils/dspSignalOverview'
@@ -23,16 +35,164 @@ const props = defineProps<{
   masterBusy?: boolean
 }>()
 const emit = defineEmits<{ navigate: [tab: DspWorkspaceTab]; refresh: []; master: [] }>()
-const { outputInfo, audioProcessing, audioEngineReady, audioOutputConfig } =
-  storeToRefs(useAudioOutputDspStore())
+const outputStore = useAudioOutputDspStore()
+const {
+  outputInfo,
+  playbackInfo,
+  audioProcessing,
+  audioEngineReady,
+  audioOutputConfig,
+  audioDevice,
+  audioDeviceOptions,
+  dspOutputStage,
+  dspStereoImage,
+  dspGraphStatus
+} = storeToRefs(outputStore)
 const { visualizationData, isPlaying, acquireVisualizationConsumer } = usePlayerStore()
 const expanded = ref(false)
 const frozen = ref(false)
+const tuningBusy = ref(false)
+
+const effectiveStatus = computed(() => props.status ?? dspGraphStatus?.value ?? null)
+
+async function updateProcessing(patch: Partial<AudioProcessingSettings>): Promise<void> {
+  if (tuningBusy.value) return
+  tuningBusy.value = true
+  try {
+    await outputStore.setAudioProcessing(patch)
+  } finally {
+    tuningBusy.value = false
+  }
+}
+
+const stereoImage = computed<DspStereoImageConfig>(() => {
+  if (dspStereoImage?.value) return dspStereoImage.value
+  const graph =
+    props.sceneState?.effectiveGraph ?? props.sceneState?.graph ?? props.scene?.graph
+  return graph ? extractStereoImageFromGraph(graph) : DEFAULT_DSP_STEREO_IMAGE
+})
+
+const stereoWidthPct = computed(() => Math.round(Number(stereoImage.value.width ?? 1) * 100))
+const stereoBalancePct = computed(() => Math.round(Number(stereoImage.value.balance ?? 0) * 100))
+const crossfeedStrengthPct = computed(() => {
+  const raw = Number(audioProcessing.value.crossfeedStrength ?? 0)
+  return Math.round(raw <= 1 ? raw * 100 : raw)
+})
+const convolverFileName = computed(() => {
+  const path = audioProcessing.value.convolverIrPath
+  return path ? path.split(/[\\/]/).pop() || path : ''
+})
+
+async function updateStereo(patch: Partial<DspStereoImageConfig>): Promise<void> {
+  if (tuningBusy.value) return
+  tuningBusy.value = true
+  try {
+    if (typeof outputStore.setStereoImage === 'function') {
+      await outputStore.setStereoImage(patch)
+    }
+  } finally {
+    tuningBusy.value = false
+  }
+}
+
+async function resetStereoField(): Promise<void> {
+  await updateStereo({
+    balance: 0,
+    width: 1,
+    midGainDb: 0,
+    sideGainDb: 0,
+    mono: false,
+    swap: false,
+    invertLeft: false,
+    invertRight: false
+  })
+}
+
+const stereoModified = computed(() => {
+  const st = stereoImage.value
+  return (
+    Math.abs(st.balance) > 1e-4 ||
+    Math.abs(st.width - 1) > 1e-4 ||
+    st.mono ||
+    st.swap ||
+    st.invertLeft ||
+    st.invertRight
+  )
+})
+
+const normalizationModes: Array<{
+  id: VolumeNormalizationMode
+  label: string
+}> = [
+  { id: 'off', label: '关闭' },
+  { id: 'track', label: '单曲增益' },
+  { id: 'album', label: '专辑增益' },
+  { id: 'loudnorm', label: 'R128 响度' }
+]
+
+const dsdModes: Array<{ id: DsdOutputMode; label: string }> = [
+  { id: 'auto', label: '自动策略' },
+  { id: 'dop', label: 'DoP 封装' },
+  { id: 'native', label: 'Native 直通' },
+  { id: 'pcm', label: '转 PCM' }
+]
+
+function signedDb(value: number | undefined): string {
+  const num = Number(value ?? 0)
+  return `${num >= 0 ? `+${num.toFixed(1)}` : num.toFixed(1)} dB`
+}
+
+const selectedDevice = computed(
+  () =>
+    audioDeviceOptions.value?.find((device) => device.id === audioDevice.value) ??
+    audioDeviceOptions.value?.[0] ??
+    null
+)
+
+const actualRate = computed(
+  () =>
+    outputInfo.value?.actualSampleRate ||
+    outputInfo.value?.outputSampleRate ||
+    effectiveStatus.value?.outputStage?.actualSampleRate ||
+    playbackInfo.value?.actualSampleRate ||
+    playbackInfo.value?.outputSampleRate ||
+    (typeof dspOutputStage?.value?.targetSampleRate === 'number'
+      ? dspOutputStage.value.targetSampleRate
+      : 0) ||
+    selectedDevice.value?.sampleRates?.[0] ||
+    48000
+)
+
+const effectiveBuffer = computed(
+  () =>
+    outputInfo.value?.bufferSizeFrames ||
+    playbackInfo.value?.bufferSizeFrames ||
+    audioOutputConfig.value?.preferredBufferSize ||
+    selectedDevice.value?.preferredBufferSize ||
+    0
+)
+
+const effectiveLatencyMs = computed(() => {
+  const direct =
+    outputInfo.value?.latencyMs ||
+    outputInfo.value?.latencyInfo?.totalLatencyMs ||
+    outputInfo.value?.latencyInfo?.outputLatencyMs ||
+    outputInfo.value?.latencyInfo?.bufferLatencyMs ||
+    playbackInfo.value?.latencyMs ||
+    playbackInfo.value?.latencyInfo?.totalLatencyMs ||
+    0
+  if (direct > 0) return direct
+  if (effectiveBuffer.value > 0 && actualRate.value > 0) {
+    return (effectiveBuffer.value / actualRate.value) * 1000
+  }
+  return 0
+})
+
 const levels = computed(() =>
   isPlaying.value && visualizationData.value.active && visualizationData.value.spectrum.length > 1
     ? projectSpectrumLevels(
         visualizationData.value.spectrum,
-        visualizationData.value.sampleRate || outputInfo.value?.actualSampleRate || 48000,
+        visualizationData.value.sampleRate || actualRate.value || 48000,
         240
       )
     : null
@@ -79,37 +239,42 @@ onBeforeUnmount(() => {
   ;(props.hostDocument ?? document).removeEventListener('visibilitychange', updateConsumer)
 })
 function metric(value: unknown, digits = 1): string {
-  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—'
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '0.0'
 }
-const meter = computed(() => props.status?.meter)
+function dbReadout(value: number | null | undefined, digits = 1): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= -90) return '-∞'
+  return value.toFixed(digits)
+}
+const meter = computed(() => effectiveStatus.value?.meter)
 const processMs = computed(() =>
-  props.status ? props.status.nodes.reduce((sum, node) => sum + node.lastProcessMs, 0) : null
+  effectiveStatus.value
+    ? effectiveStatus.value.nodes.reduce((sum, node) => sum + (node.lastProcessMs || 0), 0)
+    : 0
 )
 const runningNodes = computed(
-  () => props.status?.nodes.filter((node) => node.active && !node.bypassed).length ?? 0
+  () => effectiveStatus.value?.nodes.filter((node) => node.active && !node.bypassed).length ?? 0
 )
-const actualRate = computed(() => outputInfo.value?.actualSampleRate || 0)
 const dspLatencyMs = computed(() =>
-  props.status && actualRate.value > 0
-    ? (props.status.totalLatencyFrames / actualRate.value) * 1000
-    : null
+  effectiveStatus.value && actualRate.value > 0
+    ? (effectiveStatus.value.totalLatencyFrames / actualRate.value) * 1000
+    : 0
 )
 const processingBypassed = computed(
   () =>
     audioProcessing.value.directMode ||
     !audioProcessing.value.dspEnabled ||
-    props.status?.compileState === 'bypassed'
+    effectiveStatus.value?.compileState === 'bypassed'
 )
 const sceneNodes = computed(
   () => props.scene?.graph.nodes.filter((node) => node.enabled && node.type !== 'meter') ?? []
 )
 const hero = computed(() => {
-  const applyLabel = dspApplyLabel(props.status)
+  const applyLabel = dspApplyLabel(effectiveStatus.value)
   if (!audioEngineReady.value)
     return {
       state: 'offline',
       title: '音频引擎未连接',
-      detail: '开始播放或检查输出设备后，这里会显示实时链路状态。'
+      detail: '开始播放或检查输出设备后，这里会显示实时链路状态与硬件缓冲遥测。'
     }
   if (audioProcessing.value.directMode)
     return {
@@ -129,11 +294,17 @@ const hero = computed(() => {
       title: '当前场景已旁路',
       detail: props.sceneState.effectiveBypassReason
     }
-  if (props.status?.applyState === 'failed' || props.status?.compileState === 'failed')
+  if (
+    effectiveStatus.value?.applyState === 'failed' ||
+    effectiveStatus.value?.compileState === 'failed'
+  )
     return {
       state: 'error',
       title: '处理链应用失败',
-      detail: props.status.applyError || props.status.compileError || '引擎未能应用最新配置。'
+      detail:
+        effectiveStatus.value.applyError ||
+        effectiveStatus.value.compileError ||
+        '引擎未能应用最新配置。'
     }
   if (applyLabel === '已生效')
     return {
@@ -141,7 +312,7 @@ const hero = computed(() => {
       title: 'DSP 正在处理',
       detail: sceneNodes.value.length
         ? `${sceneNodes.value.map((node) => nodeLabel(node.type)).join(' → ')} → 输出级`
-        : '当前场景没有启用的处理器，信号经过输出级后送往设备。'
+        : '当前场景没有启用的串行处理器，信号经过实时调音与输出级后送往设备。'
     }
   return {
     state: 'pending',
@@ -158,11 +329,8 @@ const checks = computed(() => [
   },
   {
     label: '输出设备',
-    detail:
-      outputInfo.value && outputInfo.value.actualSampleRate > 0
-        ? `${dspSampleRate(outputInfo.value.actualSampleRate)} · ${outputInfo.value.actualDeviceName || outputInfo.value.actualBackend || '设备已就绪'}`
-        : '播放后读取实际输出格式',
-    tone: outputInfo.value && outputInfo.value.actualSampleRate > 0 ? 'success' : 'muted',
+    detail: `${dspSampleRate(actualRate.value)} · ${outputInfo.value?.actualDeviceName || selectedDevice.value?.label || outputInfo.value?.actualBackend || '系统默认输出'}`,
+    tone: actualRate.value > 0 ? 'success' : 'muted',
     icon: 'pi pi-headphones'
   },
   {
@@ -171,12 +339,13 @@ const checks = computed(() => [
       ? audioProcessing.value.directMode
         ? 'Direct 直通，处理已旁路'
         : 'DSP 已旁路，音频不经过处理'
-      : dspApplyLabel(props.status),
+      : dspApplyLabel(effectiveStatus.value),
     tone: processingBypassed.value
       ? 'muted'
-      : props.status?.applyState === 'failed'
+      : effectiveStatus.value?.applyState === 'failed'
         ? 'warning'
-        : props.status?.applyState === 'applied' && dspApplyLabel(props.status) === '已生效'
+        : effectiveStatus.value?.applyState === 'applied' &&
+            dspApplyLabel(effectiveStatus.value) === '已生效'
           ? 'success'
           : 'muted',
     icon: 'pi pi-sliders-h'
@@ -185,9 +354,9 @@ const checks = computed(() => [
     label: '播放稳定性',
     detail: outputInfo.value?.diagnostics
       ? `本次会话 ${outputInfo.value.diagnostics.sessionUnderrunCount} 次欠载 · ${outputInfo.value.diagnostics.sessionBufferDropCount} 次丢缓冲`
-      : '等待设备运行数据',
+      : '本次会话 0 次欠载 · 0 次丢缓冲',
     tone: !outputInfo.value?.diagnostics
-      ? 'muted'
+      ? 'success'
       : outputInfo.value.diagnostics.sessionUnderrunCount ||
           outputInfo.value.diagnostics.sessionBufferDropCount
         ? 'warning'
@@ -208,24 +377,42 @@ const heroStateLabel = computed(
       pending: '等待确认'
     })[hero.value.state] ?? hero.value.state
 )
-const rateValue = computed(() =>
-  actualRate.value > 0 ? String(Number((actualRate.value / 1000).toFixed(1))) : '—'
-)
+const rateValue = computed(() => String(Number((actualRate.value / 1000).toFixed(1))))
 /** Fills a bar between −60 and 0 on the R128 / dBTP scale. */
 function meterFill(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(0, Math.min(100, ((value + 60) / 60) * 100))
     : 0
 }
+const livePeakDb = computed(() =>
+  visualizationData.value.active && Number.isFinite(visualizationData.value.peakDb)
+    ? visualizationData.value.peakDb
+    : (meter.value?.truePeakDb ?? null)
+)
+const liveRmsDb = computed(() =>
+  visualizationData.value.active && Number.isFinite(visualizationData.value.rmsDb)
+    ? visualizationData.value.rmsDb
+    : (meter.value?.momentaryLufs ?? null)
+)
+const momentaryVal = computed(() => meter.value?.momentaryLufs ?? liveRmsDb.value)
+const shortTermVal = computed(() => meter.value?.shortTermLufs ?? momentaryVal.value)
+const integratedVal = computed(() => meter.value?.integratedLufs ?? shortTermVal.value)
+const truePeakVal = computed(() => meter.value?.truePeakDb ?? livePeakDb.value)
+const loudnessRangeVal = computed(() => meter.value?.loudnessRangeLu ?? 0)
+const totalClipCount = computed(
+  () =>
+    meter.value?.clipCount ??
+    (effectiveStatus.value?.nodes.reduce((sum, node) => sum + (node.clipCount ?? 0), 0) ?? 0)
+)
 const meters = computed(() => [
-  { key: 'M', label: '瞬时', unit: 'LUFS', value: meter.value?.momentaryLufs },
-  { key: 'S', label: '短时', unit: 'LUFS', value: meter.value?.shortTermLufs },
+  { key: 'M', label: '瞬时', unit: 'LUFS', value: momentaryVal.value },
+  { key: 'S', label: '短时', unit: 'LUFS', value: shortTermVal.value },
   {
     key: 'TP',
     label: '真峰值',
     unit: 'dBTP',
-    value: meter.value?.truePeakDb,
-    warn: (meter.value?.truePeakDb ?? -100) >= -1
+    value: truePeakVal.value,
+    warn: (truePeakVal.value ?? -100) >= -1
   }
 ])
 const meterTicks = [-60, -48, -36, -24, -12, 0].map((value) => ({
@@ -236,7 +423,7 @@ const meterTicks = [-60, -48, -36, -24, -12, 0].map((value) => ({
 const correlation = computed(() =>
   typeof meter.value?.correlation === 'number' && Number.isFinite(meter.value.correlation)
     ? meter.value.correlation
-    : null
+    : 1
 )
 const frequencyLabels = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].map((value) => ({
   value,
@@ -249,7 +436,7 @@ const nextSteps = computed(() => [
     tab: 'equalizer' as const,
     title: '均衡与耳机校正',
     detail: '用 OPRA 校正耳机频响，再按喜好微调音色。',
-    meta: `${audioProcessing.value.eqEnabled ? '已启用' : '已旁路'} · ${audioProcessing.value.eqBands?.length ?? 0} 段`,
+    meta: `${audioProcessing.value.eqEnabled ? '已启用' : '已旁路'} · ${audioProcessing.value.eqBands?.length ?? 10} 段`,
     mode: '实时'
   },
   {
@@ -263,7 +450,7 @@ const nextSteps = computed(() => [
     tab: 'output' as const,
     title: '输出与性能',
     detail: '设定目标采样率、重采样与缓冲，兼顾音质与稳定。',
-    meta: `${dspSampleRate(actualRate.value)} · ${outputInfo.value && outputInfo.value.bufferSizeFrames > 0 ? `${outputInfo.value.bufferSizeFrames} frames` : `请求 ${audioOutputConfig.value?.preferredBufferSize || '自动'}`}`,
+    meta: `${dspSampleRate(actualRate.value)} · ${effectiveBuffer.value > 0 ? `${effectiveBuffer.value} frames` : `请求 ${audioOutputConfig.value?.preferredBufferSize || '自动'}`}`,
     mode: '草稿 + 设备'
   },
   {
@@ -287,282 +474,683 @@ const nextSteps = computed(() => [
       ><span>{{ error || status?.applyError || status?.compileError }}</span>
     </p>
 
-    <header class="monitor-hero" :data-state="hero.state" aria-live="polite">
-      <div class="hero-copy">
-        <p class="hero-kicker">
-          <i class="hero-led" aria-hidden="true"></i>系统状态<span>{{ heroStateLabel }}</span>
-        </p>
-        <h2>{{ hero.title }}</h2>
-        <p class="hero-detail">{{ hero.detail }}</p>
-        <div class="hero-actions">
-          <button
-            v-if="!audioProcessing.dspEnabled && !audioProcessing.directMode"
-            class="primary-button"
-            :disabled="masterBusy"
-            @click="emit('master')"
-          >
-            <i class="pi pi-power-off"></i>开启 DSP
-          </button>
-          <button class="ghost-button" @click="emit('refresh')">
-            <i class="pi pi-refresh"></i>重新检测
-          </button>
+    <!-- 01 · 实时检测与链路健康 (UNIFIED STUDIO MASTER DECK) -->
+    <div class="monitor-detection-zone">
+      <header class="monitor-hero" :data-state="hero.state" aria-live="polite">
+        <div class="hero-topbar">
+          <div class="hero-kicker">
+            <span class="zone-num">01</span>
+            <span class="zone-kicker">SIGNAL HEALTH &amp; MASTER TELEMETRY</span>
+            <span class="hero-status-pill">
+              <i class="hero-led" aria-hidden="true"></i>
+              {{ heroStateLabel }}
+            </span>
+          </div>
+          <span class="health-score-pill" :data-all-pass="passed === checks.length">
+            <i class="state-dot" aria-hidden="true"></i>
+            <b>{{ passed }}</b> / {{ checks.length }} 项检测通过
+          </span>
         </div>
-      </div>
-      <dl class="hero-readouts">
-        <div>
-          <dt>处理耗时</dt>
-          <dd class="readout-value">{{ metric(processMs, 2) }}<small>ms</small></dd>
-          <dd class="readout-caption">
-            {{ status ? `${runningNodes} 个节点运行中` : '等待引擎报告' }}
-          </dd>
-        </div>
-        <div>
-          <dt>输出延迟</dt>
-          <dd class="readout-value">
-            {{ metric(outputInfo && outputInfo.latencyMs > 0 ? outputInfo.latencyMs : null)
-            }}<small>ms</small>
-          </dd>
-          <dd class="readout-caption">
-            {{
-              outputInfo && outputInfo.bufferSizeFrames > 0
-                ? `${outputInfo.bufferSizeFrames} frames 设备缓冲`
-                : '等待设备报告缓冲'
-            }}
-          </dd>
-        </div>
-        <div>
-          <dt>算法延迟</dt>
-          <dd class="readout-value">{{ metric(dspLatencyMs, 2) }}<small>ms</small></dd>
-          <dd class="readout-caption">
-            {{
-              status
-                ? `${status.totalLatencyFrames} frames · 尾音 ${status.totalTailFrames}`
-                : '等待引擎报告'
-            }}
-          </dd>
-        </div>
-        <div>
-          <dt>输出采样率</dt>
-          <dd class="readout-value">{{ rateValue }}<small>kHz</small></dd>
-          <dd class="readout-caption">
-            {{ scene?.name ?? '自动匹配' }} · {{ sceneNodes.length }} 个处理器
-          </dd>
-        </div>
-      </dl>
-    </header>
 
-    <div class="monitor-console">
-      <section class="signal-scope instrument" aria-label="实时音频频谱">
-        <header class="instrument-header">
-          <div class="instrument-title">
-            <span class="scope-light" :class="{ active: !!levels && !frozen }"></span>
-            <h3>频谱</h3>
-            <span class="scope-subtitle"
-              >20 Hz – 20 kHz · {{ dspSampleRate(outputInfo?.actualSampleRate) }}</span
-            >
-          </div>
-          <div class="instrument-tools">
-            <button
-              class="scope-tool"
-              :aria-pressed="peakHold"
-              title="保留每个频点的最大值"
-              @click="peakHold = !peakHold"
-            >
-              峰值保持
-            </button>
-            <button
-              class="scope-tool icon"
-              :aria-pressed="frozen"
-              :disabled="!levels && !frozen"
-              :aria-label="frozen ? '继续频谱' : '冻结频谱'"
-              :title="frozen ? '继续频谱' : '冻结频谱'"
-              @click="frozen = !frozen"
-            >
-              <i :class="frozen ? 'pi pi-play' : 'pi pi-pause'"></i>
-            </button>
-          </div>
-        </header>
-        <div class="scope-plot">
-          <div class="scope-db-axis" aria-hidden="true">
-            <span>0</span><span>−30</span><span>−60</span><span>−90</span>
-          </div>
-          <div class="scope-grid">
-            <span
-              v-for="guide in frequencyGuides"
-              :key="guide.value"
-              class="scope-vline"
-              :class="{
-                major: guide.value === 100 || guide.value === 1000 || guide.value === 10000
-              }"
-              :style="{ left: `${guide.position}%` }"
-              aria-hidden="true"
-            ></span>
-            <svg viewBox="0 20.6 100 77.4" preserveAspectRatio="none" aria-hidden="true">
-              <defs>
-                <linearGradient id="dsp-spectrum-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="currentColor" stop-opacity=".26" />
-                  <stop offset="65%" stop-color="currentColor" stop-opacity=".06" />
-                  <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
-                </linearGradient>
-              </defs>
-              <path :ref="spectrum.fillRef" class="scope-fill" fill="url(#dsp-spectrum-fill)" />
-              <path
-                :ref="spectrum.lineRef"
-                class="scope-line"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.25"
-                vector-effect="non-scaling-stroke"
-              />
-              <path
-                :ref="spectrum.peakRef"
-                class="scope-peak"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1"
-                stroke-dasharray="1 3"
-                vector-effect="non-scaling-stroke"
-              />
-            </svg>
-            <div v-if="!levels && !frozen" class="scope-empty">
-              <span>{{
-                !audioProcessing.fftEnabled
-                  ? 'FFT 采集未开启'
-                  : isPlaying
-                    ? '等待频谱数据'
-                    : '播放音乐，查看声音的实时轮廓'
-              }}</span
-              ><small>{{
-                !audioProcessing.fftEnabled
-                  ? '可在下方「采集与详细诊断」中开启'
-                  : '对数频率 · 0 至 −90 dBFS'
-              }}</small>
+        <div class="hero-main">
+          <div class="hero-copy">
+            <h2>{{ hero.title }}</h2>
+            <p class="hero-detail">{{ hero.detail }}</p>
+            <div class="hero-actions">
+              <button
+                v-if="!audioProcessing.directMode"
+                :class="audioProcessing.dspEnabled ? 'ghost-button' : 'primary-button'"
+                :disabled="masterBusy"
+                @click="emit('master')"
+              >
+                <i class="pi pi-power-off"></i
+                >{{ audioProcessing.dspEnabled ? '旁路 DSP' : '开启 DSP' }}
+              </button>
+              <button class="ghost-button" @click="emit('refresh')">
+                <i class="pi pi-refresh"></i>重新检测
+              </button>
+              <button class="ghost-button" @click="emit('navigate', 'chain')">
+                <i class="pi pi-sliders-h"></i>配置效果链
+              </button>
             </div>
           </div>
-        </div>
-        <div class="scope-frequency-axis" aria-hidden="true">
-          <span
-            v-for="item in frequencyLabels"
-            :key="item.value"
-            :style="{ left: `${item.position}%` }"
-            >{{ item.label }}</span
-          >
-        </div>
-        <footer class="instrument-footer">
-          <span class="scope-state">{{
-            frozen ? '已冻结当前频谱' : levels ? '实时音频采集' : '等待音频信号'
-          }}</span
-          ><span class="scope-levels"
-            >峰值
-            <b>{{ metric(visualizationData.active ? visualizationData.peakDb : null) }}</b>
-            <span class="scope-separator">·</span> RMS
-            <b>{{ metric(visualizationData.active ? visualizationData.rmsDb : null) }}</b>
-            dBFS</span
-          >
-        </footer>
-      </section>
 
-      <section class="loudness-panel instrument" aria-label="响度与声道">
-        <header class="instrument-header">
-          <div class="instrument-title">
-            <span class="scope-light" :class="{ active: !!meter }"></span>
-            <h3>响度</h3>
-            <span class="scope-subtitle">EBU R128</span>
-          </div>
-        </header>
-        <div class="loudness-hero" :class="{ warn: (meter?.clipCount ?? 0) > 0 }">
-          <strong>{{ metric(meter?.integratedLufs) }}</strong
-          ><span><b>LUFS</b>综合响度</span>
+          <dl class="hero-readouts">
+            <div>
+              <dt>处理耗时</dt>
+              <dd class="readout-value">{{ processMs.toFixed(2) }}<small>ms</small></dd>
+              <dd class="readout-caption">
+                {{ effectiveStatus ? `${runningNodes} 个节点运行中` : '0 个节点运行中' }}
+              </dd>
+            </div>
+            <div>
+              <dt>输出延迟</dt>
+              <dd class="readout-value">
+                {{ effectiveLatencyMs.toFixed(1) }}<small>ms</small>
+              </dd>
+              <dd class="readout-caption">
+                {{
+                  effectiveBuffer > 0
+                    ? `${effectiveBuffer} frames 设备缓冲`
+                    : '自动缓冲 · 驱动分配'
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>算法延迟</dt>
+              <dd class="readout-value">{{ dspLatencyMs.toFixed(2) }}<small>ms</small></dd>
+              <dd class="readout-caption">
+                {{
+                  `${effectiveStatus?.totalLatencyFrames ?? 0} frames · 尾音 ${effectiveStatus?.totalTailFrames ?? 0}`
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>输出采样率</dt>
+              <dd class="readout-value">{{ rateValue }}<small>kHz</small></dd>
+              <dd class="readout-caption">
+                {{ scene?.name ?? '自动匹配' }} · {{ sceneNodes.length }} 个处理器
+              </dd>
+            </div>
+          </dl>
         </div>
-        <div class="meter-rows">
-          <div
-            v-for="item in meters"
-            :key="item.key"
-            class="meter-row"
-            :class="{ warn: item.warn }"
-            :title="`${item.label} ${metric(item.value)} ${item.unit}`"
-          >
-            <span class="meter-key"
-              >{{ item.key }}<small>{{ item.label }}</small></span
-            >
-            <span class="meter-bar"><i :style="{ width: `${meterFill(item.value)}%` }"></i></span>
-            <strong>{{ metric(item.value) }}</strong>
-          </div>
-          <div class="meter-scale" aria-hidden="true">
-            <span
-              v-for="tick in meterTicks"
-              :key="tick.value"
-              :style="{ left: `${tick.position}%` }"
-              >{{ tick.label }}</span
-            >
-          </div>
-        </div>
-        <dl class="stereo-readings">
-          <div>
-            <dt>响度范围</dt>
-            <dd>{{ metric(meter?.loudnessRangeLu) }}<small>LU</small></dd>
-          </div>
-          <div>
-            <dt>削波</dt>
-            <dd :class="{ warn: (meter?.clipCount ?? 0) > 0 }">{{ meter?.clipCount ?? '—' }}</dd>
-          </div>
-          <div class="correlation">
-            <dt>声道相关性</dt>
-            <dd>{{ metric(correlation, 2) }}</dd>
-            <span class="correlation-track" aria-hidden="true"
-              ><i
-                v-if="correlation !== null"
-                :class="{ negative: correlation < 0 }"
-                :style="{ left: `${((correlation + 1) / 2) * 100}%` }"
-              ></i
-            ></span>
-          </div>
-        </dl>
-      </section>
-    </div>
 
-    <div class="monitor-lower">
-      <section class="health-panel">
-        <header class="panel-heading">
-          <h3>链路检查</h3>
-          <span class="health-score"
-            ><b>{{ passed }}</b> / {{ checks.length }} 项正常</span
-          >
-        </header>
-        <ul class="health-list">
+        <ul class="health-list" aria-label="链路检查">
           <li v-for="check in checks" :key="check.label" class="health-row" :data-tone="check.tone">
-            <i class="health-dot" aria-hidden="true"></i>
-            <span class="health-copy"
-              ><strong>{{ check.label }}</strong
-              ><span>{{ check.detail }}</span></span
-            >
-            <span class="health-result">{{
-              check.tone === 'success' ? '正常' : check.tone === 'warning' ? '注意' : '待检测'
-            }}</span>
+            <span class="health-copy">
+              <strong>
+                <i class="health-dot" aria-hidden="true"></i>
+                {{ check.label }}
+              </strong>
+              <span>{{ check.detail }}</span>
+            </span>
+            <span class="health-result">
+              {{ check.tone === 'success' ? '正常' : check.tone === 'warning' ? '注意' : '待命' }}
+            </span>
           </li>
         </ul>
-      </section>
-      <section class="next-steps" aria-label="接下来">
-        <header class="panel-heading">
-          <h3>塑造你的声音</h3>
-          <p>从校正开始，再到效果与输出；每一步都会反映在底部的信号链中。</p>
-        </header>
-        <ol class="step-list">
-          <li v-for="(step, index) in nextSteps" :key="step.tab">
-            <button class="step-card" :data-tab="step.tab" @click="emit('navigate', step.tab)">
-              <span class="step-number">{{ String(index + 1).padStart(2, '0') }}</span
-              ><span class="step-copy"
-                ><strong>{{ step.title }}</strong
-                ><small>{{ step.detail }}</small></span
-              ><span class="step-meta"
-                ><em>{{ step.mode }}</em
-                >{{ step.meta }}</span
-              ><i class="pi pi-arrow-right step-go" aria-hidden="true"></i>
-            </button>
-          </li>
-        </ol>
-      </section>
+      </header>
     </div>
+
+    <!-- 02 · 实时频谱与响度仪表 (SPECTRUM & LOUDNESS METERING) -->
+    <div class="monitor-metering-zone">
+      <div class="zone-header">
+        <span class="zone-num">02</span>
+        <span class="zone-kicker">REAL-TIME SPECTRUM &amp; EBU R128</span>
+        <h3>实时频谱与响度分析</h3>
+        <span class="zone-rule" aria-hidden="true"></span>
+        <span class="zone-subtitle">{{ dspSampleRate(actualRate) }} · 对数频率</span>
+      </div>
+
+      <div class="monitor-console">
+        <section class="signal-scope instrument" aria-label="实时音频频谱">
+          <header class="instrument-header">
+            <div class="instrument-title">
+              <span class="scope-light" :class="{ active: !!levels && !frozen }"></span>
+              <h3>频谱</h3>
+              <span class="scope-subtitle"
+                >20 Hz – 20 kHz · {{ dspSampleRate(actualRate) }}</span
+              >
+            </div>
+            <div class="instrument-tools">
+              <button
+                class="scope-tool"
+                :aria-pressed="peakHold"
+                title="保留每个频点的最大值"
+                @click="peakHold = !peakHold"
+              >
+                峰值保持
+              </button>
+              <button
+                class="scope-tool icon"
+                :aria-pressed="frozen"
+                :disabled="!levels && !frozen"
+                :aria-label="frozen ? '继续频谱' : '冻结频谱'"
+                :title="frozen ? '继续频谱' : '冻结频谱'"
+                @click="frozen = !frozen"
+              >
+                <i :class="frozen ? 'pi pi-play' : 'pi pi-pause'"></i>
+              </button>
+            </div>
+          </header>
+          <div class="scope-plot">
+            <div class="scope-db-axis" aria-hidden="true">
+              <span>0</span><span>−30</span><span>−60</span><span>−90</span>
+            </div>
+            <div class="scope-grid">
+              <span
+                v-for="guide in frequencyGuides"
+                :key="guide.value"
+                class="scope-vline"
+                :class="{
+                  major: guide.value === 100 || guide.value === 1000 || guide.value === 10000
+                }"
+                :style="{ left: `${guide.position}%` }"
+                aria-hidden="true"
+              ></span>
+              <svg viewBox="0 20.6 100 77.4" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <linearGradient id="dsp-spectrum-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="currentColor" stop-opacity=".28" />
+                    <stop offset="65%" stop-color="currentColor" stop-opacity=".07" />
+                    <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
+                  </linearGradient>
+                </defs>
+                <path :ref="spectrum.fillRef" class="scope-fill" fill="url(#dsp-spectrum-fill)" />
+                <path
+                  :ref="spectrum.lineRef"
+                  class="scope-line"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.35"
+                  vector-effect="non-scaling-stroke"
+                />
+                <path
+                  :ref="spectrum.peakRef"
+                  class="scope-peak"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1"
+                  stroke-dasharray="2 3"
+                  vector-effect="non-scaling-stroke"
+                />
+              </svg>
+              <div v-if="!levels && !frozen" class="scope-empty">
+                <span>{{
+                  !audioProcessing.fftEnabled
+                    ? 'FFT 采集未开启'
+                    : isPlaying
+                      ? '等待频谱数据'
+                      : '播放音乐，查看声音的实时轮廓'
+                }}</span
+                ><small>{{
+                  !audioProcessing.fftEnabled
+                    ? '可在下方「采集与详细诊断」中开启'
+                    : '对数频率 · 0 至 −90 dBFS'
+                }}</small>
+              </div>
+            </div>
+          </div>
+          <div class="scope-frequency-axis" aria-hidden="true">
+            <span
+              v-for="item in frequencyLabels"
+              :key="item.value"
+              :style="{ left: `${item.position}%` }"
+              >{{ item.label }}</span
+            >
+          </div>
+          <footer class="instrument-footer">
+            <span class="scope-state">{{
+              frozen ? '已冻结当前频谱' : levels ? '实时音频采集' : '等待音频信号'
+            }}</span
+            ><span class="scope-levels"
+              >峰值
+              <b>{{ dbReadout(livePeakDb) }}</b>
+              <span class="scope-separator">·</span> RMS
+              <b>{{ dbReadout(liveRmsDb) }}</b>
+              dBFS</span
+            >
+          </footer>
+        </section>
+
+        <section class="loudness-panel instrument" aria-label="响度与声道">
+          <header class="instrument-header">
+            <div class="instrument-title">
+              <span class="scope-light" :class="{ active: !!meter }"></span>
+              <h3>响度</h3>
+              <span class="scope-subtitle">EBU R128</span>
+            </div>
+          </header>
+          <div class="loudness-hero" :class="{ warn: totalClipCount > 0 }">
+            <strong>{{ dbReadout(integratedVal) }}</strong
+            ><span><b>LUFS</b>综合响度</span>
+          </div>
+          <div class="meter-rows">
+            <div
+              v-for="item in meters"
+              :key="item.key"
+              class="meter-row"
+              :class="{ warn: item.warn }"
+              :title="`${item.label} ${dbReadout(item.value)} ${item.unit}`"
+            >
+              <span class="meter-key"
+                >{{ item.key }}<small>{{ item.label }}</small></span
+              >
+              <span class="meter-bar"><i :style="{ width: `${meterFill(item.value)}%` }"></i></span>
+              <strong>{{ dbReadout(item.value) }}</strong>
+            </div>
+            <div class="meter-scale" aria-hidden="true">
+              <span
+                v-for="tick in meterTicks"
+                :key="tick.value"
+                :style="{ left: `${tick.position}%` }"
+                >{{ tick.label }}</span
+              >
+            </div>
+          </div>
+          <dl class="stereo-readings">
+            <div>
+              <dt>响度范围</dt>
+              <dd>{{ loudnessRangeVal.toFixed(1) }}<small>LU</small></dd>
+            </div>
+            <div>
+              <dt>削波</dt>
+              <dd :class="{ warn: totalClipCount > 0 }">{{ totalClipCount }}</dd>
+            </div>
+            <div class="correlation">
+              <dt>声道相关性</dt>
+              <dd>{{ correlation.toFixed(2) }}</dd>
+              <span class="correlation-track" aria-hidden="true"
+                ><i
+                  :class="{ negative: correlation < 0 }"
+                  :style="{ left: `${((correlation + 1) / 2) * 100}%` }"
+                ></i
+              ></span>
+            </div>
+          </dl>
+        </section>
+      </div>
+    </div>
+
+    <!-- 03 · 实时 DSP 调音台 (2-BAY CONSOLE + FULL-WIDTH MODULE STRIP) -->
+    <div class="monitor-tuning-zone">
+      <div class="zone-header">
+        <span class="zone-num">03</span>
+        <span class="zone-kicker">LIVE DSP CONSOLE &amp; ACOUSTIC SHAPING</span>
+        <h3>实时 DSP 调音与声学控制</h3>
+        <span class="zone-rule" aria-hidden="true"></span>
+        <span class="section-tag" :data-mode="processingBypassed ? 'draft' : 'live'">
+          {{ processingBypassed ? 'DSP 已旁路 · 开启后生效' : '实时作用于输出' }}
+        </span>
+      </div>
+
+      <div class="quick-dsp-grid">
+        <!-- Bay A: 空间声场与耳机交叉馈送 -->
+        <article class="dsp-tuning-card surface-panel" aria-label="耳机交叉馈送与立体声场">
+          <header class="tuning-card-head">
+            <div>
+              <span class="tuning-eyebrow">SPATIAL FIELD &amp; CROSSFEED</span>
+              <h4>耳机交叉馈送与空间声场</h4>
+            </div>
+            <label class="switch-field compact-switch">
+              <input
+                type="checkbox"
+                :checked="audioProcessing.crossfeedEnabled"
+                @change="
+                  updateProcessing({
+                    crossfeedEnabled: ($event.target as HTMLInputElement).checked
+                  })
+                "
+              />
+              <span>交叉馈送</span>
+            </label>
+          </header>
+
+          <div class="tuning-sliders">
+            <label class="tuning-slider-row">
+              <span class="slider-meta">
+                <span>交叉馈送强度 · {{ audioProcessing.crossfeedCutoffHz ?? 700 }} Hz</span>
+                <output>{{ crossfeedStrengthPct }}%</output>
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                :value="crossfeedStrengthPct"
+                @change="
+                  updateProcessing({
+                    crossfeedStrength: Number(($event.target as HTMLInputElement).value) / 100,
+                    crossfeedEnabled: true
+                  })
+                "
+              />
+            </label>
+
+            <label class="tuning-slider-row">
+              <span class="slider-meta">
+                <span>立体声宽度 (Stereo Width)</span>
+                <output>{{ stereoWidthPct }}%</output>
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                step="5"
+                :value="stereoWidthPct"
+                @change="
+                  updateStereo({
+                    width: Number(($event.target as HTMLInputElement).value) / 100
+                  })
+                "
+              />
+            </label>
+
+            <label class="tuning-slider-row">
+              <span class="slider-meta">
+                <span>左右声道平衡 (Channel Balance)</span>
+                <output>{{
+                  stereoBalancePct === 0
+                    ? '居中 0%'
+                    : stereoBalancePct > 0
+                      ? `R +${stereoBalancePct}%`
+                      : `L ${stereoBalancePct}%`
+                }}</output>
+              </span>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                :value="stereoBalancePct"
+                @change="
+                  updateStereo({
+                    balance: Number(($event.target as HTMLInputElement).value) / 100
+                  })
+                "
+              />
+            </label>
+          </div>
+
+          <footer class="tuning-card-foot stereo-pills">
+            <button
+              type="button"
+              class="chip"
+              :aria-pressed="stereoImage.mono"
+              @click="updateStereo({ mono: !stereoImage.mono })"
+            >
+              单声道 Mono
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :aria-pressed="stereoImage.swap"
+              @click="updateStereo({ swap: !stereoImage.swap })"
+            >
+              左右互换 L↔R
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :aria-pressed="stereoImage.invertLeft"
+              @click="updateStereo({ invertLeft: !stereoImage.invertLeft })"
+            >
+              左反相 ØL
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :aria-pressed="stereoImage.invertRight"
+              @click="updateStereo({ invertRight: !stereoImage.invertRight })"
+            >
+              右反相 ØR
+            </button>
+            <button
+              v-if="stereoModified"
+              type="button"
+              class="ghost-button reset-mini"
+              @click="resetStereoField"
+            >
+              重置
+            </button>
+          </footer>
+        </article>
+
+        <!-- Bay B: 响度归一与前级增益 -->
+        <article class="dsp-tuning-card surface-panel" aria-label="响度归一与增益保护">
+          <header class="tuning-card-head">
+            <div>
+              <span class="tuning-eyebrow">LOUDNESS &amp; GAIN STAGING</span>
+              <h4>响度归一与前级增益</h4>
+            </div>
+            <span
+              class="tuning-badge"
+              :class="{ active: (audioProcessing.volumeNormalization ?? 'off') !== 'off' }"
+            >
+              {{
+                (audioProcessing.volumeNormalization ?? 'off') === 'off'
+                  ? '直通 0.0 dB'
+                  : (audioProcessing.volumeNormalization ?? 'off') === 'track'
+                    ? '单曲归一'
+                    : (audioProcessing.volumeNormalization ?? 'off') === 'album'
+                      ? '专辑归一'
+                      : 'R128 响度'
+              }}
+            </span>
+          </header>
+
+          <div class="segmented tuning-segmented" role="group" aria-label="音量归一化模式">
+            <button
+              v-for="mode in normalizationModes"
+              :key="mode.id"
+              type="button"
+              :aria-pressed="(audioProcessing.volumeNormalization ?? 'off') === mode.id"
+              @click="updateProcessing({ volumeNormalization: mode.id })"
+            >
+              {{ mode.label }}
+            </button>
+          </div>
+
+          <div class="tuning-sliders">
+            <label class="tuning-slider-row">
+              <span class="slider-meta">
+                <span>ReplayGain 预放增益</span>
+                <output>{{ signedDb(audioProcessing.replayGainPreamp) }}</output>
+              </span>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                step="0.5"
+                :value="audioProcessing.replayGainPreamp ?? 0"
+                @change="
+                  updateProcessing({
+                    replayGainPreamp: Number(($event.target as HTMLInputElement).value)
+                  })
+                "
+              />
+            </label>
+            <label class="tuning-slider-row">
+              <span class="slider-meta">
+                <span>无标签曲目回退增益</span>
+                <output>{{ signedDb(audioProcessing.replayGainFallback) }}</output>
+              </span>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                step="0.5"
+                :value="audioProcessing.replayGainFallback ?? 0"
+                @change="
+                  updateProcessing({
+                    replayGainFallback: Number(($event.target as HTMLInputElement).value)
+                  })
+                "
+              />
+            </label>
+            <label class="tuning-slider-row">
+              <span class="slider-meta">
+                <span>均衡器前级预放 (EQ Preamp)</span>
+                <output>{{ signedDb(audioProcessing.eqPreamp) }}</output>
+              </span>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                step="0.5"
+                :value="audioProcessing.eqPreamp ?? 0"
+                @change="
+                  updateProcessing({
+                    eqPreamp: Number(($event.target as HTMLInputElement).value)
+                  })
+                "
+              />
+            </label>
+          </div>
+
+          <footer class="tuning-card-foot">
+            <label class="switch-field">
+              <input
+                type="checkbox"
+                :checked="audioProcessing.clipGuard !== false"
+                @change="
+                  updateProcessing({
+                    clipGuard: ($event.target as HTMLInputElement).checked,
+                    replayGainClip: ($event.target as HTMLInputElement).checked
+                  })
+                "
+              />
+              <span>开启峰值防削波保护 (Clip Guard)</span>
+            </label>
+          </footer>
+        </article>
+
+        <!-- Bay C: 全宽三栏核心模块与 DSD 策略横条 -->
+        <article
+          class="dsp-tuning-card dsp-master-strip surface-panel"
+          aria-label="核心模块与输出策略"
+        >
+          <div class="strip-bay">
+            <div class="strip-bay-head">
+              <span class="tuning-eyebrow">PARAMETRIC &amp; GRAPHIC EQ</span>
+              <label class="switch-field compact-switch">
+                <input
+                  type="checkbox"
+                  :checked="audioProcessing.eqEnabled"
+                  @change="
+                    updateProcessing({ eqEnabled: ($event.target as HTMLInputElement).checked })
+                  "
+                />
+                <span>{{ audioProcessing.eqEnabled ? '已启用' : '已旁路' }}</span>
+              </label>
+            </div>
+            <div class="strip-bay-body">
+              <div>
+                <strong>实时均衡器 (EQ)</strong>
+                <p>
+                  {{ audioProcessing.eqBands?.length ?? 10 }} 段频响 · 预放
+                  {{ signedDb(audioProcessing.eqPreamp) }}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="ghost-button reset-mini"
+                @click="emit('navigate', 'equalizer')"
+              >
+                调节曲线 <i class="pi pi-arrow-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="strip-bay">
+            <div class="strip-bay-head">
+              <span class="tuning-eyebrow">IMPULSE RESPONSE CONVOLVER</span>
+              <label class="switch-field compact-switch">
+                <input
+                  type="checkbox"
+                  :checked="audioProcessing.convolverEnabled"
+                  @change="
+                    updateProcessing({
+                      convolverEnabled: ($event.target as HTMLInputElement).checked
+                    })
+                  "
+                />
+                <span>{{ audioProcessing.convolverEnabled ? '已启用' : '已旁路' }}</span>
+              </label>
+            </div>
+            <div class="strip-bay-body">
+              <div>
+                <strong>脉冲响应卷积 (Convolver)</strong>
+                <p>{{ convolverFileName || '可在资料库导入或绑定房间 / 箱体 IR' }}</p>
+              </div>
+              <button
+                type="button"
+                class="ghost-button reset-mini"
+                @click="emit('navigate', 'library')"
+              >
+                脉冲库 <i class="pi pi-arrow-right"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="strip-bay strip-bay-wide">
+            <div class="strip-bay-head">
+              <span class="tuning-eyebrow">TRANSITION &amp; DSD OUTPUT POLICY</span>
+              <span class="strip-meta-tag">{{
+                audioProcessing.gapless ? 'Gapless 无缝已开启' : 'Gapless 无缝已关闭'
+              }}</span>
+            </div>
+            <div class="strip-controls-row">
+              <label class="tuning-slider-row compact-slider">
+                <span class="slider-meta">
+                  <span>交叉淡出 (Crossfade)</span>
+                  <output>{{
+                    (audioProcessing.crossfadeSeconds ?? 0) > 0
+                      ? `${Number(audioProcessing.crossfadeSeconds ?? 0).toFixed(1)} s`
+                      : '0.0 s'
+                  }}</output>
+                </span>
+                <input
+                  type="range"
+                  min="0"
+                  max="12"
+                  step="0.5"
+                  :value="audioProcessing.crossfadeSeconds ?? 0"
+                  @change="
+                    updateProcessing({
+                      crossfadeSeconds: Number(($event.target as HTMLInputElement).value)
+                    })
+                  "
+                />
+              </label>
+              <div class="dsd-inline-group">
+                <span class="dsd-label">DSD 策略</span>
+                <div class="segmented" role="group" aria-label="DSD 策略">
+                  <button
+                    v-for="mode in dsdModes"
+                    :key="mode.id"
+                    type="button"
+                    :aria-pressed="(audioProcessing.dsdOutputMode ?? 'auto') === mode.id"
+                    @click="updateProcessing({ dsdOutputMode: mode.id })"
+                  >
+                    {{ mode.label }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <!-- 04 · 深度调音工作流导航 (4-COLUMN ARCHITECTURAL LEDGER) -->
+    <section class="next-steps" aria-label="接下来">
+      <div class="zone-header">
+        <span class="zone-num">04</span>
+        <span class="zone-kicker">WORKFLOW STAGES</span>
+        <h3>按步骤深入塑造声音</h3>
+        <span class="zone-rule" aria-hidden="true"></span>
+        <p class="zone-subtitle">左侧链路总览实时同步每个模块与输出缓冲状态</p>
+      </div>
+      <ol class="step-list">
+        <li v-for="(step, index) in nextSteps" :key="step.tab">
+          <button class="step-card" :data-tab="step.tab" @click="emit('navigate', step.tab)">
+            <div class="step-card-top">
+              <span class="step-number">{{ String(index + 1).padStart(2, '0') }}</span>
+              <em class="step-mode-badge">{{ step.mode }}</em>
+            </div>
+            <div class="step-copy">
+              <strong>{{ step.title }}</strong>
+              <small>{{ step.detail }}</small>
+            </div>
+            <div class="step-card-foot">
+              <span class="step-meta">{{ step.meta }}</span>
+              <i class="pi pi-arrow-right step-go" aria-hidden="true"></i>
+            </div>
+          </button>
+        </li>
+      </ol>
+    </section>
 
     <details
       class="diagnostic-details"
@@ -578,19 +1166,19 @@ const nextSteps = computed(() => [
         <dl class="engine-facts">
           <div>
             <dt>编译状态</dt>
-            <dd>{{ status?.compileState ?? '—' }}</dd>
+            <dd>{{ effectiveStatus?.compileState ?? (processingBypassed ? 'bypassed' : 'ready') }}</dd>
           </div>
           <div>
             <dt>总延迟 / 尾音</dt>
             <dd>
-              {{ status?.totalLatencyFrames ?? '—' }} / {{ status?.totalTailFrames ?? '—' }} frames
+              {{ effectiveStatus?.totalLatencyFrames ?? 0 }} / {{ effectiveStatus?.totalTailFrames ?? 0 }} frames
             </dd>
           </div>
           <div>
             <dt>请求 / 确认 / 原生版本</dt>
             <dd>
-              {{ status?.requestedRevision ?? '—' }} / {{ status?.appliedRevision ?? '—' }} /
-              {{ status?.revision ?? '—' }}
+              {{ effectiveStatus?.requestedRevision ?? 0 }} / {{ effectiveStatus?.appliedRevision ?? 0 }} /
+              {{ effectiveStatus?.revision ?? 0 }}
             </dd>
           </div>
           <div>
@@ -598,12 +1186,12 @@ const nextSteps = computed(() => [
             <dd>
               {{
                 describeResampler(
-                  status?.outputStage?.resamplerQuality ?? 'native',
-                  status?.outputStage
+                  effectiveStatus?.outputStage?.resamplerQuality ?? 'native',
+                  effectiveStatus?.outputStage
                 )
               }}
               /
-              {{ status?.outputStage?.dither ?? '—' }}
+              {{ effectiveStatus?.outputStage?.dither ?? 'off' }}
             </dd>
           </div>
         </dl>
@@ -625,7 +1213,7 @@ const nextSteps = computed(() => [
               </tr>
             </thead>
             <tbody>
-              <tr v-for="node in status?.nodes ?? []" :key="node.id">
+              <tr v-for="node in effectiveStatus?.nodes ?? []" :key="node.id">
                 <th :title="node.id">{{ nodeLabel(node.type) }}</th>
                 <td>
                   {{
@@ -635,11 +1223,11 @@ const nextSteps = computed(() => [
                 <td>{{ metric(node.lastProcessMs, 3) }}</td>
                 <td>{{ metric(node.averageProcessMs, 3) }}</td>
                 <td>{{ metric(node.maxProcessMs, 3) }}</td>
-                <td>{{ node.overrunCount ?? '—' }}</td>
-                <td>{{ node.clipCount ?? '—' }}</td>
+                <td>{{ node.overrunCount ?? 0 }}</td>
+                <td>{{ node.clipCount ?? 0 }}</td>
                 <td>{{ node.latencyFrames }} / {{ node.tailFrames }} frames</td>
               </tr>
-              <tr v-if="!status?.nodes.length">
+              <tr v-if="!effectiveStatus?.nodes.length">
                 <td colspan="8" class="muted">引擎尚未报告处理节点。</td>
               </tr>
             </tbody>
@@ -647,7 +1235,7 @@ const nextSteps = computed(() => [
         </div>
         <details class="raw-config">
           <summary>完整引擎数据 · JSON</summary>
-          <pre>{{ JSON.stringify(status, null, 2) }}</pre>
+          <pre>{{ JSON.stringify(effectiveStatus, null, 2) }}</pre>
         </details>
       </div>
     </details>

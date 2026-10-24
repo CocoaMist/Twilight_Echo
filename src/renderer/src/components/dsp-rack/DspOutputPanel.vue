@@ -13,10 +13,17 @@ import {
 } from '../../../../shared/dspGraph.ts'
 
 const scene = defineModel<DspScene | null>('scene', { required: true })
-defineProps<{ status: DspGraphStatus | null }>()
+const props = defineProps<{ status: DspGraphStatus | null }>()
 const emit = defineEmits<{ busy: [busy: boolean] }>()
 const store = useAudioOutputDspStore()
-const { outputInfo, audioOutputConfig, audioOutputConfigApplyStatus } = storeToRefs(store)
+const {
+  outputInfo,
+  playbackInfo,
+  audioOutputConfig,
+  audioOutputConfigApplyStatus,
+  audioDevice,
+  audioDeviceOptions
+} = storeToRefs(store)
 const bufferDraft = ref(audioOutputConfig.value?.preferredBufferSize ?? 0)
 const bufferBusy = ref(false)
 const bufferMessage = ref('')
@@ -55,12 +62,41 @@ const bufferOptions = computed(() =>
 const pending = computed(
   () => bufferBusy.value || audioOutputConfigApplyStatus.value?.state === 'pending'
 )
+const selectedDevice = computed(
+  () =>
+    audioDeviceOptions.value?.find((device) => device.id === audioDevice.value) ??
+    audioDeviceOptions.value?.[0] ??
+    null
+)
 const actualRate = computed(
-  () => outputInfo.value?.actualSampleRate || outputInfo.value?.outputSampleRate || 0
+  () =>
+    outputInfo.value?.actualSampleRate ||
+    outputInfo.value?.outputSampleRate ||
+    props.status?.outputStage?.actualSampleRate ||
+    playbackInfo.value?.actualSampleRate ||
+    playbackInfo.value?.outputSampleRate ||
+    selectedDevice.value?.sampleRates?.[0] ||
+    48000
 )
 const actualBuffer = computed(() =>
-  outputInfo.value && outputInfo.value.bufferSizeFrames > 0 ? outputInfo.value.bufferSizeFrames : 0
+  outputInfo.value && outputInfo.value.bufferSizeFrames > 0
+    ? outputInfo.value.bufferSizeFrames
+    : playbackInfo.value?.bufferSizeFrames || 0
 )
+const effectiveLatencyMs = computed(() => {
+  const direct =
+    outputInfo.value?.latencyMs ||
+    outputInfo.value?.latencyInfo?.totalLatencyMs ||
+    outputInfo.value?.latencyInfo?.outputLatencyMs ||
+    outputInfo.value?.latencyInfo?.bufferLatencyMs ||
+    playbackInfo.value?.latencyMs ||
+    0
+  if (direct > 0) return direct
+  if (actualBuffer.value > 0 && actualRate.value > 0) {
+    return (actualBuffer.value / actualRate.value) * 1000
+  }
+  return 0
+})
 /** Logarithmic position of a buffer size between 64 and 32768 frames. */
 function bufferPosition(frames: number): number {
   if (!frames) return 0
@@ -225,14 +261,15 @@ async function applyBuffer(): Promise<void> {
       </header>
       <div class="buffer-readouts">
         <div>
-          <span>实际缓冲</span><strong>{{ actualBuffer || '—' }}<small>frames</small></strong>
+          <span>实际缓冲</span
+          ><strong
+            >{{ actualBuffer || '自动'
+            }}<small>{{ actualBuffer ? 'frames' : '驱动分配' }}</small></strong
+          >
         </div>
         <div>
           <span>输出延迟</span
-          ><strong
-            >{{ outputInfo && outputInfo.latencyMs > 0 ? outputInfo.latencyMs.toFixed(1) : '—'
-            }}<small>ms</small></strong
-          >
+          ><strong>{{ effectiveLatencyMs.toFixed(1) }}<small>ms</small></strong>
         </div>
         <div>
           <span>设备采样率</span
