@@ -390,12 +390,33 @@ const outputLatencyText = computed(() => {
   return `Latency ${total.toFixed(1)} ms`
 })
 
+const outputUnderrunRatePercent = computed<number | null>(() => {
+  const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
+  const callbacks = diagnostics?.asioHelperCallbackCount ?? 0
+  if (!diagnostics || callbacks <= 0) return null
+  const underruns = Math.max(
+    diagnostics.asioHelperUnderrunCount ?? 0,
+    diagnostics.sessionUnderrunCount ?? 0
+  )
+  return Math.min(100, Math.max(0, (underruns / callbacks) * 100))
+})
+
+const outputUnderrunWarningText = computed(() => {
+  const rate = outputUnderrunRatePercent.value
+  if (rate === null || rate <= 1) return ''
+  return t('diagnostics.panel.underrunRateWarning', { rate: rate.toFixed(1) })
+})
+
 const outputDiagnosticsText = computed(() => {
   const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
   const stage = dspGraphStatus.value?.outputStage
   const src = describeResampler(dspOutputStage.value.resamplerQuality, stage)
   if (!diagnostics) return `Underrun 0 · Drop 0 · ${src}`
-  return `Underrun ${diagnostics.sessionUnderrunCount} · Drop ${diagnostics.sessionBufferDropCount} · ${src}`
+  const underrunRate =
+    outputUnderrunRatePercent.value !== null
+      ? ` (${outputUnderrunRatePercent.value.toFixed(1)}%)`
+      : ''
+  return `Underrun ${diagnostics.sessionUnderrunCount}${underrunRate} · Drop ${diagnostics.sessionBufferDropCount} · ${src}`
 })
 
 const outputProviderImplementation = computed(() => outputInfo.value?.providerImplementation ?? '')
@@ -1024,6 +1045,15 @@ function setContinuitySampleRate(event: Event): void {
               <i class="pi pi-wrench" aria-hidden="true"></i> {{ outputReason.fix }}
             </p>
           </div>
+
+          <p
+            v-if="outputUnderrunWarningText"
+            class="diagnostic-reason-fix diagnostic-underrun-warning"
+            role="status"
+          >
+            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+            {{ outputUnderrunWarningText }}
+          </p>
 
           <div class="diagnostic-meta">
             <span v-if="outputLatencyText"

@@ -36,6 +36,14 @@ test('playback diagnostics expose the active PCM provider implementation', () =>
   )
 })
 
+test('playback diagnostics expose ASIO helper underrun rate and warn above 1%', () => {
+  assert.match(source, /const outputUnderrunRatePercent = computed<number \| null>\(\(\) => \{/)
+  assert.match(source, /diagnostics\?\.asioHelperCallbackCount \?\? 0/)
+  assert.match(source, /if \(rate === null \|\| rate <= 1\) return ''/)
+  assert.match(source, /t\('diagnostics\.panel\.underrunRateWarning'/)
+  assert.match(source, /class="diagnostic-reason-fix diagnostic-underrun-warning"/)
+})
+
 test('released output replaces playback proof and the HiFi occupancy label', () => {
   const playerBar = readFileSync(new URL('../PlayerBar.vue', import.meta.url), 'utf8')
   const sidebar = readFileSync(new URL('../player-bar/HiFiSidebar.vue', import.meta.url), 'utf8')

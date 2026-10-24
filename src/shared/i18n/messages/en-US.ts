@@ -617,6 +617,8 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'diagnostics.panel.perfect': 'The output chain is verified bit-exact',
   'diagnostics.panel.blockerCount': '{count} affecting passthrough',
   'diagnostics.panel.noBlockers': 'Nothing detected that affects passthrough',
+  'diagnostics.panel.underrunRateWarning':
+    'Buffer underrun rate is {rate}% — consider increasing the buffer size',
   'diagnostics.panel.showDetail': 'Show reasons',
   'diagnostics.panel.hideDetail': 'Hide reasons',
   'diagnostics.panel.fixLabel': 'What to do',

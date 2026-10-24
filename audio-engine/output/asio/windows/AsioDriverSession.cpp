@@ -101,6 +101,26 @@ void traceNativeDsdText(const char* operation, const std::string& text) {
   if (trace) trace << "Native DSD " << operation << " " << text << '\n';
 }
 
+std::vector<int32_t> sessionBufferSizeCandidates(
+    const AsioBufferRange& range,
+    const AsioOpenConfig& config,
+    bool nativeDsdRequested) {
+  if (range.maximum <= 0) return {};
+  if (nativeDsdRequested) {
+    return bufferSizeCandidates(range, config.bufferSizeFrames, config.dsdMinimumBufferFrames);
+  }
+  const bool needsAutoFloor =
+      config.bufferSizeFrames <= 0 || config.bufferSizeFrames < asio::kMinimumSafeAsioBufferFrames;
+  const long floor = needsAutoFloor
+      ? asio::minimumAutoBufferFrames(config.format)
+      : asio::kMinimumSafeAsioBufferFrames;
+  const int32_t minimumRequired = static_cast<int32_t>(std::min<long>(range.maximum, floor));
+  const int32_t requested = config.bufferSizeFrames <= 0
+      ? minimumRequired
+      : std::max(static_cast<int32_t>(config.bufferSizeFrames), minimumRequired);
+  return bufferSizeCandidates(range, requested, minimumRequired);
+}
+
 }  // namespace
 
 struct AsioDriverSession::State final : AsioCallbackTarget {
@@ -506,7 +526,7 @@ bool AsioDriverSession::open(const AsioOpenConfig& config, AsioOpenResult* resul
             " maximum=" + std::to_string(range.maximum) + " preferred=" + std::to_string(range.preferred) +
             " granularity=" + std::to_string(range.granularity));
         const auto sizes = asio_abi::asioErrorIsSuccess(rangeResult)
-            ? bufferSizeCandidates(range, config.bufferSizeFrames, nativeDsdRequested ? config.dsdMinimumBufferFrames : 0)
+            ? sessionBufferSizeCandidates(range, config, nativeDsdRequested)
             : std::vector<int32_t>{};
         if (sizes.empty()) {
           outcome.result.failureKind = AsioOpenFailureKind::Format;
@@ -851,8 +871,7 @@ bool AsioDriverSession::createBuffers(
           return true;
         };
         const auto tryRange = [&](const AsioBufferRange& range) {
-          const auto candidates = bufferSizeCandidates(range, state->openConfig.bufferSizeFrames,
-              dsd ? state->openConfig.dsdMinimumBufferFrames : 0);
+          const auto candidates = sessionBufferSizeCandidates(range, state->openConfig, dsd);
           // Output-only keeps healthy playback drivers inexpensive. Duplex is
           // a fallback for drivers that require their input pins to be allocated.
           const int configurations = !dsd && !state->openConfig.format.dopEncoded && state->inputChannels > 0 ? 2 : 1;
