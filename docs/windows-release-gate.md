@@ -38,13 +38,16 @@ second npm lockfile:
 - `follow-redirects@1.16.1` fixes `GHSA-q3jh-wrc6-jgq8` and `GHSA-8r9p-f939-6h3c`
   (cross-origin credential stripping and sensitive-header matching). The override covers nested Axios consumers.
 - `qs@6.16.0` fixes the tracked `qs` moderate advisories, including `GHSA-q8mj-m7cp-5q26` / `CVE-2026-8723` (comma-array stringify DoS).
-- Root `undici@6.28.1` fixes `GHSA-p88m-4jfj-68fv` / `GHSA-vxpw-j846-p89q` (header injection and WebSocket DoS) plus `GHSA-8xcm-r25x-g524` / `GHSA-m8rv-5g2x-5cg5` / `GHSA-v3r7-h72x-cjcm` (retry desynchronization, blob body CRLF injection, cookie attribute injection).
+- Root `undici@6.29.1` retains the earlier header, WebSocket, retry, blob and cookie fixes and adds `GHSA-4qv8-2p9j-2685` / `GHSA-xjj6-f33q-929c` (EventSource memory and content-encoding DoS). The 7.x Electron download branch is pinned to `7.30.1`, also fixing `GHSA-f72v-6w45-q472` (SRI algorithm-token normalization).
 - `postcss@8.5.26` fixes `GHSA-fxqj-rqcc-2cmp` (sourceMappingURL arbitrary `.map` read).
 - `nanoid@3.3.18` fixes `GHSA-28wg-ghj8-5hjv` / `GHSA-2v37-7h3g-55p8` (infinite loop in generators, via vue → postcss).
-- `ip-address@10.5.0` fixes `GHSA-mwp4-54f8-5fhr` / `GHSA-4xrf-jv44-h6hh` / `GHSA-22jq-vg5j-6vgg` (SSRF and trust-boundary bypass, via socks → pac-proxy-agent).
+- `ip-address@10.7.4` retains the SSRF and trust-boundary fixes and adds `GHSA-rxp7-6hxx-x8q5` (quadratic matching of oversized IPv6 zone identifiers, via socks → pac-proxy-agent).
+- `body-parser@1.20.9` / `2.4.0` retain the request-limit fix and add `GHSA-27r3-jxmh-p828` (compressed-body trailing-byte DoS), preserving the Express 4 / 5 dependency lines.
 
-The desktop runtime is pinned to Electron `43.7.0`, including the fix for
-`GHSA-fw47-9c62-h3vw` (HID/USB permission checks attributed to the wrong origin).
+The desktop runtime is pinned to Electron `43.8.1`, retaining the HID/USB origin fix and
+including `GHSA-x562-297c-g43g` (pointer-lock frame attribution), `GHSA-3qxv-5xgr-q7w9` /
+`GHSA-h3v5-h239-pg29` (GPU frame geometry), and `GHSA-jr5w-w6x2-84p9`
+(compromised eMudhra intermediate-certificate mitigation).
 
 `extract-zip@2.0.1` has no patched upstream release (`GHSA-jmr9-qjv8-65gv` and
 `GHSA-7pqw-9j4j-h8q3`, symlink path
