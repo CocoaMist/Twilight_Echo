@@ -2560,3 +2560,31 @@ html[data-te-library-title-overlay='on'] .preview-heading {
 .studio-single-color .studio-color-swatch > span {
   display: none;
 }
+
+.studio-player-subtargets {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--te-settings-control-border, var(--te-card-border));
+  background: var(--te-settings-control-bg, var(--te-subtle-bg));
+}
+
+.studio-player-subtargets button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  color: inherit;
+  background: transparent;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.studio-player-subtargets button[aria-pressed='true'] {
+  color: var(--te-editor-accent, var(--te-primary-500));
+  background: var(--te-editor-choice-surface, var(--te-active-bg));
+  font-weight: 600;
+}

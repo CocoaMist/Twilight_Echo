@@ -711,7 +711,7 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                   :theme-editing="themeDirty && !hasChanges"
                   @region="selectRegion"
                 >
-                  <template #context-tools>
+                  <template #context-tools="{ playerTarget, setPlayerTarget }">
                     <AppearanceSurfaceInspector
                       horizontal
                       :pages="pages"
@@ -723,11 +723,13 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                       :tone="tone"
                       :glass-tone="characterPreview?.glassTone"
                       :part="characterPart"
+                      :player-target="playerTarget"
                       :current-color="currentPartColor"
                       :player-mode="state.draft.playerBar?.mode ?? settings.playerBar.mode"
                       :now-playing-background="settings.nowPlayingBackground"
                       :busy="characterBusy"
                       @update:draft="state.draft = $event"
+                      @update:player-target="setPlayerTarget"
                       @importing-change="layerImporting = $event"
                       @image="chooseCharacterBackgroundImage"
                       @now-playing-background="changeQuickSetting({ nowPlayingBackground: $event })"

@@ -518,7 +518,7 @@ const lyricViewport = createLyricViewportController({
   getHotIndices: () => lyricHotIndices.value,
   getBufferedIndices: () => lyricBufferedIndices.value,
   alignPosition: LYRIC_ACTIVE_ANCHOR_RATIO,
-  getAlignPosition: () => lyricsAppearance.value.anchorPosition,
+  getAlignPosition: () => LYRIC_ACTIVE_ANCHOR_RATIO,
   getBottomReservedPx: measurePlaybarReservedPx,
   getRowGapPx: () => readThemeRootNumber('--te-playback-lyric-density', LYRIC_ROW_GAP_PX),
   isSpringEnabled: () => lyricMotionFull.value && lyricsViewActive.value,

@@ -279,6 +279,8 @@ test('lyrics keep the full timeline mounted while the viewport follows the activ
   // them, so springs and measured heights survive a line leaving the window.
   assert.doesNotMatch(renderedLines, /getLyricFocusLineIndices|lyricFocusWindow/)
   assert.match(source, /getFocusWindow: \(\) => lyricFocusWindow\.value/)
+  assert.match(source, /alignPosition: LYRIC_ACTIVE_ANCHOR_RATIO/)
+  assert.match(source, /getAlignPosition: \(\) => LYRIC_ACTIVE_ANCHOR_RATIO/)
   assert.doesNotMatch(source, /lyricLeavingIndex|lyricEnteringIndex/)
   assert.match(source, /<PlayingLyricLine/)
   assert.match(line, /class="lyric-row-content"/)

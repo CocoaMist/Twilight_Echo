@@ -1306,7 +1306,7 @@ onBeforeUnmount(() => {
             @workshop-layer-edit="(id, surface, patch) => workshop?.editLayer(id, surface, patch)"
             @workshop-gesture="workshop?.gesture($event)"
           >
-            <template #context-tools>
+            <template #context-tools="{ playerTarget, setPlayerTarget }">
               <div
                 class="appearance-context-tools"
                 data-appearance-context
@@ -1324,9 +1324,11 @@ onBeforeUnmount(() => {
                   controls-only
                   contextual
                   :part="selectedPart"
+                  :player-target="playerTarget"
                   :active="active && !switching && !applying"
                   :initial-key="selected"
                   :initial-domain="selectedCategory?.studio"
+                  @update:player-target="setPlayerTarget"
                   @domain-change="onStudioDomain"
                 />
                 <ThemeWorkshopPage

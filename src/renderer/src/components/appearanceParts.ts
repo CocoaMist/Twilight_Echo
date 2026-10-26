@@ -76,7 +76,12 @@ export const APPEARANCE_PARTS: {
     id: 'player-page',
     label: '播放页',
     icon: 'pi pi-disc',
-    description: '调整播放页背景、封面外框、歌词排版与全屏播放视觉。'
+    description: '调整播放页背景、封面外框、歌词排版与全屏播放视觉。',
+    preview: {
+      selector: '.appearance-preview-player-stage',
+      label: '调整播放页背景',
+      focus: 'scene'
+    }
   },
   {
     id: 'card',

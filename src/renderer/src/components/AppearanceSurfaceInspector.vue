@@ -23,7 +23,14 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 
 const { settings, updateSettings } = useSettingsStore()
 function updatePlayerLayoutField(
-  key: 'coverSize' | 'coverGap' | 'lyricsMaxWidth',
+  key:
+    | 'coverSize'
+    | 'coverRadius'
+    | 'coverGap'
+    | 'lyricsMaxWidth'
+    | 'fontSize'
+    | 'translationSpacing'
+    | 'inactiveOpacity',
   value: number
 ): void {
   if (props.busy || !Number.isFinite(value)) return
@@ -34,12 +41,22 @@ function updatePlayerLayoutField(
     }
   }).catch(() => undefined)
 }
+function updatePlayerLyricsAlign(value: string): void {
+  if (props.busy || !['left', 'center', 'right'].includes(value)) return
+  void updateSettings({
+    lyricsAppearance: {
+      ...settings.value.lyricsAppearance,
+      align: value as 'left' | 'center' | 'right'
+    }
+  }).catch(() => undefined)
+}
 
 const props = defineProps<{
   draft: AppearanceDraft
   tone: AppearanceTone
   glassTone?: AppearanceTone
   part: AppearancePart
+  playerTarget?: 'stage' | 'cover' | 'lyrics'
   busy?: boolean
   playerMode?: 'standard' | 'mini' | 'compact'
   nowPlayingBackground?: 'blur' | 'fluid' | 'solid'
@@ -50,12 +67,25 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   'update:draft': [draft: AppearanceDraft]
+  'update:playerTarget': [target: 'stage' | 'cover' | 'lyrics']
   image: []
   more: [part: AppearancePart]
   'now-playing-background': [mode: 'blur' | 'fluid' | 'solid']
   'update:collapsed': [collapsed: boolean]
   'importing-change': [importing: boolean]
 }>()
+const localPlayerTarget = ref<'stage' | 'cover' | 'lyrics'>(props.playerTarget ?? 'stage')
+watch(
+  () => props.playerTarget,
+  (target) => {
+    if (target) localPlayerTarget.value = target
+  }
+)
+const activePlayerTarget = computed(() => props.playerTarget ?? localPlayerTarget.value)
+function selectPlayerTarget(target: 'stage' | 'cover' | 'lyrics'): void {
+  localPlayerTarget.value = target
+  emit('update:playerTarget', target)
+}
 const container = ref<HTMLElement>()
 const heading = ref<HTMLElement>()
 const trigger = ref<HTMLButtonElement>()
@@ -346,34 +376,153 @@ watch(
           </button>
         </template>
         <template v-else-if="playerPagePart">
-          <label class="appearance-material-field"
-            ><span>背景</span
-            ><select
-              aria-label="播放页背景模式"
-              :value="playerBackgroundMode"
-              @change="setPlayerBackgroundMode(($event.target as HTMLSelectElement).value)"
+          <div class="appearance-player-subtargets" role="group" aria-label="播放页编辑区域">
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'stage'"
+              @click="selectPlayerTarget('stage')"
             >
-              <option value="blur">模糊封面</option>
-              <option value="fluid">流体光影</option>
-              <option value="solid">纯色底色</option>
-              <option value="image">自选图片</option>
-            </select></label
-          >
-          <label
-            v-if="playerBackgroundMode === 'solid' || hasImage"
-            class="appearance-material-field"
-            ><span>底色</span
-            ><input
-              type="color"
-              aria-label="播放页背景颜色"
-              :value="background[tone]"
-              @input="setColor(($event.target as HTMLInputElement).value)"
-          /></label>
-          <button class="appearance-image-button" @click="emit('image')">
-            <i class="pi pi-image" aria-hidden="true" />{{
-              background.image ? '更换图片' : '选择图片'
-            }}
-          </button>
+              背景
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'cover'"
+              @click="selectPlayerTarget('cover')"
+            >
+              封面
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'lyrics'"
+              @click="selectPlayerTarget('lyrics')"
+            >
+              歌词
+            </button>
+          </div>
+          <template v-if="activePlayerTarget === 'cover' && settings.lyricsAppearance">
+            <div class="appearance-inline-slider">
+              <span>大小</span>
+              <input
+                type="range"
+                aria-label="封面大小"
+                min="60"
+                max="115"
+                step="1"
+                :value="settings.lyricsAppearance.coverSize"
+                @input="
+                  updatePlayerLayoutField(
+                    'coverSize',
+                    Number(($event.target as HTMLInputElement).value)
+                  )
+                "
+              />
+              <EditableRangeValue
+                :value="settings.lyricsAppearance.coverSize"
+                :min="60"
+                :max="115"
+                suffix="%"
+                aria-label="封面大小数值"
+                :disabled="busy"
+                @change="updatePlayerLayoutField('coverSize', $event)"
+              />
+            </div>
+            <div class="appearance-inline-slider">
+              <span>圆角</span>
+              <input
+                type="range"
+                aria-label="封面圆角"
+                min="0"
+                max="48"
+                step="1"
+                :value="settings.lyricsAppearance.coverRadius ?? 16"
+                @input="
+                  updatePlayerLayoutField(
+                    'coverRadius',
+                    Number(($event.target as HTMLInputElement).value)
+                  )
+                "
+              />
+              <EditableRangeValue
+                :value="settings.lyricsAppearance.coverRadius ?? 16"
+                :min="0"
+                :max="48"
+                suffix="px"
+                aria-label="封面圆角数值"
+                :disabled="busy"
+                @change="updatePlayerLayoutField('coverRadius', $event)"
+              />
+            </div>
+          </template>
+          <template v-else-if="activePlayerTarget === 'lyrics' && settings.lyricsAppearance">
+            <div class="appearance-inline-slider">
+              <span>字号</span>
+              <input
+                type="range"
+                aria-label="歌词字号"
+                min="16"
+                max="40"
+                step="1"
+                :value="settings.lyricsAppearance.fontSize ?? 24"
+                @input="
+                  updatePlayerLayoutField(
+                    'fontSize',
+                    Number(($event.target as HTMLInputElement).value)
+                  )
+                "
+              />
+              <EditableRangeValue
+                :value="settings.lyricsAppearance.fontSize ?? 24"
+                :min="16"
+                :max="40"
+                suffix="px"
+                aria-label="歌词字号数值"
+                :disabled="busy"
+                @change="updatePlayerLayoutField('fontSize', $event)"
+              />
+            </div>
+            <label class="appearance-material-field"
+              ><span>对齐</span
+              ><select
+                aria-label="歌词对齐方式"
+                :value="settings.lyricsAppearance.align ?? 'left'"
+                @change="updatePlayerLyricsAlign(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="left">左对齐</option>
+                <option value="center">居中</option>
+                <option value="right">右对齐</option>
+              </select></label
+            >
+          </template>
+          <template v-else>
+            <label class="appearance-material-field"
+              ><span>背景</span
+              ><select
+                aria-label="播放页背景模式"
+                :value="playerBackgroundMode"
+                @change="setPlayerBackgroundMode(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="blur">模糊封面</option>
+                <option value="fluid">流体光影</option>
+                <option value="solid">纯色底色</option>
+                <option value="image">自选图片</option>
+              </select></label
+            >
+            <label
+              v-if="playerBackgroundMode === 'solid' || hasImage"
+              class="appearance-material-field"
+              ><span>底色</span
+              ><input
+                type="color"
+                aria-label="播放页背景颜色"
+                :value="background[tone]"
+                @input="setColor(($event.target as HTMLInputElement).value)"
+            /></label>
+            <button class="appearance-image-button" @click="emit('image')">
+              <i class="pi pi-image" aria-hidden="true" />{{
+                background.image ? '更换图片' : '选择图片'
+              }}
+            </button>
+          </template>
         </template>
         <button
           v-if="scope || playerPagePart"
@@ -479,7 +628,7 @@ watch(
                     ><EditableRangeValue
                       :value="settings.lyricsAppearance.coverSize"
                       :min="60"
-                      :max="100"
+                      :max="115"
                       suffix="%"
                       aria-label="封面大小数值"
                       :disabled="busy"
@@ -491,12 +640,41 @@ watch(
                     type="range"
                     aria-label="封面大小"
                     min="60"
-                    max="100"
-                    step="2"
+                    max="115"
+                    step="1"
                     :value="settings.lyricsAppearance.coverSize"
                     @input="
                       updatePlayerLayoutField(
                         'coverSize',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-cover-radius">封面圆角</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.coverRadius ?? 16"
+                      :min="0"
+                      :max="48"
+                      suffix="px"
+                      aria-label="封面圆角数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('coverRadius', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-cover-radius"
+                    type="range"
+                    aria-label="封面圆角"
+                    min="0"
+                    max="48"
+                    step="1"
+                    :value="settings.lyricsAppearance.coverRadius ?? 16"
+                    @input="
+                      updatePlayerLayoutField(
+                        'coverRadius',
                         Number(($event.target as HTMLInputElement).value)
                       )
                     "
@@ -555,6 +733,105 @@ watch(
                     @input="
                       updatePlayerLayoutField(
                         'lyricsMaxWidth',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-lyric-font-size">歌词字号</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.fontSize ?? 24"
+                      :min="16"
+                      :max="40"
+                      suffix="px"
+                      aria-label="歌词字号数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('fontSize', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-lyric-font-size"
+                    type="range"
+                    aria-label="歌词字号"
+                    min="16"
+                    max="40"
+                    step="1"
+                    :value="settings.lyricsAppearance.fontSize ?? 24"
+                    @input="
+                      updatePlayerLayoutField(
+                        'fontSize',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+                <label class="appearance-material-field"
+                  ><span>歌词对齐</span>
+                  <select
+                    aria-label="歌词对齐方式"
+                    :value="settings.lyricsAppearance.align ?? 'left'"
+                    @change="updatePlayerLyricsAlign(($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="left">左对齐</option>
+                    <option value="center">居中</option>
+                    <option value="right">右对齐</option>
+                  </select>
+                </label>
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-lyric-spacing">行距与翻译间距</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.translationSpacing ?? 6"
+                      :min="2"
+                      :max="24"
+                      suffix="px"
+                      aria-label="行距与翻译间距数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('translationSpacing', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-lyric-spacing"
+                    type="range"
+                    aria-label="行距与翻译间距"
+                    min="2"
+                    max="24"
+                    step="1"
+                    :value="settings.lyricsAppearance.translationSpacing ?? 6"
+                    @input="
+                      updatePlayerLayoutField(
+                        'translationSpacing',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-lyric-opacity">未激活歌词透明度</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.inactiveOpacity ?? 35"
+                      :min="15"
+                      :max="90"
+                      suffix="%"
+                      aria-label="未激活歌词透明度数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('inactiveOpacity', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-lyric-opacity"
+                    type="range"
+                    aria-label="未激活歌词透明度"
+                    min="15"
+                    max="90"
+                    step="1"
+                    :value="settings.lyricsAppearance.inactiveOpacity ?? 35"
+                    @input="
+                      updatePlayerLayoutField(
+                        'inactiveOpacity',
                         Number(($event.target as HTMLInputElement).value)
                       )
                     "
@@ -848,10 +1125,45 @@ input:focus-visible {
 }
 .is-horizontal {
   width: auto;
-  max-width: min(440px, calc(100vw - 32px));
+  max-width: min(640px, calc(100vw - 32px));
   overflow: visible;
   padding: 10px 12px;
   box-shadow: var(--te-editor-toolbar-shadow);
+}
+.appearance-player-subtargets {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--te-settings-control-border);
+  background: var(--te-settings-control-bg);
+}
+.appearance-player-subtargets button {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.appearance-player-subtargets button[aria-pressed='true'] {
+  color: var(--te-editor-accent, var(--te-settings-text));
+  background: var(--te-editor-choice-surface, rgba(127, 127, 127, 0.16));
+  font-weight: 600;
+}
+.appearance-inline-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  white-space: nowrap;
+}
+.appearance-inline-slider input[type='range'] {
+  width: 84px;
+  accent-color: var(--te-editor-accent);
+}
+.appearance-inline-slider :deep(.editable-range-value) {
+  min-width: 48px;
 }
 .is-horizontal .appearance-inspector-body {
   overflow: visible;

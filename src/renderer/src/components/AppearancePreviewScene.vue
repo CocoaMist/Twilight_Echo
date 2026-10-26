@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import TitleBar from './TitleBar.vue'
 import SideMenu from './SideMenu.vue'
 import OnlineHome from './local-dashboard/OnlineHome.vue'
@@ -12,6 +12,10 @@ import type { PlayerBarLayoutSettings } from '../../../shared/playerBarLayout'
 import type { NavigationPagePreferences } from '../../../shared/navigationPages'
 import type { NavigationPageDefinition } from '../app/navigationPages'
 import { applyAppearanceReferenceMasks } from './appearanceReferenceMasks'
+import { usePlayerStore } from '../stores/usePlayerStore'
+import { useMusicStore } from '../stores/useMusicStore'
+import { useNcmStore } from '../stores/useNcmStore'
+import { resolveCover } from '../utils/coverLoader'
 
 defineProps<{
   page?: AppBackgroundPage
@@ -59,7 +63,218 @@ const defaultPreviewCover =
 const sampleTracks = workshopPreviewTracks
   .slice(0, 12)
   .map((track) => ({ ...track, source: 'local' }))
-const previewCover = sampleTracks[0]?.cover || defaultPreviewCover
+type PreviewTrack = (typeof sampleTracks)[number] & {
+  cover?: string | null
+  coverSource?: string | null
+}
+const defaultTrack: PreviewTrack = sampleTracks[0]
+const fallbackCover = defaultTrack?.cover || defaultPreviewCover
+const previewCover = ref<string>(fallbackCover)
+const playerPreviewTrack = ref<PreviewTrack>(defaultTrack)
+
+const isIsolatedPreviewBoundary = (): boolean =>
+  typeof window !== 'undefined' &&
+  Boolean((window as { previewBoundary?: unknown }).previewBoundary)
+
+const playerStore = usePlayerStore()
+const musicStore = useMusicStore()
+const ncmStore = useNcmStore()
+
+let resolveEpoch = 0
+let cachedLikedCandidate: { track: PreviewTrack; cover: string } | null = null
+
+async function resolveTrackCoverCandidate(
+  track:
+    | {
+        id?: string | number
+        title?: string
+        artist?: string
+        album?: string
+        duration?: number
+        cover?: string | null
+        coverSource?: string | null
+      }
+    | null
+    | undefined
+): Promise<{ track: PreviewTrack; cover: string } | null> {
+  if (!track || (!track.cover && !track.coverSource)) return null
+  if (typeof track.title === 'string' && track.title.includes('PRIVATE_')) return null
+  try {
+    const resolved = await resolveCover(track.cover ?? null, track.coverSource ?? null)
+    const url =
+      resolved ||
+      (typeof track.cover === 'string' &&
+      /^(https?:|data:|blob:|file:|background:|theme-asset:)/i.test(track.cover)
+        ? track.cover
+        : null)
+    if (!url) return null
+    return {
+      cover: url,
+      track: {
+        ...defaultTrack,
+        ...track,
+        id: String(track.id ?? defaultTrack.id),
+        title: track.title || defaultTrack.title,
+        artist: track.artist || defaultTrack.artist,
+        album: track.album || defaultTrack.album,
+        duration: typeof track.duration === 'number' ? track.duration : defaultTrack.duration,
+        cover: url
+      }
+    }
+  } catch {
+    return null
+  }
+}
+
+async function resolveLikedOrLibraryFallback(): Promise<{
+  track: PreviewTrack
+  cover: string
+} | null> {
+  if (cachedLikedCandidate) return cachedLikedCandidate
+  if (isIsolatedPreviewBoundary()) return null
+
+  // 1. Local library "我喜欢" default playlist
+  try {
+    const playlists = musicStore.localPlaylists?.value ?? []
+    const favPlaylist = playlists.find((p) => p.isDefault || p.name === '我喜欢')
+    if (favPlaylist && typeof musicStore.getPlaylistMembers === 'function') {
+      const page = await musicStore.getPlaylistMembers(favPlaylist.id, { limit: 20 })
+      for (const item of page?.items ?? []) {
+        const candidate = await resolveTrackCoverCandidate(item)
+        if (candidate) {
+          cachedLikedCandidate = candidate
+          return candidate
+        }
+      }
+    }
+  } catch {
+    // Ignore lookup failures and continue to next source
+  }
+
+  // 2. Streaming user's liked songs (NCM liked playlist)
+  try {
+    if (ncmStore.isLoggedIn?.value) {
+      if (!ncmStore.likedPlaylist?.value && typeof ncmStore.fetchUserLibrary === 'function') {
+        await ncmStore.fetchUserLibrary().catch(() => {})
+      }
+      if (typeof ncmStore.fetchLikedTracksPage === 'function') {
+        const page = await ncmStore.fetchLikedTracksPage(0, 20)
+        for (const item of page?.tracks ?? []) {
+          const candidate = await resolveTrackCoverCandidate(item)
+          if (candidate) {
+            cachedLikedCandidate = candidate
+            return candidate
+          }
+        }
+      }
+      const likedMeta = ncmStore.likedPlaylist?.value
+      if (likedMeta?.cover || likedMeta?.coverSource) {
+        const candidate = await resolveTrackCoverCandidate({
+          id: `liked-playlist:${likedMeta.id}`,
+          title: likedMeta.name || defaultTrack.title,
+          artist: ncmStore.profile?.value?.nickname || defaultTrack.artist,
+          album: '我喜欢的音乐',
+          cover: likedMeta.cover,
+          coverSource: likedMeta.coverSource
+        })
+        if (candidate) {
+          cachedLikedCandidate = candidate
+          return candidate
+        }
+      }
+    }
+  } catch {
+    // Ignore streaming lookup errors
+  }
+
+  // 3. Local library tracks (in-memory or queried)
+  try {
+    const inMemory = (musicStore as { tracks?: { value?: PreviewTrack[] } }).tracks?.value ?? []
+    for (const item of inMemory.slice(0, 20)) {
+      const candidate = await resolveTrackCoverCandidate(item)
+      if (candidate) {
+        cachedLikedCandidate = candidate
+        return candidate
+      }
+    }
+    if (typeof musicStore.queryTracks === 'function') {
+      const page = (await musicStore.queryTracks({ limit: 20 })) as {
+        items?: PreviewTrack[]
+        tracks?: PreviewTrack[]
+      }
+      for (const item of page?.items ?? page?.tracks ?? []) {
+        const candidate = await resolveTrackCoverCandidate(item)
+        if (candidate) {
+          cachedLikedCandidate = candidate
+          return candidate
+        }
+      }
+    }
+  } catch {
+    // Ignore local library query errors
+  }
+
+  return null
+}
+
+async function syncPreviewCoverAndTrack(): Promise<void> {
+  if (isIsolatedPreviewBoundary()) {
+    previewCover.value = fallbackCover
+    playerPreviewTrack.value = defaultTrack
+    return
+  }
+  const currentEpoch = ++resolveEpoch
+  const current = playerStore.currentTrack?.value
+  const liveThemeCover = playerStore.themeCoverUrl?.value
+
+  if (current && (!current.title || !current.title.includes('PRIVATE_'))) {
+    if (liveThemeCover) {
+      previewCover.value = liveThemeCover
+      playerPreviewTrack.value = {
+        ...defaultTrack,
+        ...current,
+        cover: liveThemeCover
+      }
+      return
+    }
+    const resolvedCurrent = await resolveTrackCoverCandidate(current)
+    if (currentEpoch !== resolveEpoch) return
+    if (resolvedCurrent) {
+      previewCover.value = resolvedCurrent.cover
+      playerPreviewTrack.value = resolvedCurrent.track
+      return
+    }
+  }
+
+  const fallbackCandidate = await resolveLikedOrLibraryFallback()
+  if (currentEpoch !== resolveEpoch) return
+  if (fallbackCandidate) {
+    previewCover.value = fallbackCandidate.cover
+    playerPreviewTrack.value = fallbackCandidate.track
+    return
+  }
+
+  previewCover.value = fallbackCover
+  playerPreviewTrack.value = defaultTrack
+}
+
+watch(
+  () => [
+    playerStore.currentTrack?.value,
+    playerStore.themeCoverUrl?.value,
+    musicStore.localPlaylists?.value?.length,
+    ncmStore.isLoggedIn?.value,
+    ncmStore.likedPlaylist?.value?.id
+  ],
+  () => {
+    cachedLikedCandidate = null
+    void syncPreviewCoverAndTrack()
+  },
+  { immediate: true }
+)
+
+const hasResolvedLiveCover = computed(() => previewCover.value !== fallbackCover)
+
 // Pass the display component its own static data, without mounting the online
 // dashboard's provider/account lifecycle. New local sections use the same props
 // when the shared home component gains them.
@@ -82,6 +297,7 @@ const homePreview = {
 }
 onMounted(() => {
   applyAppearanceReferenceMasks(scene.value)
+  void syncPreviewCoverAndTrack()
 })
 </script>
 
@@ -141,12 +357,12 @@ onMounted(() => {
               <div class="appearance-preview-cover-frame">
                 <img
                   :src="previewCover"
-                  :alt="sampleTracks[0]?.title ?? '夜空中的旋律'"
+                  :alt="playerPreviewTrack?.title ?? '夜空中的旋律'"
                 />
               </div>
               <div class="appearance-preview-player-meta">
-                <h2>{{ sampleTracks[0]?.title ?? '夜航星' }}</h2>
-                <p>{{ sampleTracks[0]?.artist ?? 'Twilight Echo' }} · {{ sampleTracks[0]?.album ?? '星海回响' }}</p>
+                <h2>{{ playerPreviewTrack?.title ?? '夜航星' }}</h2>
+                <p>{{ playerPreviewTrack?.artist ?? 'Twilight Echo' }} · {{ playerPreviewTrack?.album ?? '星海回响' }}</p>
               </div>
             </div>
             <div class="appearance-preview-player-lyrics">
@@ -172,7 +388,7 @@ onMounted(() => {
         :mode="playerMode"
         :left-navigation-open="navigationExpanded"
         :glass="false"
-        :preview-track="sampleTracks[0]"
+        :preview-track="page === 'player' && hasResolvedLiveCover ? playerPreviewTrack : sampleTracks[0]"
         preview-state="idle"
         :preview-appearance="appearance"
       />
@@ -442,7 +658,7 @@ onMounted(() => {
 }
 .appearance-preview-lyric-line {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--te-playback-lyric-scale, 100%) / 100%);
   line-height: 1.5;
   color: var(--te-playback-lyric-text, var(--te-neutral-500));
   opacity: var(--te-playback-lyric-inactive-opacity, 66%);
@@ -451,7 +667,10 @@ onMounted(() => {
   border-radius: 12px;
 }
 .appearance-preview-lyric-line.is-active {
-  font-size: calc(21px * var(--te-playback-lyric-active-scale, 102%) / 100%);
+  font-size: calc(
+    21px * var(--te-playback-lyric-scale, 100%) / 100% * var(--te-playback-lyric-active-scale, 102%) /
+      100%
+  );
   font-weight: 700;
   color: var(--te-playback-lyric-active-text, var(--te-neutral-900));
   opacity: 1;

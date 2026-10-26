@@ -39,9 +39,26 @@ const props = defineProps<{
   controlsOnly?: boolean
   contextual?: boolean
   part?: AppearancePart
+  playerTarget?: 'stage' | 'cover' | 'lyrics'
   active?: boolean
 }>()
-const emit = defineEmits<{ back: []; domainChange: [domain: ThemeStudioDomain] }>()
+const emit = defineEmits<{
+  back: []
+  domainChange: [domain: ThemeStudioDomain]
+  'update:playerTarget': [target: 'stage' | 'cover' | 'lyrics']
+}>()
+const localPlayerTarget = ref<'stage' | 'cover' | 'lyrics'>(props.playerTarget ?? 'stage')
+watch(
+  () => props.playerTarget,
+  (target) => {
+    if (target) localPlayerTarget.value = target
+  }
+)
+const activePlayerTarget = computed(() => props.playerTarget ?? localPlayerTarget.value)
+function selectPlayerTarget(target: 'stage' | 'cover' | 'lyrics'): void {
+  localPlayerTarget.value = target
+  emit('update:playerTarget', target)
+}
 
 const {
   BUILT_IN_THEME_FONTS,
@@ -735,102 +752,238 @@ void editorPaneRef.value
           </select></label
         >
         <template v-else-if="contextPart === 'player-page'">
-          <label
-            ><span>背景</span
-            ><select
-              aria-label="选中播放页背景模式"
-              :value="activeModes.player?.backdrop ?? 'follow'"
-              @change="updatePlayerMode('backdrop', $event)"
+          <div class="studio-player-subtargets" role="group" aria-label="播放页编辑区域">
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'stage'"
+              @click="selectPlayerTarget('stage')"
             >
-              <option value="follow">默认（模糊封面）</option>
-              <option value="cover-blur">固定模糊封面</option>
-              <option value="fluid">流体渐变光影</option>
-              <option value="solid">纯色底色</option>
-              <option value="image">自选背景图片</option>
-            </select></label
-          >
-          <button type="button" @click="importAsset('image', 'playerBackground')">
-            {{ draft?.assetBindings?.playerBackground ? '更换图片' : '选择图片' }}
-          </button>
-          <template v-if="activeModes.player?.backdrop === 'image' && imageAssets.length > 0">
-            <select
-              aria-label="播放页背景图片"
-              :value="draft?.assetBindings?.playerBackground ?? ''"
-              @change="updateAssetBinding('playerBackground', $event)"
+              背景
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'cover'"
+              @click="selectPlayerTarget('cover')"
             >
-              <option value="">跟随全局背景图</option>
-              <option v-for="asset in imageAssets" :key="asset.id" :value="asset.id">
-                {{ asset.path }}
-              </option>
-            </select>
+              封面
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'lyrics'"
+              @click="selectPlayerTarget('lyrics')"
+            >
+              歌词
+            </button>
+          </div>
+          <template v-if="activePlayerTarget === 'lyrics'">
+            <label
+              ><span>对齐</span
+              ><select
+                aria-label="选中歌词对齐方式"
+                :value="activeModes.player?.lyricsAlign ?? 'follow'"
+                @change="updatePlayerMode('lyricsAlign', $event)"
+              >
+                <option value="follow">跟随标题</option>
+                <option value="left">左对齐</option>
+                <option value="center">居中</option>
+                <option value="right">右对齐</option>
+              </select></label
+            >
+            <label
+              ><span>高亮</span
+              ><select
+                aria-label="选中歌词高亮样式"
+                :value="activeModes.player?.lyricHighlight ?? 'glow'"
+                @change="updatePlayerMode('lyricHighlight', $event)"
+              >
+                <option value="glow">柔和发光</option>
+                <option value="surface">底面卡片</option>
+                <option value="minimal">极简文字</option>
+              </select></label
+            >
+            <div class="studio-context-slider">
+              <span>歌词宽度</span>
+              <input
+                aria-label="播放舞台展开度"
+                type="range"
+                min="520"
+                max="1120"
+                step="10"
+                :value="numericTokenValue('playback.stage.span', 820)"
+                @input="updateNumericToken('playback.stage.span', $event)"
+              />
+              <EditableRangeValue
+                aria-label="播放舞台展开度数值"
+                :value="numericTokenValue('playback.stage.span', 820)"
+                :min="520"
+                :max="1120"
+                :step="10"
+                suffix="px"
+                @change="setNumericTokenValue('playback.stage.span', $event)"
+              />
+            </div>
+            <div class="studio-context-slider">
+              <span>歌词行距</span>
+              <input
+                aria-label="歌词行距间隔"
+                type="range"
+                min="4"
+                max="28"
+                step="1"
+                :value="numericTokenValue('playback.lyrics.density', 10)"
+                @input="updateNumericToken('playback.lyrics.density', $event)"
+              />
+              <EditableRangeValue
+                aria-label="歌词行距间隔数值"
+                :value="numericTokenValue('playback.lyrics.density', 10)"
+                :min="4"
+                :max="28"
+                suffix="px"
+                @change="setNumericTokenValue('playback.lyrics.density', $event)"
+              />
+            </div>
+            <div class="studio-context-slider">
+              <span>未唱透明</span>
+              <input
+                aria-label="未唱歌词不透明度"
+                type="range"
+                min="20"
+                max="95"
+                step="5"
+                :value="numericTokenValue('playback.lyrics.inactiveOpacity', 66)"
+                @input="updateNumericToken('playback.lyrics.inactiveOpacity', $event)"
+              />
+              <EditableRangeValue
+                aria-label="未唱歌词不透明度数值"
+                :value="numericTokenValue('playback.lyrics.inactiveOpacity', 66)"
+                :min="20"
+                :max="95"
+                :step="5"
+                suffix="%"
+                @change="setNumericTokenValue('playback.lyrics.inactiveOpacity', $event)"
+              />
+            </div>
           </template>
-          <label
-            ><span>布局</span
-            ><select
-              aria-label="选中播放页布局"
-              :value="activeModes.player?.layout ?? 'standard'"
-              @change="updatePlayerMode('layout', $event)"
+          <template v-else>
+            <template v-if="activePlayerTarget === 'stage'">
+              <label
+                ><span>背景</span
+                ><select
+                  aria-label="选中播放页背景模式"
+                  :value="activeModes.player?.backdrop ?? 'follow'"
+                  @change="updatePlayerMode('backdrop', $event)"
+                >
+                  <option value="follow">默认（模糊封面）</option>
+                  <option value="cover-blur">固定模糊封面</option>
+                  <option value="fluid">流体渐变光影</option>
+                  <option value="solid">纯色底色</option>
+                  <option value="image">自选背景图片</option>
+                </select></label
+              >
+              <button type="button" @click="importAsset('image', 'playerBackground')">
+                {{ draft?.assetBindings?.playerBackground ? '更换图片' : '选择图片' }}
+              </button>
+              <template v-if="activeModes.player?.backdrop === 'image' && imageAssets.length > 0">
+                <select
+                  aria-label="播放页背景图片"
+                  :value="draft?.assetBindings?.playerBackground ?? ''"
+                  @change="updateAssetBinding('playerBackground', $event)"
+                >
+                  <option value="">跟随全局背景图</option>
+                  <option v-for="asset in imageAssets" :key="asset.id" :value="asset.id">
+                    {{ asset.path }}
+                  </option>
+                </select>
+              </template>
+              <label
+                ><span>布局</span
+                ><select
+                  aria-label="选中播放页布局"
+                  :value="activeModes.player?.layout ?? 'standard'"
+                  @change="updatePlayerMode('layout', $event)"
+                >
+                  <option v-for="layout in playerLayouts" :key="layout.id" :value="layout.id">
+                    {{ layout.label }}
+                  </option>
+                </select></label
+              >
+            </template>
+            <label
+              ><span>外框</span
+              ><select
+                aria-label="选中封面外框样式"
+                :value="activeModes.artwork?.frame ?? 'borderless'"
+                @change="updateArtworkMode('frame', $event)"
+              >
+                <option value="borderless">无边框</option>
+                <option value="subtle-ring">细描边</option>
+                <option value="glass-frame">玻璃画框</option>
+                <option value="vinyl">黑胶唱盘</option>
+                <option value="polaroid">拍立得画框</option>
+              </select></label
             >
-              <option v-for="layout in playerLayouts" :key="layout.id" :value="layout.id">
-                {{ layout.label }}
-              </option>
-            </select></label
-          >
-          <label
-            ><span>外框</span
-            ><select
-              aria-label="选中封面外框样式"
-              :value="activeModes.artwork?.frame ?? 'borderless'"
-              @change="updateArtworkMode('frame', $event)"
-            >
-              <option value="borderless">无边框</option>
-              <option value="subtle-ring">细描边</option>
-              <option value="glass-frame">玻璃画框</option>
-              <option value="vinyl">黑胶唱盘</option>
-              <option value="polaroid">拍立得画框</option>
-            </select></label
-          >
-          <div class="studio-context-slider">
-            <span>封面比例</span>
-            <input
-              aria-label="封面缩放比例"
-              type="range"
-              min="60"
-              max="115"
-              step="1"
-              :value="numericTokenValue('playback.cover.scale', 100)"
-              @input="updateNumericToken('playback.cover.scale', $event)"
-            />
-            <EditableRangeValue
-              aria-label="封面缩放比例数值"
-              :value="numericTokenValue('playback.cover.scale', 100)"
-              :min="60"
-              :max="115"
-              suffix="%"
-              @change="setNumericTokenValue('playback.cover.scale', $event)"
-            />
-          </div>
-          <div class="studio-context-slider">
-            <span>栏间距</span>
-            <input
-              aria-label="封面与歌词间距"
-              type="range"
-              min="16"
-              max="96"
-              step="2"
-              :value="numericTokenValue('playback.stage.spread', 40)"
-              @input="updateNumericToken('playback.stage.spread', $event)"
-            />
-            <EditableRangeValue
-              aria-label="封面与歌词间距数值"
-              :value="numericTokenValue('playback.stage.spread', 40)"
-              :min="16"
-              :max="96"
-              :step="2"
-              suffix="px"
-              @change="setNumericTokenValue('playback.stage.spread', $event)"
-            />
-          </div>
+            <div class="studio-context-slider">
+              <span>封面比例</span>
+              <input
+                aria-label="封面缩放比例"
+                type="range"
+                min="60"
+                max="115"
+                step="1"
+                :value="numericTokenValue('playback.cover.scale', 100)"
+                @input="updateNumericToken('playback.cover.scale', $event)"
+              />
+              <EditableRangeValue
+                aria-label="封面缩放比例数值"
+                :value="numericTokenValue('playback.cover.scale', 100)"
+                :min="60"
+                :max="115"
+                suffix="%"
+                @change="setNumericTokenValue('playback.cover.scale', $event)"
+              />
+            </div>
+            <div v-if="activePlayerTarget === 'cover'" class="studio-context-slider">
+              <span>封面圆角</span>
+              <input
+                aria-label="封面圆角"
+                type="range"
+                min="0"
+                max="40"
+                step="1"
+                :value="numericTokenValue('playback.cover.radius', 26)"
+                @input="updateNumericToken('playback.cover.radius', $event)"
+              />
+              <EditableRangeValue
+                aria-label="封面圆角数值"
+                :value="numericTokenValue('playback.cover.radius', 26)"
+                :min="0"
+                :max="40"
+                suffix="px"
+                @change="setNumericTokenValue('playback.cover.radius', $event)"
+              />
+            </div>
+            <div class="studio-context-slider">
+              <span>栏间距</span>
+              <input
+                aria-label="封面与歌词间距"
+                type="range"
+                min="16"
+                max="96"
+                step="2"
+                :value="numericTokenValue('playback.stage.spread', 40)"
+                @input="updateNumericToken('playback.stage.spread', $event)"
+              />
+              <EditableRangeValue
+                aria-label="封面与歌词间距数值"
+                :value="numericTokenValue('playback.stage.spread', 40)"
+                :min="16"
+                :max="96"
+                :step="2"
+                suffix="px"
+                @change="setNumericTokenValue('playback.stage.spread', $event)"
+              />
+            </div>
+          </template>
         </template>
         <label v-else-if="contextPart === 'card'"
           ><span>材质</span
