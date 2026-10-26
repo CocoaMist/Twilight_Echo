@@ -3,12 +3,7 @@ import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
 import type { Track } from '../../types/music.ts'
 import type { LibraryItem } from './musicStoreTypes.ts'
 import { createLibraryDashboard } from './libraryDashboard.ts'
-import { createUnifiedRecentTrackResolver } from '../../utils/unifiedRecentTracks.ts'
 import { getTrackSource } from '../../utils/trackSourceIdentity.ts'
-import {
-  archivePlaybackQueue,
-  buildArchiveLibrary
-} from '../../components/local-dashboard/archiveLibrary.ts'
 
 export type LibraryDashboardTheme = 'archive' | 'nightHarbor' | 'soundField'
 export const THEME_DASHBOARD_SHELVES = {
@@ -23,17 +18,15 @@ type QueryPlayOptions = {
   onQueryFailure?: (error: unknown) => void
 }
 
-/** The three themed homes share bounded authoritative shelves and playback.
- * JSON getters remain lazy: discovering SQLite must never evaluate a full
- * library projection, even before the first database response arrives. */
+/** The three themed homes share bounded Core shelves and playback. */
 export function createLibraryThemeDashboard(
   options: Pick<DashboardOptions, 'getStorageMode' | 'getPreferences' | 'getHistory' | 'api'> & {
     theme: LibraryDashboardTheme
-    getTracks(): Track[]
-    getAlbums(): LibraryItem[]
-    getArtistCount(): number
+    getTracks?(): Track[]
+    getAlbums?(): LibraryItem[]
+    getArtistCount?(): number
     player: {
-      getCurrentTrack(): Track | null
+      getCurrentTrack(): Pick<Track, 'id'> | null
       getIsPlaying(): boolean
       togglePlay(): void
       setPlayMode(mode: 'shuffle'): void
@@ -61,19 +54,13 @@ export function createLibraryThemeDashboard(
   })
   const state = source.state
   const database = computed(() => state.value.mode !== 'json')
-  const ready = computed(() => state.value.mode === 'json' || state.value.data !== null)
-  const jsonLibrary = computed(() =>
-    database.value ? null : buildArchiveLibrary(options.getTracks())
-  )
-  const recentlyAdded = computed(() =>
-    database.value ? (state.value.data?.recent ?? []) : jsonLibrary.value!.recentlyAdded
-  )
+  const ready = computed(() => state.value.data !== null)
+  const recentlyAdded = computed(() => state.value.data?.recent ?? [])
   const recent = computed(() => {
-    const resolve = database.value ? null : createUnifiedRecentTrackResolver(options.getTracks())
     const tracks: Track[] = [],
       seen = new Set<string>()
     for (const stat of history.value.slice(0, shelf.history)) {
-      const track = database.value ? state.value.history.get(stat.id) : resolve!(stat)
+      const track = state.value.history.get(stat.id)
       if (!track || seen.has(track.id)) continue
       seen.add(track.id)
       tracks.push(track)
@@ -81,15 +68,16 @@ export function createLibraryThemeDashboard(
     return tracks
   })
   const hero = computed(
-    () => options.player.getCurrentTrack() ?? recent.value[0] ?? recentlyAdded.value[0] ?? null
+    () => recent.value.find((track) => track.id === options.player.getCurrentTrack()?.id)
+      ?? recentlyAdded.value.find((track) => track.id === options.player.getCurrentTrack()?.id)
+      ?? recent.value[0] ?? recentlyAdded.value[0] ?? null
   )
   const heroIsCurrent = computed(
     () =>
       !!options.player.getCurrentTrack() && hero.value?.id === options.player.getCurrentTrack()?.id
   )
   const albumCards = computed(() => {
-    if (database.value)
-      return (state.value.data?.albums ?? []).map((album) => ({
+    return (state.value.data?.albums ?? []).map((album) => ({
         key: album.id,
         name: album.name,
         artist: album.artist || '未知艺术家',
@@ -98,29 +86,15 @@ export function createLibraryThemeDashboard(
         identity: album.id,
         trackCount: album.trackCount
       }))
-    return options
-      .getAlbums()
-      .slice(0, shelf.albums)
-      .map((album) => ({
-        key: album.id ?? album.name,
-        name: album.name,
-        artist: album.artist || album.tracks[0]?.artist || '未知艺术家',
-        cover: album.cover,
-        coverSource: album.tracks[0]?.coverSource,
-        identity: album.tracks[0]?.id,
-        trackCount: album.trackCount
-      }))
   })
   const summary = computed(() => {
-    const totalSeconds = database.value
-      ? (state.value.data?.duration ?? 0)
-      : jsonLibrary.value!.totalSeconds
+    const totalSeconds = state.value.data?.duration ?? 0
     const hours = totalSeconds / 3600,
       minutes = Math.round(totalSeconds / 60)
     return {
-      tracks: database.value ? (state.value.data?.total ?? 0) : options.getTracks().length,
-      albums: database.value ? (state.value.data?.albumCount ?? 0) : options.getAlbums().length,
-      artists: database.value ? (state.value.data?.artistCount ?? 0) : options.getArtistCount(),
+      tracks: state.value.data?.total ?? 0,
+      albums: state.value.data?.albumCount ?? 0,
+      artists: state.value.data?.artistCount ?? 0,
       totalSeconds,
       hours: Math.floor(minutes / 60),
       minutes: minutes % 60,
@@ -184,12 +158,7 @@ export function createLibraryThemeDashboard(
       options.player.togglePlay()
       return
     }
-    if (!database.value) {
-      options.player.playTrack(
-        track,
-        archivePlaybackQueue(options.getTracks(), jsonLibrary.value!.indexById, track)
-      )
-    } else if (state.value.mode === 'sqlite' && state.value.data) {
+    if (state.value.mode === 'sqlite' && state.value.data) {
       pending = { track, revision: state.value.data.revision, intent }
       pumpPlay()
     } else report(new Error('首页尚未载入，请稍后重试'))
@@ -198,23 +167,12 @@ export function createLibraryThemeDashboard(
     if (disposed) return
     cancelPlay()
     actionError.value = ''
-    if (database.value) {
-      const data = state.value.data
-      if (state.value.mode === 'sqlite' && data?.total)
-        playQuery({ sort: 'playlist', contentRevision: data.revision }, undefined, {
-          randomStart: true,
-          playMode: 'shuffle'
-        })
-      return
-    }
-    const tracks = options.getTracks()
-    if (!tracks.length) return
-    const track = tracks[Math.floor(Math.random() * tracks.length)]
-    options.player.setPlayMode('shuffle')
-    options.player.playTrack(
-      track,
-      archivePlaybackQueue(tracks, jsonLibrary.value!.indexById, track)
-    )
+    const data = state.value.data
+    if (state.value.mode === 'sqlite' && data?.total)
+      playQuery({ sort: 'playlist', contentRevision: data.revision }, undefined, {
+        randomStart: true,
+        playMode: 'shuffle'
+      })
   }
   const stops = [
     watch([history, () => options.getPreferences().revision], () => {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
+import { executeCoreExtension } from '../extensions/corePlugins.ts'
 import PuzzleIcon from './icons/PuzzleIcon.vue'
 import type { UiContribution } from '../extensions/registry'
 
@@ -20,7 +21,7 @@ async function loadContent(): Promise<void> {
   error.value = ''
   textResult.value = ''
   try {
-    const result = await window.api.extensions.executeCommand(props.page.command, [
+    const result = await executeCoreExtension(props.page.command, [
       {
         source: props.page.kind,
         pageId: props.page.id

@@ -9,6 +9,7 @@ import {
 } from 'vue'
 import type { Track } from '../../types/music'
 import type { PlaylistActions } from './types'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
 
 type UseSongListContextMenuOptions = PlaylistActions & {
   currentPlaylistName: ComputedRef<string | null>
@@ -131,7 +132,7 @@ export function useSongListContextMenu({
 
   async function handleOpenFolder(): Promise<void> {
     if (selectedTrack.value) {
-      await window.api.shell.showItemInFolder(selectedTrack.value.filePath)
+      await useCoreConnection().command('library.reveal', { id: selectedTrack.value.id })
       closeContextMenu()
     }
   }

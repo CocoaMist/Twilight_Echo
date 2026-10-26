@@ -62,7 +62,9 @@ function runAppearanceTests(args = process.argv.slice(2), run = spawnSync) {
       '--experimental-strip-types',
       '--test',
       '--test-concurrency=1',
-      ...(unitOnly ? ['--test-skip-pattern', '^Chromium projects'] : []),
+      ...(unitOnly
+        ? ['--test-skip-pattern', '^(?:Chromium projects|real input edge overlays)']
+        : []),
       '--import',
       './scripts/register-renderer-aliases.mjs',
       ...unit,

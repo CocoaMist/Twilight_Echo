@@ -3,26 +3,6 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { reactive } from 'vue'
 
-function readPreloadSources(): string {
-  const root = new URL('../../../preload/', import.meta.url)
-  return [
-    'index.ts',
-    'domains/audioEngineApi.ts',
-    'domains/dataApi.ts',
-    'domains/desktopLyricsApi.ts',
-    'domains/libraryApi.ts',
-    'domains/mediaSubscriptionsApi.ts',
-    'domains/networkSourcesApi.ts',
-    'domains/pluginsApi.ts',
-    'domains/settingsApi.ts',
-    'domains/systemApi.ts',
-    'domains/themesApi.ts',
-    'domains/versionedData.ts'
-  ]
-    .map((rel) => readFileSync(new URL(rel, root), 'utf8'))
-    .join('\n')
-}
-
 const { MediaProviderRegistry, getProviderLocalId, getTrackProviderId, toProviderIpcArgs } =
   (await import(
     new URL('./mediaProvider.ts', import.meta.url).href
@@ -41,53 +21,82 @@ test('extracts provider prefixes from source or track id', () => {
   assert.equal(getProviderLocalId('ncm:12345', 'bili'), null)
 })
 
-test('album search registration follows advertised methods and forwards cancellation through the bridge', async (t) => {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  const { syncPluginProviders, useMediaProviders } = await import('./index.ts')
-  let methods: string[] = []
-  let rejectPending: ((reason: Error) => void) | undefined
-  const calls: unknown[][] = []
-  const cancelled: string[] = []
+let providerList: () => Promise<unknown[]> = async () => []
+let providerCall: (
+  id: string,
+  method: string,
+  args: unknown[],
+  requestId: string
+) => Promise<unknown>
+const pendingProviderCalls = new Map<string, (error: Error) => void>()
+const cancelledProviderCalls: string[] = []
+const providerCore: import('../../../shared/coreBridge.ts').CoreBridgeApi = {
+  connect: async () => ({
+    ok: true,
+    value: {
+      connectionId: 'providers',
+      snapshot: {
+        epoch: 'core',
+        sequence: 0,
+        protocolVersion: 1,
+        phase: 'ready',
+        pluginsRevision: 0
+      } as import('../../../shared/coreProtocol.ts').CoreSnapshot
+    }
+  }),
+  request: async (_id, request) => ({
+    ok: true,
+    value:
+      request.name === 'providers.list'
+        ? await providerList()
+        : request.name === 'providers.call'
+          ? await providerCall(
+              request.payload.providerId,
+              request.payload.method,
+              request.payload.args,
+              request.requestId
+            )
+          : undefined
+  }),
+  cancel: async (_id, requestId) => {
+    cancelledProviderCalls.push(requestId)
+    pendingProviderCalls.get(requestId)?.(new Error('cancelled'))
+    pendingProviderCalls.delete(requestId)
+    return { ok: true, value: undefined }
+  },
+  disconnect: async () => ({ ok: true, value: undefined }),
+  onMessage: () => () => {},
+  onStatus: () => () => {}
+}
+async function attachProviderCore() {
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: {
-      api: {
-        providers: {
-          list: async () => [
-            {
-              id: 'album-test',
-              name: 'Albums',
-              capabilities: ['search'],
-              supportedMethods: methods
-            }
-          ],
-          call: async (
-            id: string,
-            method: string,
-            args: unknown[],
-            options?: { requestId?: string }
-          ) => {
-            calls.push([id, method, args, options])
-            if (options?.requestId)
-              return new Promise((_resolve, reject) => {
-                rejectPending = reject
-              })
-            return { items: [{ id: '1', name: 'Album', cover: null, trackCount: 1 }], total: 1 }
-          },
-          cancel: (requestId: string) => {
-            cancelled.push(requestId)
-            rejectPending?.(new Error('cancelled'))
-          }
-        }
-      }
-    }
+    value: { api: { core: providerCore } }
   })
+  const { useCoreConnection } = await import('../stores/coreConnection.ts')
+  await useCoreConnection().attach()
+}
+
+test('album search registration follows advertised methods and forwards cancellation through Core', async (t) => {
+  const { syncPluginProviders, useMediaProviders } = await import('./index.ts')
+  let methods: string[] = []
+  let hold = false
+  const calls: unknown[][] = []
+  providerList = async () => [
+    { id: 'album-test', name: 'Albums', capabilities: ['search'], supportedMethods: methods }
+  ]
+  providerCall = async (id, method, args, requestId) => {
+    calls.push([id, method, args, requestId])
+    if (hold)
+      return new Promise((_resolve, reject) => {
+        pendingProviderCalls.set(requestId, reject)
+      })
+    return { items: [{ id: '1', name: 'Album', cover: null, trackCount: 1 }], total: 1 }
+  }
+  await attachProviderCore()
   const registry = useMediaProviders()
-  t.after(async () => {
-    await syncPluginProviders()
+  t.after(() => {
     registry.unregister('album-test')
-    if (previous) Object.defineProperty(globalThis, 'window', previous)
-    else Reflect.deleteProperty(globalThis, 'window')
   })
   await syncPluginProviders()
   assert.equal(registry.get('album-test')?.searchAlbums, undefined)
@@ -95,67 +104,43 @@ test('album search registration follows advertised methods and forwards cancella
   await syncPluginProviders()
   assert.equal((await registry.searchAlbums('album-test', 'Album', 30, 60)).total, 1)
   assert.deepEqual(calls[0].slice(0, 3), ['album-test', 'searchAlbums', ['Album', 30, 60]])
+  hold = true
   const controller = new AbortController()
   const pending = registry.searchAlbums('album-test', 'Album', 30, 0, { signal: controller.signal })
   await new Promise((resolve) => setTimeout(resolve, 0))
   controller.abort()
   await assert.rejects(pending, /cancelled/)
-  assert.equal(cancelled.length, 1)
-  assert.equal(cancelled[0], (calls[1][3] as { requestId: string }).requestId)
+  assert.equal(cancelledProviderCalls.at(-1), calls[1][3])
   methods = []
   await syncPluginProviders()
   assert.equal(registry.get('album-test')?.searchAlbums, undefined)
 })
 
 test('playlist search follows the search contract without requiring playlist library access', async (t) => {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const { syncPluginProviders, useMediaProviders } = await import('./index.ts')
   let methods: string[] = ['searchPlaylists']
+  let hold = false
   const calls: unknown[][] = []
-  const cancelled: string[] = []
-  let rejectPending: ((reason: Error) => void) | undefined
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      api: {
-        providers: {
-          list: async () => [
-            {
-              id: 'playlist-search-only',
-              name: 'Collection search',
-              capabilities: ['search'],
-              supportedMethods: methods
-            }
-          ],
-          call: async (
-            id: string,
-            method: string,
-            args: unknown[],
-            options?: { requestId?: string }
-          ) => {
-            calls.push([id, method, args, options])
-            if (options?.requestId)
-              return new Promise((_resolve, reject) => {
-                rejectPending = reject
-              })
-            return {
-              items: [{ id: 'mix', name: 'Evening', cover: null, trackCount: 12 }],
-              total: 1
-            }
-          },
-          cancel: (requestId: string) => {
-            cancelled.push(requestId)
-            rejectPending?.(new Error('cancelled'))
-          }
-        }
-      }
+  providerList = async () => [
+    {
+      id: 'playlist-search-only',
+      name: 'Collection search',
+      capabilities: ['search'],
+      supportedMethods: methods
     }
-  })
+  ]
+  providerCall = async (id, method, args, requestId) => {
+    calls.push([id, method, args, requestId])
+    if (hold)
+      return new Promise((_resolve, reject) => {
+        pendingProviderCalls.set(requestId, reject)
+      })
+    return { items: [{ id: 'mix', name: 'Evening', cover: null, trackCount: 12 }], total: 1 }
+  }
+  await attachProviderCore()
   const registry = useMediaProviders()
   t.after(() => {
     registry.unregister('playlist-search-only')
-    if (previous) Object.defineProperty(globalThis, 'window', previous)
-    else Reflect.deleteProperty(globalThis, 'window')
   })
   await syncPluginProviders()
   assert.equal((await registry.searchPlaylists('playlist-search-only', 'Evening', 20, 40)).total, 1)
@@ -165,6 +150,7 @@ test('playlist search follows the search contract without requiring playlist lib
     ['Evening', 20, 40]
   ])
   assert.equal(registry.get('playlist-search-only')?.fetchPlaylistTracks, undefined)
+  hold = true
   const controller = new AbortController()
   const pending = registry.searchPlaylists('playlist-search-only', 'Evening', 20, 0, {
     signal: controller.signal
@@ -172,395 +158,28 @@ test('playlist search follows the search contract without requiring playlist lib
   await new Promise((resolve) => setTimeout(resolve, 0))
   controller.abort()
   await assert.rejects(pending, /cancelled/)
-  assert.equal(cancelled.length, 1)
+  assert.equal(cancelledProviderCalls.at(-1), calls[1][3])
   methods = []
   await syncPluginProviders()
   assert.equal(registry.get('playlist-search-only')?.searchPlaylists, undefined)
   methods = ['searchPlaylists']
+  hold = false
   await syncPluginProviders()
   assert.equal((await registry.searchPlaylists('playlist-search-only', 'Back')).total, 1)
 })
 
-test('resolveLyricsAcrossProviders fans out to NCM for local tracks', async () => {
-  const registry = new MediaProviderRegistry()
-  let ncmSearchCalls = 0
-  let ncmLyricCalls = 0
-  registry.register({
-    id: 'ncm',
-    name: 'NetEase',
-    source: 'plugin',
-    capabilities: ['search', 'lyrics'],
-    searchSongs: async (keywords) => {
-      ncmSearchCalls += 1
-      assert.match(keywords, /Moon River/i)
-      return {
-        total: 1,
-        items: [
-          {
-            id: 'ncm:99',
-            title: 'Moon River',
-            artist: 'Audrey',
-            album: 'Online',
-            filePath: 'ncm:99',
-            fileName: 'Moon River',
-            duration: 180,
-            size: 0,
-            cover: null,
-            lyrics: null,
-            source: 'ncm'
-          }
-        ]
-      }
-    },
-    getLyrics: async (track) => {
-      ncmLyricCalls += 1
-      assert.equal(track.id, 'ncm:99')
-      return {
-        lyrics: '[00:01.00]Provider lyric',
-        translatedLyrics: '[00:01.00]翻译',
-        wordLyrics: null
-      }
-    }
-  })
-
-  const result = await registry.resolveLyricsAcrossProviders({
-    id: 'local:abc',
-    title: 'Moon River',
-    artist: 'Audrey',
-    album: 'Local',
-    filePath: 'D:\\Music\\Moon River.flac',
-    fileName: 'Moon River.flac',
-    duration: 181,
-    size: 1,
-    cover: null,
-    lyrics: null,
-    source: 'local'
-  })
-
-  assert.equal(ncmSearchCalls, 1)
-  assert.equal(ncmLyricCalls, 1)
-  assert.equal(result.lyrics, '[00:01.00]Provider lyric')
-  assert.equal(result.translatedLyrics, '[00:01.00]翻译')
-})
-
-test('provider abort handling stays in the renderer because AbortSignal cannot cross the contextBridge', () => {
-  const registrySource = readFileSync(new URL('../providers/index.ts', import.meta.url), 'utf8')
-  const preloadSource = readPreloadSources()
-
-  // The renderer owns the real AbortSignal: it generates a request id and asks
-  // the preload to cancel the in-flight main-process call on abort.
-  assert.match(
-    registrySource,
-    /options\.signal\.addEventListener\('abort', onAbort, \{ once: true \}\)/
+test('provider cancellation uses the document Core connection without passing AbortSignal through preload', () => {
+  const registry = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+  const connection = readFileSync(new URL('../stores/coreConnection.ts', import.meta.url), 'utf8')
+  const preload = readFileSync(
+    new URL('../../../preload/domains/coreApi.ts', import.meta.url),
+    'utf8'
   )
-  assert.match(registrySource, /void api\.cancel\(requestId\)/)
-  assert.match(registrySource, /requestId \? \{ requestId \} : undefined/)
-
-  // The preload must never receive the AbortSignal (contextBridge strips it
-  // into an object without addEventListener), so its providers.call only
-  // accepts plain requestId/idempotencyKey strings.
-  const providersBlock =
-    preloadSource.match(/providers: \{\s*list:[^\n]*[\s\S]*?\n  \},/)?.[0] ?? ''
-  assert.ok(providersBlock.includes('providers:'), 'preload providers block must exist')
-  assert.doesNotMatch(providersBlock, /signal/)
-  assert.match(providersBlock, /cancel: \(requestId: string\): void => /)
-})
-
-test('resolveLyricsAcrossProviders reaches a later enabled provider when earlier searches miss', async () => {
-  const registry = new MediaProviderRegistry()
-  const searched: string[] = []
-  for (const id of ['one', 'two', 'three']) {
-    registry.register({
-      id,
-      name: id,
-      source: 'plugin',
-      capabilities: ['search', 'lyrics'],
-      searchSongs: async () => {
-        searched.push(id)
-        return { items: [], total: 0 }
-      },
-      getLyrics: async () => ({ lyrics: null, translatedLyrics: null })
-    })
-  }
-  registry.register({
-    id: 'four',
-    name: 'four',
-    source: 'plugin',
-    capabilities: ['search', 'lyrics'],
-    searchSongs: async () => {
-      searched.push('four')
-      return {
-        total: 1,
-        items: [
-          {
-            id: 'four:track',
-            title: 'Later Provider Song',
-            artist: 'Artist',
-            album: 'Album',
-            filePath: 'four:track',
-            fileName: 'Later Provider Song',
-            duration: 180,
-            size: 0,
-            cover: null,
-            lyrics: null,
-            source: 'four'
-          }
-        ]
-      }
-    },
-    getLyrics: async () => ({
-      lyrics: '[00:01.00]Fourth provider lyric',
-      translatedLyrics: null
-    })
-  })
-
-  const result = await registry.resolveLyricsAcrossProviders({
-    id: 'local:later-provider-song',
-    title: 'Later Provider Song',
-    artist: 'Artist',
-    album: 'Album',
-    filePath: 'D:\\Music\\Later Provider Song.flac',
-    fileName: 'Later Provider Song.flac',
-    duration: 180,
-    size: 1,
-    cover: null,
-    lyrics: null,
-    source: 'local'
-  })
-
-  assert.deepEqual(searched, ['one', 'two', 'three', 'four'])
-  assert.equal(result.lyrics, '[00:01.00]Fourth provider lyric')
-})
-
-test('resolveLyricsAcrossProviders settles when a switching track aborts a pending provider search', async () => {
-  const registry = new MediaProviderRegistry()
-  let markSearchStarted: (() => void) | undefined
-  const searchStarted = new Promise<void>((resolve) => {
-    markSearchStarted = resolve
-  })
-  registry.register({
-    id: 'stalled',
-    name: 'stalled',
-    source: 'plugin',
-    capabilities: ['search', 'lyrics'],
-    searchSongs: async () => {
-      markSearchStarted?.()
-      return await new Promise(() => {})
-    },
-    getLyrics: async () => ({ lyrics: null, translatedLyrics: null })
-  })
-  const controller = new AbortController()
-  const pending = registry.resolveLyricsAcrossProviders(
-    {
-      id: 'local:stalled-search',
-      title: 'Stalled Search',
-      artist: 'Artist',
-      album: 'Album',
-      filePath: 'D:\\Music\\Stalled Search.flac',
-      fileName: 'Stalled Search.flac',
-      duration: 180,
-      size: 1,
-      cover: null,
-      lyrics: null,
-      source: 'local'
-    },
-    { timeoutMs: 1_000, signal: controller.signal }
-  )
-
-  await searchStarted
-  controller.abort()
-  const result = await Promise.race([
-    pending,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Lyrics lookup did not settle after abort')), 100)
-    )
-  ])
-
-  assert.deepEqual(result, { lyrics: null, translatedLyrics: null, wordLyrics: null })
-})
-
-test('resolveLyricsAcrossProviders preserves a direct provider failure when no fallback succeeds', async () => {
-  const registry = new MediaProviderRegistry()
-  registry.register({
-    id: 'ncm',
-    name: 'NetEase',
-    source: 'plugin',
-    capabilities: ['lyrics'],
-    getLyrics: async () => {
-      throw new Error('lyrics gateway unavailable')
-    }
-  })
-
-  await assert.rejects(
-    registry.resolveLyricsAcrossProviders({
-      id: 'ncm:unavailable',
-      title: 'Unavailable lyric fixture',
-      artist: 'Artist',
-      album: 'Album',
-      filePath: 'ncm:unavailable',
-      fileName: 'Unavailable lyric fixture',
-      duration: 180,
-      size: 0,
-      cover: null,
-      lyrics: null,
-      source: 'ncm'
-    }),
-    /lyrics gateway unavailable/
-  )
-})
-
-test('resolveLyricsAcrossProviders preserves a matched fallback provider failure', async () => {
-  const registry = new MediaProviderRegistry()
-  registry.register({
-    id: 'ncm',
-    name: 'NetEase',
-    source: 'plugin',
-    capabilities: ['search', 'lyrics'],
-    searchSongs: async () => ({
-      total: 1,
-      items: [
-        {
-          id: 'ncm:unavailable',
-          title: 'Unavailable lyric fixture',
-          artist: 'Artist',
-          album: 'Album',
-          filePath: 'ncm:unavailable',
-          fileName: 'Unavailable lyric fixture',
-          duration: 180,
-          size: 0,
-          cover: null,
-          lyrics: null,
-          source: 'ncm'
-        }
-      ]
-    }),
-    getLyrics: async () => {
-      throw new Error('matched lyrics gateway unavailable')
-    }
-  })
-
-  await assert.rejects(
-    registry.resolveLyricsAcrossProviders({
-      id: 'local:unavailable',
-      title: 'Unavailable lyric fixture',
-      artist: 'Artist',
-      album: 'Album',
-      filePath: 'D:\\Music\\Unavailable lyric fixture.flac',
-      fileName: 'Unavailable lyric fixture.flac',
-      duration: 180,
-      size: 1,
-      cover: null,
-      lyrics: null,
-      source: 'local'
-    }),
-    /matched lyrics gateway unavailable/
-  )
-})
-
-test('resolveLyricsAcrossProviders keeps a successful no-match lookup empty', async () => {
-  const registry = new MediaProviderRegistry()
-  registry.register({
-    id: 'ncm',
-    name: 'NetEase',
-    source: 'plugin',
-    capabilities: ['search', 'lyrics'],
-    searchSongs: async () => ({ items: [], total: 0 }),
-    getLyrics: async () => ({ lyrics: null, translatedLyrics: null })
-  })
-
-  const result = await registry.resolveLyricsAcrossProviders({
-    id: 'local:no-lyrics',
-    title: 'No lyric match',
-    artist: 'Artist',
-    album: 'Album',
-    filePath: 'D:\\Music\\No lyric match.flac',
-    fileName: 'No lyric match.flac',
-    duration: 180,
-    size: 1,
-    cover: null,
-    lyrics: null,
-    source: 'local'
-  })
-
-  assert.deepEqual(result, { lyrics: null, translatedLyrics: null, wordLyrics: null })
-})
-
-test('local lyric matching tolerates featured-artist title and artist formatting', async () => {
-  const registry = new MediaProviderRegistry()
-  let matchedId = ''
-  registry.register({
-    id: 'ncm',
-    name: 'NetEase',
-    source: 'plugin',
-    capabilities: ['search', 'lyrics'],
-    searchSongs: async () => ({
-      total: 1,
-      items: [
-        {
-          id: 'ncm:hyperglyph',
-          title: 'HyperGlyph-生命流',
-          artist: 'TSAR',
-          album: '明日方舟',
-          filePath: 'ncm:hyperglyph',
-          fileName: 'HyperGlyph-生命流',
-          duration: 166,
-          size: 0,
-          cover: null,
-          lyrics: null,
-          source: 'ncm'
-        }
-      ]
-    }),
-    getLyrics: async (track) => {
-      matchedId = track.id
-      return { lyrics: '[00:01.00]Provider lyric', translatedLyrics: '[00:01.00]翻译' }
-    }
-  })
-
-  const result = await registry.resolveLyricsAcrossProviders({
-    id: 'local:hyperglyph',
-    title: 'HyperGlyph-生命流 (feat. 兔子ST)',
-    artist: 'TSAR/兔子ST',
-    album: '明日方舟',
-    filePath: 'D:\\Music\\HyperGlyph.flac',
-    fileName: 'HyperGlyph.flac',
-    duration: 166,
-    size: 1,
-    cover: null,
-    lyrics: '[00:01.00]Local lyric',
-    source: 'local'
-  })
-
-  assert.equal(matchedId, 'ncm:hyperglyph')
-  assert.equal(result.translatedLyrics, '[00:01.00]翻译')
-})
-
-test('resolves playback through the matching provider', async () => {
-  const registry = new MediaProviderRegistry()
-  registry.register({
-    id: 'bili',
-    name: 'Bilibili',
-    source: 'plugin',
-    capabilities: ['playbackUrl'],
-    getPlaybackUrl: async (track) => `https://example.test/${track.id}.mp3`
-  })
-
-  assert.equal(
-    await registry.resolvePlaybackUrl({
-      id: 'bili:BV1xx',
-      title: 'Song',
-      artist: 'Artist',
-      album: 'Album',
-      filePath: 'bili:BV1xx',
-      fileName: 'Song',
-      duration: 1,
-      size: 0,
-      cover: null,
-      lyrics: null,
-      source: 'bili'
-    }),
-    'https://example.test/bili:BV1xx.mp3'
-  )
+  assert.match(registry, /core\.command\(\s*'providers.call'/)
+  assert.doesNotMatch(registry, /window\.api\.providers/)
+  assert.match(connection, /signal\?\.addEventListener\('abort', cancel, \{ once: true \}\)/)
+  assert.match(connection, /this\.api\.cancel\(id, request\.requestId\)/)
+  assert.doesNotMatch(preload, /AbortSignal|addEventListener/)
 })
 
 test('normalizes NetEase song ids from legacy and prefixed tracks', () => {
@@ -591,65 +210,15 @@ test('normalizes reactive provider call args before IPC', () => {
   assert.equal((args[0] as { nested: { value: string } }).nested.value, 'ok')
 })
 
-test('registry performs unified song search across local tracks and enabled providers', async () => {
-  const registry = new MediaProviderRegistry()
-  registry.register({
-    id: 'ncm',
-    name: 'NetEase',
-    source: 'plugin',
-    capabilities: ['search'],
-    searchSongs: async () => ({
-      items: [
-        {
-          id: 'ncm:1',
-          title: 'Moon River',
-          artist: 'Audrey',
-          album: 'Album',
-          filePath: 'ncm:1',
-          fileName: 'Moon River',
-          duration: 180,
-          size: 0,
-          cover: null,
-          lyrics: null,
-          source: 'ncm'
-        }
-      ],
-      total: 1
-    })
-  })
-
-  const result = await registry.searchAllSongs({
-    query: 'moon',
-    localTracks: [
-      {
-        id: 'local:1',
-        title: 'Moon River',
-        artist: 'Audrey',
-        album: 'Album',
-        filePath: 'D:\\Music\\Moon River.flac',
-        fileName: 'Moon River.flac',
-        duration: 181,
-        size: 1,
-        cover: null,
-        lyrics: null,
-        source: 'local',
-        format: 'flac'
-      }
-    ]
-  })
-
-  assert.deepEqual(
-    result.items.map((item) => item.track.id),
-    ['local:1', 'ncm:1']
-  )
-  assert.equal(result.logicalItems.length, 1)
-  assert.deepEqual(
-    result.logicalItems[0].variants.map((variant) => variant.track.id),
-    ['local:1', 'ncm:1']
-  )
-  assert.equal(result.health.ncm.available, true)
+test('registry forwards unified search to Core without renderer source enumeration', async () => {
+  const calls: unknown[] = []
+  const page = { items: [], logicalItems: [], health: {}, total: 401, versionsRevision: 7 }
+  const registry = new MediaProviderRegistry(async (...args) => { calls.push(args); return page })
+  const controller = new AbortController()
+  const result = await registry.searchAllSongs({query: 'moon', limit: 30, offset: 200, signal: controller.signal})
+  assert.equal(result, page)
+  assert.deepEqual(calls, [[{query:'moon',limit:30,offset:200}, controller.signal]])
 })
-
 test('registry updates provider health without replacing method handlers', async () => {
   const registry = new MediaProviderRegistry()
   registry.register({

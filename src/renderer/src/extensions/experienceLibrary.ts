@@ -1,42 +1,36 @@
-import type {
-  LibraryCollectionSummary,
-  LibraryDatabaseApi,
-  LibraryTrackRecord
-} from '../../../shared/libraryDatabase.ts'
-import { getAlbumIdentity, type AlbumIdentityTrack } from '../../../shared/libraryIdentity.ts'
-import type { RecordingVersion } from '../../../shared/recordingIdentity.ts'
-import type { Track } from '../types/music.ts'
-import { readLibraryPlaylistTracks } from '../stores/library/libraryPlaylistResolution.ts'
+import type { LibraryCollectionSummary } from '../../../shared/libraryDatabase.ts'
+import type { CoreTrackView } from '../../../shared/coreViews.ts'
+import type { CorePlayerClient } from '../stores/player/corePlayerTypes.ts'
 
 export interface ExperienceLibraryAlbum extends LibraryCollectionSummary {
   extensionId: string
-  tracks?: LibraryTrackRecord[]
+  tracks?: CoreTrackView[]
 }
 
+/** A plugin receives bounded Core projections; member resolution stays in Core. */
 export async function readExperiencePlaylistTrackDtos<T>(
-  playlist: { trackIds: string[]; trackSnapshots?: Record<string, Track> },
-  api: Pick<LibraryDatabaseApi, 'lookupPlaylistTracks' | 'getTracksByIds' | 'getMetadata'>,
-  reader: Pick<ReturnType<typeof createExperienceLibraryReader>, 'rememberTrackAlbums'>,
+  core: Pick<CorePlayerClient, 'query'>,
+  id: string,
   revision: number,
-  getPreferences: () => { revision: number; versions: RecordingVersion[] },
-  toDto: (track: Track) => T
+  reader: Pick<ReturnType<typeof createExperienceLibraryReader>, 'rememberTrackAlbums'>,
+  toDto: (track: CoreTrackView) => T
 ): Promise<T[]> {
   const result: T[] = []
-  await readLibraryPlaylistTracks(playlist, api, {
-    expectedRevision: revision,
-    getVersions: getPreferences,
-    consume: async (tracks) => {
-      await reader.rememberTrackAlbums(tracks, revision)
-      result.push(...tracks.map(toDto))
-    }
-  })
-  return result
+  let offset = 0
+  for (;;) {
+    const page = await core.query('playlists.members', { id, revision, offset, limit: 200 })
+    const tracks = page.items.flatMap(item => item.track ? [item.track] : [])
+    await reader.rememberTrackAlbums(tracks)
+    result.push(...tracks.map(toDto))
+    offset += page.items.length
+    if (offset >= page.total) return result
+    if (!page.items.length) throw new Error('歌单曲目分页中断')
+  }
 }
 
-/** SQLite-backed adapter for the extension library protocol. IDs exposed to
- * experiences keep the existing stable hash while SQL retains its own key. */
+/** Core-backed adapter. Keep the established extension release IDs across upgrades. */
 export function createExperienceLibraryReader(
-  api: Pick<LibraryDatabaseApi, 'queryTracks' | 'queryCollections'>
+  core: Pick<CorePlayerClient, 'query'>
 ) {
   const databaseIds = new Map<string, string>()
   const trackAlbumIds = new Map<string, string>()
@@ -53,23 +47,29 @@ export function createExperienceLibraryReader(
   }
 
   async function albumPage(offset: number, limit: number, revision?: number) {
-    const page = await api.queryCollections('albums', { offset, limit, contentRevision: revision })
-    return {
-      albums: await Promise.all(page.items.map(remember)),
-      total: page.total,
-      revision: page.revision
-    }
+    const albums: ExperienceLibraryAlbum[] = []
+    let total = offset + limit, currentRevision = revision
+    do {
+      const page = await core.query('library.collections', { kind: 'albums', query: {
+        offset: offset + albums.length, limit: Math.min(200, limit - albums.length), contentRevision: currentRevision
+      } })
+      currentRevision = page.revision
+      total = page.total
+      albums.push(...await Promise.all(page.items.map(remember)))
+      if (!page.items.length && offset + albums.length < total) throw new Error('曲库专辑分页中断')
+    } while (albums.length < limit && offset + albums.length < total)
+    return { albums, total, revision: currentRevision! }
   }
 
   async function albumTracks(albumId: string, revision: number) {
-    const tracks: LibraryTrackRecord[] = []
+    const tracks: CoreTrackView[] = []
     let offset = 0
     for (;;) {
-      const page = await api.queryTracks({
+      const page = await core.query('library.tracks', {
         albumId,
         sort: 'trackNumber',
         offset,
-        limit: 1000,
+        limit: 200,
         contentRevision: revision
       })
       if (page.revision !== revision) throw new Error('曲库在读取专辑期间发生变化，请重试')
@@ -80,38 +80,34 @@ export function createExperienceLibraryReader(
     }
   }
 
-  async function rememberTrackAlbums(
-    tracks: readonly (AlbumIdentityTrack & { id: string })[],
-    revision: number
-  ) {
-    if (!tracks.length) return
-    const page = await api.queryCollections('albums', {
-      ids: tracks.map((track) => track.id),
-      limit: 1000,
-      contentRevision: revision
-    })
-    if (page.revision !== revision) throw new Error('曲库在读取专辑期间发生变化，请重试')
-    const byId = new Map<string, string>()
-    for (const album of page.items) {
-      const externalId = await extensionId(album.id)
-      databaseIds.set(externalId, album.id)
-      byId.set(album.id, externalId)
-    }
+  async function rememberTrackAlbums(tracks: readonly CoreTrackView[], revision?: number) {
+    let libraryRevision = revision
     for (const track of tracks) {
-      const rawId = getAlbumIdentity(track as unknown as AlbumIdentityTrack)
-      const externalId = byId.get(rawId)
-      if (externalId) trackAlbumIds.set(track.id, externalId)
+      if (track.source && track.source !== 'local') continue
+      const page = await core.query('library.collections', {
+        kind: 'albums',
+        query: { ids: [track.id], limit: 1, contentRevision: libraryRevision }
+      })
+      libraryRevision = page.revision
+      const album = page.items[0]
+      if (!album) {
+        trackAlbumIds.delete(track.id)
+        continue
+      }
+      const id = await extensionId(album.id)
+      databaseIds.set(id, album.id)
+      trackAlbumIds.set(track.id, id)
     }
   }
 
   async function search(query: string) {
     const [albums, tracks] = await Promise.all([
-      api.queryCollections('albums', {
+      core.query('library.collections', { kind: 'albums', query: {
         search: query,
         collectionNamesOnly: true,
         limit: 80
-      }),
-      api.queryTracks({ search: query, sort: 'playlist', limit: 100 })
+      } }),
+      core.query('library.tracks', { search: query, sort: 'playlist', limit: 100 })
     ])
     if (albums.revision !== tracks.revision) throw new Error('曲库在搜索期间发生变化，请重试')
     await rememberTrackAlbums(tracks.tracks, tracks.revision)
@@ -126,11 +122,11 @@ export function createExperienceLibraryReader(
     if (typeof externalId !== 'string') return null
     const databaseId = databaseIds.get(externalId)
     if (!databaseId) return null
-    const page = await api.queryCollections('albums', {
+    const page = await core.query('library.collections', { kind: 'albums', query: {
       albumId: databaseId,
       limit: 1,
       contentRevision: revision
-    })
+    } })
     const summary = page.items.find((item) => item.id === databaseId)
     if (!summary) return null
     const album = await remember(summary)
@@ -152,11 +148,11 @@ export function createExperienceLibraryReader(
     const names: string[] = []
     let offset = 0
     for (;;) {
-      const page = await api.queryCollections('genres', {
+      const page = await core.query('library.collections', { kind: 'genres', query: {
         offset,
-        limit: 500,
+        limit: 200,
         contentRevision: revision
-      })
+      } })
       if (page.revision !== revision) throw new Error('曲库在读取流派期间发生变化，请重试')
       names.push(...page.items.map((item) => item.name))
       offset += page.items.length

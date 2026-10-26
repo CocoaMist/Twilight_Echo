@@ -268,7 +268,7 @@ async function fixture(
     '../security/remoteMediaGrants.ts': media,
     '../audio/providerPlaybackIdentity.ts': identities
   }
-  const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, 'manager.ts'), 'utf8'), {
+  const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../../core/plugins/manager.ts'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText
   const exports = {}
@@ -289,7 +289,13 @@ async function fixture(
   })
   const manager = new exports.TwilightPluginManager({
     appVersion,
-    hostEntry: 'unused',
+    platform: {
+      userData: directory,
+      launchHost: () => { const child = new Child(); children.push(child); return child },
+      protectProviderResult: media.protectProviderMedia
+    },
+    settings: { flush: async () => {} },
+    recordPlaybackIdentity: (...args) => identities.providerPlaybackIdentities.record(...args),
     hostIdleTimeoutMs: 300000,
     getPlaybackInfo: () => ({}),
     autoMixEnabled,

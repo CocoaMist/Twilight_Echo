@@ -244,6 +244,14 @@ html[data-te-preset-layout='aurora-reference'] .song-list .selection-toolbar {
   margin-inline: 0;
 }
 
+html[data-te-preset-layout='aurora-reference'] .song-list .library-quick-drawers {
+  padding-inline: 0;
+}
+
+html[data-te-preset-layout='aurora-reference'] .song-list .database-page-controls {
+  margin-inline: 0;
+}
+
 @container archive-library (max-width: 900px) {
   html[data-te-preset-layout='aurora-reference'] .table-view .header-left,
   html[data-te-preset-layout='aurora-reference'] .table-view .header-right {

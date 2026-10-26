@@ -10,10 +10,12 @@ import {
 } from '../../shared/theme.ts'
 import { runtime } from '../core/runtime.ts'
 import { ThemeLibraryRepository } from './themeLibraryRepository.ts'
+import { getCoreSettingsBridge, assertLegacySettingsWriter } from '../coreProcess/settingsBridge.ts'
 
 let repository: ThemeLibraryRepository | null = null
 
 function getRepository(): ThemeLibraryRepository {
+  assertLegacySettingsWriter()
   if (!repository) {
     repository = new ThemeLibraryRepository(join(app.getPath('userData'), 'themes.json'), () =>
       createDefaultThemeLibraryDocument(
@@ -26,6 +28,8 @@ function getRepository(): ThemeLibraryRepository {
 }
 
 export async function loadThemeLibrary(): Promise<ThemeLibrarySnapshot> {
+  const core = getCoreSettingsBridge()
+  if (core) return core.request('themes.list', {})
   return await getRepository().load()
 }
 

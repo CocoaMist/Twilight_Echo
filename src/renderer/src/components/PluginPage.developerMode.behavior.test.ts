@@ -63,6 +63,10 @@ async function compileComponent(
       return `const {${destructured}} = Vue\n`
     }
   )
+  compiled = compiled.replace(
+    /import\s+\{\s*corePlugins\s*\}\s+from\s+['"][^'"]+['"]\s*/g,
+    'const corePlugins = window.api.plugins\n'
+  )
   compiled = compiled.replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*/g, '')
   compiled = compiled.replace(
     /import\s+\{\s*useSettingsStore\s*\}\s+from\s+['"][^'"]+['"]\s*/g,

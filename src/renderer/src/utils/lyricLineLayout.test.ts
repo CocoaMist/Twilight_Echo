@@ -91,22 +91,22 @@ test('seeking suppresses the cascade so a scrub lands at once', () => {
   )
 })
 
-test('the anchor sits above centre and honours the align mode', () => {
-  // alignPosition 0.35 of 600 = 210, minus half a row = 180.
+test('the anchor sits at centre and honours the align mode', () => {
+  // alignPosition 0.5 of 600 = 300, minus half a row = 270.
   const centered = layout(6, 2, [2])
-  assert.equal(centered.lines[2].top, 180)
+  assert.equal(centered.lines[2].top, 270)
 
   const top = layout(6, 2, [2], { alignAnchor: 'top' })
-  assert.equal(top.lines[2].top, 210)
+  assert.equal(top.lines[2].top, 300)
 
   const bottom = layout(6, 2, [2], { alignAnchor: 'bottom' })
-  assert.equal(bottom.lines[2].top, 150)
+  assert.equal(bottom.lines[2].top, 240)
 })
 
 test('reserved bottom space shrinks the area the anchor is measured against', () => {
-  // Visible height becomes 600 - 200 = 400; 0.35 of that is 140, minus 30.
+  // Visible height becomes 600 - 200 = 400; 0.5 of that is 200, minus 30.
   const result = layout(6, 2, [2], { bottomReservedPx: 200 })
-  assert.equal(result.lines[2].top, 110)
+  assert.equal(result.lines[2].top, 170)
 })
 
 test('singing, held, past and future lines have distinct visual weight', () => {
@@ -212,8 +212,8 @@ test('background voices collapse while playing and expand when paused', () => {
 
 test('interlude dots take their own space after the anchor', () => {
   const result = layout(6, 2, [], { interludeAfterIndex: 2, interludeDotsHeight: 20 })
-  assert.equal(result.interludeDotsTop, 250, 'dots sit just below the anchor row')
-  assert.equal(result.lines[3].top, 300, 'the following line is pushed down past the dots')
+  assert.equal(result.interludeDotsTop, 340, 'dots sit just below the anchor row')
+  assert.equal(result.lines[3].top, 390, 'the following line is pushed down past the dots')
 
   const none = layout(6, 2, [])
   assert.equal(none.interludeDotsTop, null)
@@ -228,8 +228,8 @@ test('a lead-in interlude places its dots before the first line', () => {
     interludeAfterIndex: -2,
     interludeDotsHeight: 20
   })
-  assert.equal(result.interludeDotsTop, 190)
-  assert.equal(result.lines[0].top, 240)
+  assert.equal(result.interludeDotsTop, 280)
+  assert.equal(result.lines[0].top, 330)
 })
 
 test('an overlapping pair keeps both lines unblurred and full size', () => {
@@ -250,11 +250,11 @@ test('the scroll boundary spans the backlog above and the content below', () => 
 
 test('an out-of-range anchor is clamped for geometry and classification alike', () => {
   const high = layout(6, 99, [5])
-  assert.equal(high.lines[5].top, 180, 'the last line becomes the anchor')
+  assert.equal(high.lines[5].top, 270, 'the last line becomes the anchor')
   assert.equal(high.lines[5].blur, 0, 'and is classified as the anchor, not blurred')
 
   const low = layout(6, -5, [0])
-  assert.equal(low.lines[0].top, 180)
+  assert.equal(low.lines[0].top, 270)
   assert.equal(low.lines[0].blur, 0)
 })
 

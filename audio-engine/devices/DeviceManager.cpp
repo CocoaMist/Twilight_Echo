@@ -100,42 +100,46 @@ std::vector<PcmDeviceCatalogEntry> enumerateLegacyWindowsPcmDevices(std::string*
     return {};
   }
 
-  Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
-  hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
-  if (FAILED(hr)) {
-    if (shouldUninitialize) CoUninitialize();
-    if (error) *error = "创建 Windows 音频设备目录失败";
-    return {};
-  }
-
-  std::string defaultId;
-  Microsoft::WRL::ComPtr<IMMDevice> defaultDevice;
-  if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice))) {
-    LPWSTR rawId = nullptr;
-    if (SUCCEEDED(defaultDevice->GetId(&rawId))) {
-      defaultId = wideToUtf8(rawId);
-      CoTaskMemFree(rawId);
-    }
-  }
-
   std::vector<PcmDeviceCatalogEntry> devices;
-  Microsoft::WRL::ComPtr<IMMDeviceCollection> collection;
-  if (SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection))) {
-    UINT count = 0;
-    collection->GetCount(&count);
-    devices.reserve(count);
-    for (UINT index = 0; index < count; ++index) {
-      Microsoft::WRL::ComPtr<IMMDevice> device;
-      if (FAILED(collection->Item(index, &device))) continue;
-      LPWSTR rawId = nullptr;
-      if (FAILED(device->GetId(&rawId))) continue;
-      const std::string id = wideToUtf8(rawId);
-      CoTaskMemFree(rawId);
-      const std::string label = readDeviceName(device.Get());
-      devices.push_back({id, label.empty() ? id : label, id == defaultId});
+  {
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+    if (FAILED(hr)) {
+      enumerator.Reset();
+      if (shouldUninitialize) CoUninitialize();
+      if (error) *error = "创建 Windows 音频设备目录失败";
+      return {};
     }
-  } else if (error) {
-    *error = "枚举 Windows 音频设备失败";
+
+    std::string defaultId;
+    Microsoft::WRL::ComPtr<IMMDevice> defaultDevice;
+    if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice))) {
+      LPWSTR rawId = nullptr;
+      if (SUCCEEDED(defaultDevice->GetId(&rawId))) {
+        defaultId = wideToUtf8(rawId);
+        CoTaskMemFree(rawId);
+      }
+    }
+    defaultDevice.Reset();
+
+    Microsoft::WRL::ComPtr<IMMDeviceCollection> collection;
+    if (SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection))) {
+      UINT count = 0;
+      collection->GetCount(&count);
+      devices.reserve(count);
+      for (UINT index = 0; index < count; ++index) {
+        Microsoft::WRL::ComPtr<IMMDevice> device;
+        if (FAILED(collection->Item(index, &device))) continue;
+        LPWSTR rawId = nullptr;
+        if (FAILED(device->GetId(&rawId))) continue;
+        const std::string id = wideToUtf8(rawId);
+        CoTaskMemFree(rawId);
+        const std::string label = readDeviceName(device.Get());
+        devices.push_back({id, label.empty() ? id : label, id == defaultId});
+      }
+    } else if (error) {
+      *error = "枚举 Windows 音频设备失败";
+    }
   }
 
   if (shouldUninitialize) CoUninitialize();

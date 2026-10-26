@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import { PluginRpcCoordinator } from './rpcCoordinator.ts'
@@ -10,6 +11,9 @@ import type { TwilightMediaProviderRegistration } from '../../../packages/plugin
 import type { TwilightMediaProviderMethod } from './types.ts'
 import type { TwilightProviderCallOptions } from './manager.ts'
 import { createAfterglowSourceResolver } from '../app/afterglowSourceResolver.ts'
+import { normalizePluginPlaylistImportRequest } from '../../shared/pluginPlaylistImport.ts'
+import type { PluginNotice } from '../../shared/pluginNotice.ts'
+import type { PlaylistImportApplyResult } from '../../shared/playlists.ts'
 
 type ProviderRegistrationMethodKeys = Exclude<
   keyof TwilightMediaProviderRegistration,
@@ -24,7 +28,46 @@ type AssertNever<T> = [T] extends [never] ? true : never
 const registrationCoversUnion: AssertNever<MethodsMissingFromRegistration> = true
 const unionCoversRegistration: AssertNever<MethodsMissingFromUnion> = true
 
-const managerSource = readFileSync(new URL('./manager.ts', import.meta.url), 'utf8')
+const managerSource = readFileSync(new URL('../../core/plugins/manager.ts', import.meta.url), 'utf8')
+
+test('Core acknowledges plugin imports after persistence and emits one combined result notice', async () => {
+  const ast = ts.createSourceFile('manager.ts', managerSource, ts.ScriptTarget.Latest, true)
+  const declaration = ast.statements.find((node): node is ts.ClassDeclaration =>
+    ts.isClassDeclaration(node) && node.name?.text === 'TwilightPluginManager')!
+  const method = declaration.members.find(node =>
+    ts.isMethodDeclaration(node) && node.name.getText(ast) === 'handleApiCall')!
+  const code = ts.transpileModule(`class ImportManager extends EventEmitter {${method.getText(ast)}}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 }
+  }).outputText
+  const Manager = runInNewContext(`${code}\nImportManager`, {
+    EventEmitter, Error, normalizePluginPlaylistImportRequest
+  }) as new () => EventEmitter & {
+    handleApiCall(id: string, message: object): Promise<{ ok: boolean; error?: string }>
+    importPlaylists(): Promise<PlaylistImportApplyResult[]>
+  }
+  let commit!: (results: PlaylistImportApplyResult[]) => void
+  const pending = new Promise<PlaylistImportApplyResult[]>(resolve => { commit = resolve })
+  const manager = Object.assign(new Manager(), {
+    importPlaylists: () => pending,
+    requirePermission: () => {}
+  })
+  const notices: PluginNotice[] = []
+  manager.on('notice', notice => notices.push(notice))
+  const message = { requestId:'import', namespace:'library', method:'importPlaylists', args:[{
+    playlists:[{name:'One',paths:['one.flac']},{name:'Two',paths:['two.flac','missing.flac']}]
+  }] }
+  const response = manager.handleApiCall('com.example.import', message)
+  assert.equal(notices.length,0)
+  commit([{playlistId:'one',importedCount:1,unresolvedEntries:0,warnings:[]},
+    {playlistId:'two',importedCount:1,unresolvedEntries:1,warnings:[]}])
+  assert.equal((await response).ok,true)
+  assert.equal(notices.length,1)
+  assert.equal(notices[0].message,'已从 2 个歌单导入 2 首到本地歌单，1 首不在本地音乐库中')
+  assert.equal(notices[0].kind,'success')
+  manager.importPlaylists = async () => { throw Error('disk full') }
+  assert.equal((await manager.handleApiCall('com.example.import',message)).error,'disk full')
+  assert.equal(notices[1].kind,'error')
+})
 
 function playbackMetadataHarness(pluginId = 'com.twilightecho.provider.ncm') {
   const ast = ts.createSourceFile('manager.ts', managerSource, ts.ScriptTarget.Latest, true)
@@ -73,6 +116,8 @@ function playbackMetadataHarness(pluginId = 'com.twilightecho.provider.ncm') {
     handleProviderResult: (owner: string, message: unknown) => void
   }
   const manager = Object.assign(new Manager(), {
+    platform: { protectProviderResult: (value: unknown, method: string) => protectProviderMedia(value, method, grants) },
+    recordPlaybackIdentity: () => undefined,
     rpcCalls: new PluginRpcCoordinator(),
     contributingPlugins: () => [running],
     ensureRunningForCall: async () => running,
@@ -186,20 +231,20 @@ test('metadata opt-in retains legacy provider string responses and authorized ca
   assert.equal(cached.bitrate, undefined)
 })
 const statePersistenceSource = readFileSync(
-  new URL('./statePersistence.ts', import.meta.url),
+  new URL('../../core/plugins/statePersistence.ts', import.meta.url),
   'utf8'
 )
-const operationQueueSource = readFileSync(new URL('./operationQueue.ts', import.meta.url), 'utf8')
-const rpcCoordinatorSource = readFileSync(new URL('./rpcCoordinator.ts', import.meta.url), 'utf8')
-const providerRoutingSource = readFileSync(new URL('./providerRouting.ts', import.meta.url), 'utf8')
+const operationQueueSource = readFileSync(new URL('../../core/plugins/operationQueue.ts', import.meta.url), 'utf8')
+const rpcCoordinatorSource = readFileSync(new URL('../../core/plugins/rpcCoordinator.ts', import.meta.url), 'utf8')
+const providerRoutingSource = readFileSync(new URL('../../core/plugins/providerRouting.ts', import.meta.url), 'utf8')
 const updateTransactionSource = readFileSync(
-  new URL('./updateTransaction.ts', import.meta.url),
+  new URL('../../core/plugins/updateTransaction.ts', import.meta.url),
   'utf8'
 )
-const packageSecuritySource = readFileSync(new URL('./packageSecurity.ts', import.meta.url), 'utf8')
-const pluginTypesSource = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
+const packageSecuritySource = readFileSync(new URL('../../core/plugins/packageSecurity.ts', import.meta.url), 'utf8')
+const pluginTypesSource = readFileSync(new URL('../../shared/pluginTypes.ts', import.meta.url), 'utf8')
 const themeContributionSource = readFileSync(
-  new URL('./themeContribution.ts', import.meta.url),
+  new URL('../../core/plugins/themeContribution.ts', import.meta.url),
   'utf8'
 )
 const pluginHostSource = readFileSync(new URL('./host.ts', import.meta.url), 'utf8')
@@ -335,7 +380,8 @@ test('plugin state persistence serializes fsynced atomic writes and surfaces rec
   assert.match(managerSource, /state-write-error/)
   assert.match(managerSource, /await this\.statePersistenceFor\(\)\.flush\(\)/)
   assert.match(managerSource, /private notifyStateIssueUser\(/)
-  assert.match(managerSource, /dialog[\s\S]*\.showMessageBox\(/)
+  assert.match(managerSource, /this\.platform\.notifyStateIssue\(type, detail\)/)
+  assert.match(readFileSync(new URL('./platform.ts', import.meta.url), 'utf8'), /dialog[\s\S]*\.showMessageBox\(/)
 })
 
 test('plugin manager enforces plugin API namespace permissions at the gateway', () => {
@@ -368,7 +414,7 @@ test('plugin manager routes the overlay namespace to the host dynamic island bri
     managerSource,
     /message\.namespace === 'overlay'[\s\S]*this\.handleOverlayApiCall\(id, message\)/
   )
-  assert.match(managerSource, /private handleOverlayApiCall\(/)
+  assert.match(managerSource, /private async handleOverlayApiCall\(/)
   assert.match(
     managerSource,
     /this\.requirePermission\(pluginId,\s*'ui:inject',\s*`overlay\.\$\{message\.method\}`\)/
@@ -437,7 +483,7 @@ test('plugin lifecycle stop is single-flight and stale process events cannot dis
   )
   assert.match(
     managerSource,
-    /if \(this\.running\.get\(id\) === running\) \{\s*this\.dynamicIsland\?\.hide\(id\)\s*this\.running\.delete\(id\)/
+    /if \(this\.running\.get\(id\) === running\) \{\s*await this\.dynamicIsland\?\.hide\(id\)\s*this\.running\.delete\(id\)/
   )
 })
 
@@ -529,11 +575,11 @@ test('specialized windows receive only their scoped preload APIs', () => {
   assert.match(preloadSource, /exposedApiForDocument\(\)/)
   assert.match(
     preloadSource,
-    /if \(isDesktopLyricsDocument\(\)\)\s+return \{\s*diagnostics: diagnosticsApi,\s*desktopLyrics: desktopLyricsWindowApi,\s*experienceWindow: experienceWindowApi\s*\}/
+    /if \(isDesktopLyricsDocument\(\)\)\s+return \{\s*core: coreApi,\s*diagnostics: diagnosticsApi,\s*desktopLyrics: desktopLyricsWindowApi,\s*experienceWindow: experienceWindowApi\s*\}/
   )
   assert.match(
     preloadSource,
-    /if \(isMiniPlayerDocument\(\)\) \{[\s\S]*?return \{\s*diagnostics: diagnosticsApi,\s*miniPlayer: miniPlayerWindowApi,\s*data: miniPlayerCoverDataApi,\s*experienceWindow: experienceWindowApi\s*\}/
+    /if \(isMiniPlayerDocument\(\)\) \{[\s\S]*?return \{\s*core: coreApi,\s*diagnostics: diagnosticsApi,\s*miniPlayer: miniPlayerWindowApi,\s*data: miniPlayerCoverDataApi,\s*experienceWindow: experienceWindowApi\s*\}/
   )
   // The lyrics window is the shared renderer document with a `window` query now.
   assert.match(preloadSource, /get\('window'\) === 'desktop-lyrics'/)
@@ -544,14 +590,9 @@ test('specialized windows receive only their scoped preload APIs', () => {
 })
 
 test('provider results replace approved remote media URLs before returning to the renderer', () => {
-  assert.match(
-    managerSource,
-    /import \{ protectProviderMedia \} from '\.\.\/security\/remoteMediaGrants\.ts'/
-  )
-  assert.match(
-    managerSource,
-    /let value = protectProviderMedia\(message\.value, metadata\.method\)/
-  )
+  const platform = readFileSync(new URL('./platform.ts', import.meta.url), 'utf8')
+  assert.match(platform, /return protectProviderMedia\(value, method\)/)
+  assert.match(managerSource, /await this\.platform\.protectProviderResult\(message\.value, metadata\.method\)/)
 })
 
 test('plugin host logs rotate at a bounded size and append through a serialized write chain', () => {
@@ -570,7 +611,7 @@ test('plugin host logs rotate at a bounded size and append through a serialized 
 })
 
 test('plugin hosts hibernate when idle and wake on demand without losing contributions', () => {
-  const hostIdleSource = readFileSync(new URL('./hostIdle.ts', import.meta.url), 'utf8')
+  const hostIdleSource = readFileSync(new URL('../../core/plugins/hostIdle.ts', import.meta.url), 'utf8')
   assert.match(hostIdleSource, /export class PluginHostIdleTracker/)
   // Provider routing, UI commands, health, and takeover checks all see hibernated plugins.
   assert.match(

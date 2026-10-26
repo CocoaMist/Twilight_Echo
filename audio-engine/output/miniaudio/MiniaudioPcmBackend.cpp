@@ -162,13 +162,14 @@ int realEnumeratePlaybackDevices(void*, std::vector<DeviceDescriptor>* devices) 
   static_assert(sizeof(ma_device_id) <= miniaudio_backend_detail::kAdapterDeviceIdCapacity);
 
   const ma_backend backends[] = {ma_backend_wasapi};
-  ma_context context{};
-  ma_result result = ma_context_init(backends, 1, nullptr, &context);
+  std::unique_ptr<ma_context> context(new (std::nothrow) ma_context{});
+  if (!context) return MA_OUT_OF_MEMORY;
+  ma_result result = ma_context_init(backends, 1, nullptr, context.get());
   if (result != MA_SUCCESS) return result;
 
   ma_device_info* playbackDevices = nullptr;
   ma_uint32 playbackDeviceCount = 0;
-  result = ma_context_get_devices(&context, &playbackDevices, &playbackDeviceCount, nullptr, nullptr);
+  result = ma_context_get_devices(context.get(), &playbackDevices, &playbackDeviceCount, nullptr, nullptr);
   if (result == MA_SUCCESS) {
     devices->reserve(playbackDeviceCount);
     for (ma_uint32 index = 0; index < playbackDeviceCount; ++index) {
@@ -182,7 +183,7 @@ int realEnumeratePlaybackDevices(void*, std::vector<DeviceDescriptor>* devices) 
       devices->push_back(std::move(target));
     }
   }
-  ma_context_uninit(&context);
+  ma_context_uninit(context.get());
   return result;
 }
 

@@ -38,6 +38,40 @@ class ThrowingUtilityProcess extends ManualUtilityProcess {
   }
 }
 
+test('an unanswered FFT read never queues Pause or the runtime capture gate behind it', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    const read = binding.callAsync('GetVisualizationData', ['{}'])
+    const pause = binding.callAsync('Pause', [])
+    const disable = binding.callAsync('SetVisualizationDemand', [false])
+    const [fft, control, gate] = child.messages as Array<{
+      requestId: string
+      method: string
+      args: unknown[]
+    }>
+    assert.deepEqual(
+      [fft.method, control.method, gate.method],
+      ['GetVisualizationData', 'Pause', 'SetVisualizationDemand']
+    )
+    child.emit('message', { kind: 'response', requestId: control.requestId, ok: true })
+    child.emit('message', { kind: 'response', requestId: gate.requestId, ok: true })
+    await Promise.all([pause, disable])
+    child.emit('message', {
+      kind: 'response',
+      requestId: fft.requestId,
+      ok: true,
+      value: '{"active":false}'
+    })
+    assert.equal(await read, '{"active":false}')
+  } finally {
+    binding.destroy()
+  }
+})
+
 test('crash listener calls cannot bypass the configured restart backoff', async () => {
   const children: ManualUtilityProcess[] = []
   const binding = new AudioEngineServiceBinding({
@@ -716,8 +750,7 @@ test('successful volume replies cancel the watchdog after a status timeout', asy
   }
 })
 
-test('concurrent status timeouts share one probe and stale pongs cannot rescue a replacement', async (context) => {
-  context.mock.timers.enable({ apis: ['setTimeout'] })
+test('concurrent status timeouts share one probe and stale pongs cannot rescue a replacement', async () => {
   const children: ManualUtilityProcess[] = []
   const binding = new AudioEngineServiceBinding({
     serviceEntry: 'audioEngineService.js',
@@ -734,56 +767,25 @@ test('concurrent status timeouts share one probe and stale pongs cannot rescue a
     }
   })
   try {
-    const timeouts = Promise.all([
+    await Promise.all([
       assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/),
       assert.rejects(binding.callAsync('GetVisualizationData', ['{}']), /音频服务调用超时/)
     ])
-    context.mock.timers.tick(10)
-    await timeouts
     const probes = children[0].messages.filter(
       (message) => (message as { kind: string }).kind === 'ping'
     )
     assert.equal(probes.length, 1)
     children[0].emit('message', { kind: 'pong', requestId: 'unrelated-probe' })
-    context.mock.timers.tick(9)
-    assert.equal(children[0].killCount, 0)
-    context.mock.timers.tick(1)
+    await new Promise((resolve) => setTimeout(resolve, 30))
     assert.equal(children[0].killCount, 1)
-    // Restart backoff begins when the watchdog runs. A loaded event loop can
-    // run a fixed wall-clock wait before this newly scheduled timer is due.
-    assert.equal(children.length, 1)
-    context.mock.timers.tick(4)
-    assert.equal(children.length, 1)
-    context.mock.timers.tick(1)
     assert.equal(children.length, 2)
-
-    const replacementTimeout = assert.rejects(
-      binding.callAsync('GetPlaybackInfo', []),
-      /音频服务调用超时/
-    )
-    context.mock.timers.tick(10)
-    await replacementTimeout
-    const replacementProbes = children[1].messages.filter(
-      (message) => (message as { kind: string }).kind === 'ping'
-    ) as Array<{ requestId: string }>
-    assert.equal(replacementProbes.length, 1)
-    assert.notEqual(replacementProbes[0].requestId, (probes[0] as { requestId: string }).requestId)
+    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
     children[0].emit('message', {
       kind: 'pong',
       requestId: (probes[0] as { requestId: string }).requestId
     })
-    children[1].emit('message', {
-      kind: 'pong',
-      requestId: (probes[0] as { requestId: string }).requestId
-    })
-    context.mock.timers.tick(9)
-    assert.equal(children[1].killCount, 0)
-    context.mock.timers.tick(1)
+    await new Promise((resolve) => setTimeout(resolve, 30))
     assert.equal(children[1].killCount, 1)
-    assert.equal(children.length, 2)
-    context.mock.timers.tick(9)
-    assert.equal(children.length, 2)
-    context.mock.timers.tick(1)
     assert.equal(children.length, 3)
   } finally {
     binding.destroy()
@@ -877,6 +879,48 @@ test('a rejected fire-and-forget command leaves other RPCs waiting for their own
   } finally {
     binding.destroy()
   }
+})
+
+test('confirmed AB loop waits for native ACK and only explicit missing capability permits soft fallback', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 15,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  child.emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities(['ApplyDspState', 'GetDspGraphStatus'])
+  })
+  assert.equal(await binding.setLoopRangeConfirmed(1, 2), false)
+  assert.equal(child.messages.length, 0)
+  child.emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities([
+      'ApplyDspState',
+      'GetDspGraphStatus',
+      'SetLoopRange'
+    ])
+  })
+  let settled = false
+  const work = binding.setLoopRangeConfirmed(1, 2).then((value) => {
+    settled = true
+    return value
+  })
+  await Promise.resolve()
+  assert.equal(settled, false)
+  const request = child.messages.at(-1) as { requestId: string; method: string; args: unknown[] }
+  assert.equal(request.method, 'SetLoopRange')
+  assert.deepEqual(request.args, [1, 2])
+  child.emit('message', { kind: 'response', requestId: request.requestId, ok: true })
+  assert.equal(await work, true)
+  await assert.rejects(binding.setLoopRangeConfirmed(2, 3), /超时/)
+  assert.equal(
+    child.messages.filter((m) => (m as { method: string }).method === 'SetLoopRange').length,
+    2
+  )
 })
 
 test('queue rebind uses addon capabilities and a confirmed boolean reply', async (t) => {

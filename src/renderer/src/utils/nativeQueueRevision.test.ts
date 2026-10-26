@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { NativeQueueRevisionFence, synchronizeLatestNativeQueue } from './nativeQueueRevision.ts'
 import { NativeQueueLoader } from './nativeQueueLoader.ts'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import { prepareNativeQueue } from './nativeQueuePreparation.ts'
 
 test('background queue edits wait for authorization, queue commit and play of the active load', async () => {

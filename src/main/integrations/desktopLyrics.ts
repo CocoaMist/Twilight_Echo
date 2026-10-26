@@ -22,6 +22,10 @@ import { runtime } from '../core/runtime'
 import { createSettingsSnapshot, writeAppSettings } from '../core/settings'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { stringifyJsonForIpcStorage } from '../security/ipcValidation.ts'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
+import { getCoreApplication } from '../app/coreApplication.ts'
+import { CORE_WINDOW_POLICIES } from '../coreProcess/windowBridge.ts'
 
 let destroyingWindow = false
 let resumeBound = false
@@ -63,6 +67,13 @@ function persistDesktopLyricsPosition(win: BrowserWindow): void {
   if (runtime.appSettings.desktopLyrics.placement === 'taskbar') return
   if (win.isDestroyed()) return
   const [windowX, windowY] = win.getPosition()
+  const core = getCoreSettingsBridge()
+  if (core) {
+    void core
+      .update((current) => ({ desktopLyrics: { ...current.desktopLyrics, windowX, windowY } }))
+      .catch((error) => console.warn('[desktopLyrics] position save failed', error))
+    return
+  }
   runtime.appSettings.desktopLyrics = {
     ...runtime.appSettings.desktopLyrics,
     windowX,
@@ -187,6 +198,10 @@ function applyWindowSettings(): void {
   const constrained = clampToCurrentDisplay(win, current[0], current[1])
   if (constrained.x !== current[0] || constrained.y !== current[1]) {
     win.setPosition(constrained.x, constrained.y)
+    if (getCoreSettingsBridge()) {
+      persistDesktopLyricsPosition(win)
+      return
+    }
     settings.windowX = constrained.x
     settings.windowY = constrained.y
     writeAppSettings(runtime.appSettings)
@@ -276,9 +291,22 @@ export function syncDesktopLyricsSettings(): void {
 
 function updateDesktopLyricsSettings(
   patch: Partial<DesktopLyricsSettingsV3>
-): DesktopLyricsSettingsV3 {
+): DesktopLyricsSettingsV3 | Promise<DesktopLyricsSettingsV3> {
   const lockChanged = 'locked' in patch
   if (lockChanged) desktopLyricsInteractionActive = false
+  const core = getCoreSettingsBridge()
+  if (core)
+    return core
+      .update((current) => ({
+        desktopLyrics: normalizeDesktopLyricsSettings(
+          { ...current.desktopLyrics, ...patch, version: 3 },
+          { resetLegacy: false }
+        )
+      }))
+      .then(() => {
+        if (lockChanged) publishDesktopLyricsHoverIntent(desktopLyricsPointerInside)
+        return getEffectiveDesktopLyricsSettings()
+      })
   runtime.appSettings.desktopLyrics = normalizeDesktopLyricsSettings(
     { ...runtime.appSettings.desktopLyrics, ...patch, version: 3 },
     { resetLegacy: false }
@@ -440,9 +468,22 @@ function createDesktopLyricsWindow(): void {
   const settings = runtime.appSettings.desktopLyrics
   const position = windowPosition()
   if (position.x !== settings.windowX || position.y !== settings.windowY) {
-    settings.windowX = position.x
-    settings.windowY = position.y
-    writeAppSettings(runtime.appSettings)
+    const core = getCoreSettingsBridge()
+    if (core)
+      void core
+        .update((current) => ({
+          desktopLyrics: {
+            ...current.desktopLyrics,
+            windowX: position.x,
+            windowY: position.y
+          }
+        }))
+        .catch((error) => console.warn('[desktopLyrics] initial position save failed', error))
+    else {
+      settings.windowX = position.x
+      settings.windowY = position.y
+      writeAppSettings(runtime.appSettings)
+    }
   }
   const win = new BrowserWindow({
     width: settings.windowWidth,
@@ -468,6 +509,7 @@ function createDesktopLyricsWindow(): void {
     }
   })
   runtime.desktopLyricsWindow = win
+  getCoreApplication()?.register(win, CORE_WINDOW_POLICIES.lyrics)
   applyWindowSettings()
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
@@ -479,8 +521,15 @@ function createDesktopLyricsWindow(): void {
     clearTaskbarStackingTimer()
     runtime.desktopLyricsWindow = null
     if (!runtime.appSettings.desktopLyrics.enabled || runtime.desktopLyricsCrashRestarts >= 1) {
-      runtime.appSettings.desktopLyrics.enabled = false
-      writeAppSettings(runtime.appSettings)
+      const core = getCoreSettingsBridge()
+      if (core)
+        void core
+          .update((current) => ({ desktopLyrics: { ...current.desktopLyrics, enabled: false } }))
+          .catch((error) => console.warn('[desktopLyrics] disable failed', error))
+      else {
+        runtime.appSettings.desktopLyrics.enabled = false
+        writeAppSettings(runtime.appSettings)
+      }
       runtime.mainWindow?.webContents.send('desktopLyrics:loadFailed', {
         code: -1,
         description: '桌面歌词渲染进程异常退出，已停止自动重启'
@@ -541,10 +590,24 @@ export function destroyDesktopLyrics(): void {
   destroyingWindow = false
 }
 
-export function setDesktopLyricsEnabled(enabled: boolean, options?: ExperienceWindowOptions): boolean {
+export function setDesktopLyricsEnabled(
+  enabled: boolean,
+  options?: ExperienceWindowOptions
+): boolean | Promise<boolean> {
   if (enabled && !runtime.appSettings.desktopLyrics.enabled) {
     runtime.desktopLyricsCrashRestarts = 0
   }
+  const core = getCoreSettingsBridge()
+  if (core)
+    return core
+      .update((current) => ({ desktopLyrics: { ...current.desktopLyrics, enabled } }))
+      .then(() => {
+        if (enabled) showDesktopLyrics(options)
+        else destroyDesktopLyrics()
+        runtime.mainWindow?.webContents.send('desktopLyrics:enabledChanged', enabled)
+        runtime.refreshTrayMenu?.(true)
+        return enabled
+      })
   runtime.appSettings.desktopLyrics.enabled = enabled
   writeAppSettings(runtime.appSettings)
   if (enabled) showDesktopLyrics(options)
@@ -554,19 +617,37 @@ export function setDesktopLyricsEnabled(enabled: boolean, options?: ExperienceWi
   return enabled
 }
 
-export function toggleDesktopLyrics(): boolean {
+export function toggleDesktopLyrics(): boolean | Promise<boolean> {
   return setDesktopLyricsEnabled(!runtime.appSettings.desktopLyrics.enabled)
 }
 
-export function toggleDesktopLyricsLock(): boolean {
+export function toggleDesktopLyricsLock(): boolean | Promise<boolean> {
   const locked = !runtime.appSettings.desktopLyrics.locked
-  updateDesktopLyricsSettings({ locked })
+  const result = updateDesktopLyricsSettings({ locked })
+  if (result instanceof Promise) return result.then(() => locked)
   return locked
 }
 
 export function requestDesktopLyricsResync(): void {
   runtime.desktopLyricsWindow?.webContents.send('desktopLyrics:freezeClock')
+  const core = getCoreSystemPlayer()
+  if (core) {
+    core.resync()
+    return
+  }
   runtime.mainWindow?.webContents.send('desktopLyrics:resyncRequested')
+}
+
+export function publishCoreDesktopLyricsSession(session: DesktopLyricsSession): void {
+  runtime.latestDesktopLyricsSession = session
+  if (runtime.latestDesktopLyricsClock?.sessionId !== session.sessionId)
+    runtime.latestDesktopLyricsClock = null
+  runtime.desktopLyricsWindow?.webContents.send('desktopLyrics:sessionChanged', session)
+}
+
+export function publishCoreDesktopLyricsClock(clock: DesktopLyricsClockSnapshot): void {
+  runtime.latestDesktopLyricsClock = clock
+  runtime.desktopLyricsWindow?.webContents.send('desktopLyrics:clockChanged', clock)
 }
 
 export function setupDesktopLyricsIpc(): void {
@@ -582,7 +663,8 @@ export function setupDesktopLyricsIpc(): void {
     assertTrustedIpcSender(event, 'desktop lyrics IPC')
     if (!isMainSender(event)) throw new Error('desktop lyrics enable rejected from satellite')
     if (typeof enabled !== 'boolean') throw new Error('invalid desktop lyrics enabled state')
-    const options = rawOptions && typeof rawOptions === 'object' ? (rawOptions as ExperienceWindowOptions) : {}
+    const options =
+      rawOptions && typeof rawOptions === 'object' ? (rawOptions as ExperienceWindowOptions) : {}
     return setDesktopLyricsEnabled(enabled, options)
   })
 
@@ -627,6 +709,7 @@ export function setupDesktopLyricsIpc(): void {
 
   ipcMain.on('desktopLyrics:publishSession', (event, session: unknown) => {
     if (!shouldAcceptIpcEvent(event, 'desktop lyrics IPC') || !isMainSender(event)) return
+    if (getCoreSystemPlayer()) return
     if (!validSession(session)) return
     runtime.latestDesktopLyricsSession = session
     if (runtime.latestDesktopLyricsClock?.sessionId !== session.sessionId) {
@@ -637,6 +720,7 @@ export function setupDesktopLyricsIpc(): void {
 
   ipcMain.on('desktopLyrics:publishClock', (event, clock: unknown) => {
     if (!shouldAcceptIpcEvent(event, 'desktop lyrics IPC') || !isMainSender(event)) return
+    if (getCoreSystemPlayer()) return
     if (!validClock(clock)) return
     const current = runtime.latestDesktopLyricsClock
     if (
@@ -653,6 +737,11 @@ export function setupDesktopLyricsIpc(): void {
   ipcMain.on('desktopLyrics:transport', (event, action: unknown) => {
     if (!shouldAcceptIpcEvent(event, 'desktop lyrics IPC') || !isDesktopLyricsSender(event)) return
     if (!['previous', 'playPause', 'next'].includes(String(action))) return
+    const core = getCoreSystemPlayer()
+    if (core) {
+      core.shortcut(action as DesktopLyricsTransportAction)
+      return
+    }
     runtime.mainWindow?.webContents.send('player:shortcut', action as DesktopLyricsTransportAction)
   })
 
@@ -695,6 +784,8 @@ export function setupDesktopLyricsIpc(): void {
 
   ipcMain.on('desktopLyrics:close', (event) => {
     if (!shouldAcceptIpcEvent(event, 'desktop lyrics IPC') || !isDesktopLyricsSender(event)) return
-    setDesktopLyricsEnabled(false)
+    void Promise.resolve(setDesktopLyricsEnabled(false)).catch((error) =>
+      console.warn('[desktopLyrics] close failed', error)
+    )
   })
 }

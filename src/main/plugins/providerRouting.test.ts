@@ -68,6 +68,29 @@ test('album search is an optional routed search method with the standard search 
   assert.equal(getProviderCallTimeoutMs('searchAlbums'), getProviderCallTimeoutMs('searchSongs'))
 })
 
+test('album identity requires an explicit handler without replacing album tracks', () => {
+  const provider = { id: 'ncm', name: 'NCM', capabilities: ['playlist' as const],
+    supportedMethods: ['fetchAlbumIdentity' as const] }
+  assert.equal(isTwilightMediaProviderMethod('fetchAlbumIdentity'), true)
+  assert.equal(providerSupportsMethod(provider, 'fetchAlbumIdentity'), true)
+  assert.equal(providerSupportsMethod({ ...provider, supportedMethods: [] }, 'fetchAlbumIdentity'), false)
+  assert.equal(providerSupportsMethod({ ...provider, supportedMethods: undefined }, 'fetchAlbumIdentity'), false)
+  assert.equal(providerSupportsMethod({ ...provider, capabilities: [] }, 'fetchAlbumIdentity'), false)
+  assert.equal(getProviderCallTimeoutMs('fetchAlbumIdentity'), getProviderCallTimeoutMs('fetchAlbumTracks'))
+  const host = readFileSync(new URL('./host.ts', import.meta.url), 'utf8')
+  assert.match(host, /'fetchAlbumIdentity'/)
+})
+
+test('artist identity is an explicitly advertised library read with a metadata timeout', () => {
+  const provider = { id: 'ncm', name: 'NCM', capabilities: ['library' as const], supportedMethods: ['fetchArtistIdentity' as const] }
+  assert.equal(isTwilightMediaProviderMethod('fetchArtistIdentity'), true)
+  assert.equal(providerSupportsMethod(provider, 'fetchArtistIdentity'), true)
+  assert.equal(providerSupportsMethod({ ...provider, supportedMethods: undefined }, 'fetchArtistIdentity'), false)
+  assert.equal(providerSupportsMethod({ ...provider, capabilities: [] }, 'fetchArtistIdentity'), false)
+  assert.equal(getProviderCallTimeoutMs('fetchArtistIdentity'), getProviderCallTimeoutMs('fetchArtistMetadata'))
+  assert.match(readFileSync(new URL('./host.ts', import.meta.url), 'utf8'), /'fetchArtistIdentity'/)
+})
+
 test('playlist paging requires an advertised handler and playlist capability through host routing', () => {
   const provider: TestRunningProvider['providers'][number] = {
     id: 'bili',
@@ -324,7 +347,7 @@ test('omits utility process env option when no proxy env is configured', () => {
 })
 
 test('bundled provider missing-method errors mention restarting the app', () => {
-  const source = readFileSync(new URL('./manager.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../core/plugins/manager.ts', import.meta.url), 'utf8')
 
   assert.match(source, /内置音源插件尚未加载最新代码，请重启应用/)
 })

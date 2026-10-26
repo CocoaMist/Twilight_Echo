@@ -99,6 +99,8 @@ import Host from '@renderer/components/AppNoticeHost.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
 import {useAppNoticeStore} from '@renderer/stores/useAppNoticeStore'
 import {createInitialAppUpdateSnapshot} from '@renderer/../../shared/appUpdate.ts'
+import {coreSnapshot} from '@renderer/stores/coreTestFixtures.ts'
+import {disposeCoreConnection} from '@renderer/stores/coreConnection.ts'
 import {scan,metadata,calls} from './music'
 const expect=(ok,message)=>{if(!ok)throw new Error(message)}
 const tick=async()=>{await nextTick();await nextTick();await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))}
@@ -124,9 +126,32 @@ window.checkTaskViewport=async(width,height)=>{
 window.runTaskCenterTests=async dark=>{
   document.documentElement.dataset.theme=dark?'dark':'pureWhite';document.documentElement.dataset.teMotion='off';
   const store=useAppNoticeStore();store.clearNotices();store.setDoNotDisturb(false);store.setCenterOpen(false);scan.value={state:'idle',current:0,total:10,error:''};metadata.value={state:'idle',total:0,completed:0,failed:0,skipped:0};calls.length=0;
-  let downloadsChanged,updateChanged,batchChanged,retries=0,revealed=0,installed=0,library=0,stops=0;
+  let message,updateChanged,retries=0,revealed=0,installed=0,library=0,stops=0,disconnected=0;
   let snapshot=createInitialAppUpdateSnapshot();
-  window.api={window:{getState:async()=>({maximized:false}),onStateChanged:()=>()=>{}},providerDownloads:{list:async()=>[],onChanged:fn=>{downloadsChanged=fn;return()=>stops++},cancel:async()=>{},retry:async()=>{retries++},result:async()=> 'D:/fixture/song.aac'},shell:{showItemInFolder:async()=>{revealed++}},app:{getUpdateState:async()=>snapshot,onUpdateState:fn=>{updateChanged=fn;return()=>stops++},installUpdate:async()=>{installed++}},loudnessAnalysis:{getBatch:async()=>({status:{state:'idle',revision:0}}),onBatchProgress:fn=>{batchChanged=fn;return()=>stops++},cancelBatch:async()=>{}}};
+  let state=coreSnapshot({epoch:'fixture-'+dark,downloads:{revision:0,active:0,total:0}}),downloadTasks=[];
+  const commands=[];
+  const publish=patch=>{state={...state,...patch,sequence:state.sequence+1};message({connectionId:'fixture',message:{kind:'state',epoch:state.epoch,sequence:state.sequence,snapshot:state}})};
+  const downloadsChanged=tasks=>{downloadTasks=tasks;publish({downloads:{revision:state.downloads.revision+1,total:tasks.length,active:tasks.filter(t=>t.status==='downloading').length}})};
+  window.api={
+    window:{getState:async()=>({maximized:false}),onStateChanged:()=>()=>{}},
+    core:{
+      connect:async()=>({ok:true,value:{connectionId:'fixture',snapshot:state}}),
+      onMessage:fn=>{message=fn;return()=>stops++},onStatus:()=>()=>stops++,
+      disconnect:async()=>{disconnected++;return {ok:true}},cancel:async()=>({ok:true}),
+      request:async(_id,request)=>{
+        if(request.name==='metadata.entity.tasks')return {ok:true,value:{offset:0,total:0,counts:{queued:0,running:0,retry_wait:0,needs_review:0,blocked:0,failed:0,completed:0,cancelled:0},items:[]}};
+        if(request.name==='downloads.page')return {ok:true,value:{...state.downloads,offset:0,items:downloadTasks}};
+        if(request.name==='downloads.indexed')return {ok:true,value:{indexed:true}};
+        commands.push(request);
+        if(request.name==='downloads.retry')retries++;
+        else if(request.name==='downloads.reveal')revealed++;
+        else if(request.name==='downloads.play')calls.push('play');
+        else if(request.name!=='library.loudness.cancel')throw new Error('unexpected Core operation: '+request.name);
+        return {ok:true};
+      }
+    },
+    app:{getUpdateState:async()=>snapshot,onUpdateState:fn=>{updateChanged=fn;return()=>stops++},installUpdate:async()=>{installed++}}
+  };
   const host=ref();
   scan.value={state:'completed',current:10,total:10,error:''};
   const app=createApp({render:()=>h('div',{},[h(TitleBar,{menuOpen:false,hideStart:true,notificationsOpen:store.centerOpen.value,onNotifications:event=>host.value.toggleHistory(event)}),h('button',{id:'outside'},'页面操作'),h(Host,{ref:host,onLibrary:()=>library++})])});app.mount('#app');await tick();
@@ -143,8 +168,12 @@ window.runTaskCenterTests=async dark=>{
   expect(document.querySelector('progress[aria-label="曲库扫描"]').value===0.4,'live scan progress missing');button('.notice-history','暂停').click();await tick();button('.notice-history','继续').click();await tick();expect(calls.join(',')==='pause,resume','task controls lost behavior');
   scan.value={state:'completed',current:10,total:10,error:''};await tick();expect(noticeText().includes('曲库扫描：已完成'),'background completion disappeared');expect(!document.querySelector('.task-record'),'completion duplicated in live tasks');expect(!store.notices.value.length,'background completion became a toast');
   button('.notice-history','清空记录').click();await tick();expect(!noticeText().includes('曲库扫描')&&!document.querySelector('.task-record'),'cleared scan result reappeared');
+  const loudness={id:'core-plan',libraryRevision:0,groups:2,tracks:2,skipped:0,status:{state:'running',jobId:'private-job',revision:1,total:2,processed:1,failed:0,currentTitle:'后台专辑'}};
+  publish({libraryLoudness:loudness});await tick();expect(document.querySelector('progress[aria-label="响度分析"]').value===0.5,'Core loudness progress missing');
+  button('.notice-history','取消').click();await tick();expect(commands.at(-1).name==='library.loudness.cancel'&&commands.at(-1).payload.id==='core-plan','loudness cancellation did not use the Core plan identity');
+  publish({libraryLoudness:{...loudness,status:{...loudness.status,state:'completed',revision:2,processed:2}}});await tick();expect(noticeText().includes('响度分析：已完成'),'Core loudness completion was not retained');
   scan.value={state:'running',current:1,total:10,error:''};await tick();scan.value={state:'failed',current:1,total:10,error:'无法读取文件'};await tick();expect(noticeText().includes('无法读取文件'),'background error is not recoverable');button('.notice-records','重试').click();await tick();expect(calls.at(-1)==='retry','scan retry lost');
-  const task=status=>({id:'download-'+dark,providerId:'fixture',providerJobId:'job',track:{id:'track',title:'下载旋律',artist:'艺人'},requestedQuality:'aac',actualQuality:'aac',status,progress:status==='completed'?1:0.2,targetPath:'D:/fixture/song.aac',fileSize:10,error:status==='failed'?'连接中断':null,createdAt:'2026-10-06',updatedAt:'2026-10-06'});
+  const task=status=>({id:'download-'+dark,providerId:'fixture',track:{id:'track',title:'下载旋律',artist:'艺人'},requestedQuality:'aac',actualQuality:'aac',status,progress:status==='completed'?1:0.2,fileSize:10,error:status==='failed'?'连接中断':null,createdAt:'2026-10-06',updatedAt:'2026-10-06'});
   downloadsChanged([task('downloading')]);await tick();downloadsChanged([task('failed')]);await tick();expect(noticeText().includes('下载失败'),'download failure has no retained result');button('.notice-records','重新下载').click();await tick();expect(retries===1,'download retry lost');downloadsChanged([task('completed')]);await tick();button('.notice-records','打开目录').click();await tick();expect(revealed===1,'completed download action lost');button('.notice-records','播放本地文件').click();await tick();expect(calls.includes('play'),'completed download playback lost');
   snapshot={...snapshot,progress:{...snapshot.progress,phase:'ready',version:'1.2.0',message:'更新包已就绪'}};updateChanged(snapshot);await tick();button('.notice-history','安装更新').click();await tick();expect(installed===1,'ready update install action lost');
   let attempts=0,reject;
@@ -163,6 +192,6 @@ window.runTaskCenterTests=async dark=>{
   scan.value={state:'running',current:7,total:10,error:''};bell.click();await tick();button('.notice-history','清空记录').click();await tick();expect(scan.value.state==='running'&&!calls.includes('cancel'),'clearing history cancelled a live task');
   expect(![...document.querySelectorAll('.task-record')].some(el=>el.textContent.includes('下载旋律')),'cleared download result reappeared');
   store.pushNotice({kind:'success',message:'下载完成 · '+('长曲名与路径'.repeat(18)),presentation:'center',downloadTaskId:task('completed').id});store.pushNotice({kind:'info',message:'曲库扫描：已完成，新增 12 首歌曲。'});await tick();
-  dispose=()=>{app.unmount();expect(stops===3,'shared services did not disconnect');store.clearNotices()};
+  dispose=()=>{const writes=commands.length;app.unmount();expect(stops===1,'task view did not release the update subscription');disposeCoreConnection();expect(stops===3&&disconnected===1,'window did not release its Core connection');expect(commands.length===writes,'unmount sent a business command');store.clearNotices()};
 }
 `

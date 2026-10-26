@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
+import { createUnifiedSearchSources } from '../../../shared/musicSearchSources.ts'
+import { createUnifiedMusicSearch } from '../../../shared/unifiedMusicSearch.ts'
 
-const { buildLogicalMusicItems, unifiedSearchSongs } = (await import(
-  new URL('./unifiedMusicSearch.ts', import.meta.url).href
-)) as typeof import('./unifiedMusicSearch')
+const identity = createLogicalTrackModel(() => undefined)
+const sources = createUnifiedSearchSources(identity, () => 0)
+const { buildLogicalMusicItems, unifiedSearchSongs } = createUnifiedMusicSearch(identity, sources)
 
 function track(overrides: Partial<Track> & Pick<Track, 'id' | 'title' | 'artist'>): Track {
   return {
@@ -382,4 +385,88 @@ test('source pages are bounded and next-page availability uses each source total
   assert.equal(result.items.length, 4)
   assert.equal(result.total, 8)
   assert.equal(result.hasMore, false)
+})
+
+test('unified search separates logical relevance ranking from within-group source variant selection', async () => {
+  const localSubstringFlac = track({
+    id: 'local:sub-flac',
+    title: 'Dancing Under The Moon',
+    artist: 'Other Artist',
+    source: 'local',
+    format: 'flac',
+    bitDepth: 24
+  })
+  const localExactFlac = track({
+    id: 'local:exact-flac',
+    title: 'Moon',
+    artist: 'Audrey',
+    source: 'local',
+    format: 'flac',
+    bitDepth: 24
+  })
+  const remoteExactMp3 = track({
+    id: 'ncm:exact-mp3',
+    title: 'Moon',
+    artist: 'Audrey',
+    source: 'ncm',
+    format: 'mp3'
+  })
+  const remotePrefixFlac = track({
+    id: 'ncm:prefix-flac',
+    title: 'Moon River',
+    artist: 'Audrey',
+    source: 'ncm',
+    format: 'flac'
+  })
+
+  const result = await unifiedSearchSongs({
+    query: 'moon',
+    localTracks: [localSubstringFlac, localExactFlac],
+    providers: [{ id: 'ncm', name: 'NetEase', capabilities: ['search'], available: true }],
+    searchProviderSongs: async () => ({
+      items: [remoteExactMp3, remotePrefixFlac],
+      total: 2
+    })
+  })
+
+  assert.deepEqual(
+    result.logicalItems.map((item) => item.title),
+    ['Moon', 'Moon River', 'Dancing Under The Moon']
+  )
+  assert.equal(result.logicalItems[0].preferredTrack.id, 'local:exact-flac')
+  assert.deepEqual(
+    result.logicalItems[0].variants.map((v) => v.track.id),
+    ['local:exact-flac', 'ncm:exact-mp3']
+  )
+})
+
+test('unified search incorporates personal favorite and playCount signals into relevance ranking', async () => {
+  const coldTrack = track({
+    id: 'local:cold',
+    title: 'Moonlight Part 1',
+    artist: 'Composer',
+    source: 'local',
+    format: 'flac'
+  })
+  const favoritePlayedTrack = track({
+    id: 'local:fav',
+    title: 'Moonlight Part 2',
+    artist: 'Composer',
+    source: 'local',
+    format: 'flac'
+  })
+
+  const result = await unifiedSearchSongs({
+    query: 'moonlight',
+    localTracks: [coldTrack, favoritePlayedTrack],
+    providers: [],
+    getSearchSignals: (t) =>
+      t.id === 'local:fav' ? { favorite: true, playCount: 40, lastPlayed: 1700000000 } : undefined,
+    searchProviderSongs: async () => ({ items: [], total: 0 })
+  })
+
+  assert.deepEqual(
+    result.logicalItems.map((item) => item.preferredTrack.id),
+    ['local:fav', 'local:cold']
+  )
 })

@@ -7,9 +7,13 @@ import {
   normalizeLocalPluginInstallSourceKind
 } from './installDialog.ts'
 
-const managerSource = readFileSync(new URL('./manager.ts', import.meta.url), 'utf8')
+const managerSource = readFileSync(new URL('./platform.ts', import.meta.url), 'utf8')
 const pluginIpcSource = readFileSync(new URL('../ipc/plugins.ts', import.meta.url), 'utf8')
 const mainSettingsSource = readFileSync(new URL('../core/settings.ts', import.meta.url), 'utf8')
+const normalizationSource = readFileSync(
+  new URL('../../core/settings/normalization.ts', import.meta.url),
+  'utf8'
+)
 const pluginPageSource = readFileSync(
   new URL('../../renderer/src/components/PluginPage.vue', import.meta.url),
   'utf8'
@@ -73,8 +77,9 @@ test('chooseAndInstall 的 IPC 入口校验来源并在主进程侧检查开发�
 })
 
 test('开发者模式默认关闭并按布尔归一化', () => {
-  assert.match(mainSettingsSource, /developerMode: false/)
-  assert.match(mainSettingsSource, /developerMode: settings\.developerMode === true/)
+  assert.match(mainSettingsSource, /normalizePortableSettings/)
+  assert.match(normalizationSource, /developerMode: false/)
+  assert.match(normalizationSource, /developerMode: settings\.developerMode === true/)
 })
 
 test('插件页的目录安装入口跟随持久化的开发者模式设置', () => {

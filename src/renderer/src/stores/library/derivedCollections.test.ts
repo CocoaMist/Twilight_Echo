@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../../types/music'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import { buildDerivedCollections } from './derivedCollections.ts'
 import { isReleaseDateOnlyUpdate, toPlaylistTrackSnapshot } from './musicStoreData.ts'
 
@@ -81,4 +81,20 @@ test('date-only updates do not request online enrichment, including JSON round t
   assert.equal(isReleaseDateOnlyUpdate(previous, updated), true)
   assert.equal(isReleaseDateOnlyUpdate(previous, { ...updated, title: 'New title' }), false)
   assert.equal(isReleaseDateOnlyUpdate(undefined, updated), false)
+})
+
+test('artist collections use individual credits, count each song once and retain literal band names', () => {
+  const solo = track('solo', { artist: 'Alice' })
+  const duet = track('duet', { artist: 'Alice/Bob', artists: [{ name: 'Alice' }, { name: 'Bob' }, { name: ' Alice ' }] })
+  const band = track('band', { artist: 'AC/DC' })
+  const literal = track('literal', { artist: 'Earth, Wind & Fire', artists: [{ name: 'Earth, Wind & Fire' }] })
+  const artists = buildDerivedCollections([solo, duet, band, literal], [], '').artists
+  assert.equal(artists.length, 4)
+  assert.deepEqual(artists.find(a => a.name === 'Alice')!.tracks.map(t => t.id), ['solo', 'duet'])
+  assert.deepEqual(artists.find(a => a.name === 'Bob')!.tracks.map(t => t.id), ['duet'])
+  assert.equal(artists.some(a => a.name === 'Alice/Bob'), false)
+  assert.equal(artists.find(a => a.name === 'Alice')!.trackCount, 2)
+  assert.ok(artists.some(a => a.name === 'AC/DC'))
+  assert.ok(artists.some(a => a.name === literal.artist))
+  assert.equal(duet.artist, 'Alice/Bob')
 })

@@ -142,6 +142,10 @@ JS 插件实现两个函数：
 | `twilight.ui`        | 注册 UI 扩展点（侧边栏页面、播放栏按钮、设置面板、流媒体/本地侧栏入口）并显示提示 toast |
 | `twilight.themes`    | 主题资源声明                                                                            |
 | `twilight.library`   | 把曲目写进用户的本地歌单（`importPlaylists`，需 `library:write`；宿主较新时才有）      |
+| `twilight.library`（v4 扩展） | 曲库查询/曲目详情/元数据修正/封面读取/歌单读写（`library:read` / `library:write`） |
+| `twilight.appSettings`（v4） | 读取与修改应用设置（需 `app:settings`，主进程侧强制校验权限）                    |
+| `twilight.host`（v4）        | 主窗口截图（压缩 JPEG data URL，需 `app:settings`）                                |
+| `twilight.experience`（v4）  | experience iframe ↔ 插件后台代码的请求中继与事件推送                                |
 
 `twilight.library.importPlaylists({ playlists: [{ name, paths }] })` 让插件把一批歌单
 写进 **音乐库 → 歌单**。曲目按**文件路径**匹配本地音乐库（与自带 m3u8 导入同一套逻辑），
@@ -149,6 +153,24 @@ JS 插件实现两个函数：
 调用是**即发即忘**的：主进程在当前应用会话中排队，等主窗口的音乐库和歌单加载完成后再交给渲染进程执行——
 歌单状态归渲染进程所有，写入走它带版本号的持久化——结果由宿主用一条汇总 toast 告知。
 旧宿主没有这个命名空间，调用前请用 `typeof twilight.library?.importPlaylists` 判断。
+
+### 7.1 v4 后台能力（曲库 / 设置 / 截图 / experience 中继）
+
+带 experience 或需要后台逻辑的插件（API v4 宿主）还可以使用：
+
+- `twilight.library.queryTracks(query)` / `getTracksByIds(ids)` — 分页查询与按 id 取完整曲目
+  （含 bpm、响度增益、格式；`library:read`）。`patchTracks(patches)` 按乐观锁修正元数据
+  （可写字段白名单：标题/艺术家/专辑/流派/发行日期/歌词/BPM 等；`library:write`）。
+- `twilight.library.getCover(trackId)` — 封面字节 data URL（`library:read`）；
+  `listPlaylists / createPlaylist / addTracksToPlaylist / removeTracksFromPlaylist`（`library:write`）。
+- `twilight.player.playTracks(ids, startIndex)` / `setVolume` / `seek` / `setPlayMode`（`player:control`）。
+- `twilight.appSettings.get() / update(patch)` — 应用设置读写（`app:settings`）。
+- `twilight.host.captureScreenshot()` — 主窗口压缩截图（`app:settings`）。
+- `twilight.experience.onRequest(handler)` / `emit(event, value)` — 把 experience iframe 的
+  `plugin.request` 桥方法接到插件后台代码，并把事件推回 iframe。iframe 受 CSP 限制不能联网，
+  联网、API Key 与长任务都应放在插件进程里经这条通道服务。
+
+所有 v4 后台能力都在主进程侧按 manifest 权限强制校验，参数有白名单与大小上限。
 
 不要试图绕过网关直接拿宿主内部对象。API 主版本内只加不改不删（见 [spec §3](./twilight-echo-plugin-spec.md#3-api-版本与兼容性承诺)），所以绑在 `twilight` 上的调用是稳的。
 
@@ -183,8 +205,9 @@ JS 插件实现两个函数：
 - `settingsPanel`：设置页配置区
 - `localSidebarItem`：本地音乐侧栏入口
 - `streamingHome`：流媒体首页入口
+- `titleBarButton`（v4）：标题栏图标按钮（外观按钮左侧）。无需 command；点击时宿主在屏幕右侧弹出面板（flyout）中挂载该插件的 `launch: "panel"` experience，适合助手类常驻入口
 
-这三类都通过 **command 回到插件宿主进程**执行业务逻辑。宿主只渲染它批准的 DTO，不向插件开放任意 DOM 权限。这是 Phase 3 受控 UI 注入的核心设计：渲染在 renderer，逻辑在 utilityProcess，中间是受限桥接。
+这几类都通过 **command 回到插件宿主进程**执行业务逻辑（`titleBarButton` 例外：宿主直接打开面板）。宿主只渲染它批准的 DTO，不向插件开放任意 DOM 权限。这是 Phase 3 受控 UI 注入的核心设计：渲染在 renderer，逻辑在 utilityProcess，中间是受限桥接。
 
 `twilight.ui` 还提供 `notify(notice)`，用于弹出宿主风格的提示（toast），同样需要 `ui:inject` 权限：
 

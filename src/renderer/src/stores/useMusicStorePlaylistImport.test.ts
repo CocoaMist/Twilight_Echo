@@ -1,101 +1,80 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ref, shallowRef } from 'vue'
-import { LibraryDatabase } from '../../../main/library/libraryDatabase.ts'
-import { useMusicStore } from './useMusicStore.ts'
-import { usePlaylistLifecycleActions } from '../components/song-list/usePlaylistLifecycleActions.ts'
-import type { Playlist } from './library/musicStoreTypes.ts'
+import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
+import * as vue from 'vue'
+import { coreLibraryFixture } from './coreLibraryTestFixture.ts'
+import { createCoreMusicStore } from './library/coreMusicStore.ts'
+import * as fileValidation from '../utils/playlistFileValidation.ts'
+import * as playlistExport from '../utils/playlistExport.ts'
+import type { usePlaylistLifecycleActions } from '../components/song-list/usePlaylistLifecycleActions.ts'
+import type { CorePlaylistDescriptor } from '../../../shared/corePlaylists.ts'
 
-test('store imports only through discovered authority and the production file-input action awaits SQLite', async (t) => {
-  t.mock.method(globalThis, 'setTimeout', (() => 0) as unknown as typeof setTimeout)
-  const db = new LibraryDatabase(':memory:'),
-    store = useMusicStore()
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  t.after(async () => {
-    await store.flushPlaylists()
-    store.playlists.value = []
-    store.clearTracks()
-    db.close()
-    if (previous) Object.defineProperty(globalThis, 'window', previous)
-    else Reflect.deleteProperty(globalThis, 'window')
-  })
-  const track = {
-    id: 'deep-track',
-    filePath: 'D:/Music/deep.flac',
-    title: 'Authoritative',
-    artist: 'Artist',
-    album: 'Album'
+function lifecycle(store: ReturnType<typeof createCoreMusicStore>) {
+  const exports: { usePlaylistLifecycleActions?: typeof usePlaylistLifecycleActions } = {}
+  const dependencies: Record<string, unknown> = {
+    vue,
+    '@renderer/stores/useMusicStore.ts': { useMusicStore: () => store },
+    '@renderer/utils/playlistExport.ts': playlistExport,
+    '@renderer/utils/playlistFileValidation.ts': fileValidation
   }
-  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [track] })
-  let mode: unknown = 'unknown',
-    failure = false,
-    reads = 0,
-    writes = 0
-  const api = {
-    library: {
-      getStorageMode: async () => {
-        if (failure) throw new Error('discovery failed')
-        return mode
-      },
-      database: {
-        lookupTracksByPaths: async (...args: Parameters<typeof db.lookupTracksByPaths>) => {
-          reads++
-          return db.lookupTracksByPaths(...args)
-        },
-        getTracksByIds: async (...args: Parameters<typeof db.getTracksByIds>) =>
-          db.getTracksByIds(...args),
-        getMetadata: async () => db.getMetadata()
+  runInNewContext(
+    ts.transpileModule(
+      readFileSync(
+        new URL('../components/song-list/usePlaylistLifecycleActions.ts', import.meta.url),
+        'utf8'
+      ),
+      {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
       }
-    },
-    data: {
-      savePlaylists: async () => {
-        writes++
+    ).outputText,
+    {
+      exports,
+      require: (id: string) => {
+        assert.ok(id in dependencies, id)
+        return dependencies[id]
       },
-      loadMusicLibrary: async () => {
-        throw new Error('must not export the entire library to import a playlist')
-      }
+      Error,
+      setTimeout
     }
-  }
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { api } })
-  store.clearTracks()
-  store.playlists.value = []
-  await assert.rejects(
-    store.importPlaylistPathBatchAsync([{ name: 'Unknown', paths: ['deep.flac'] }]),
-    /无法确认/
   )
-  failure = true
-  await assert.rejects(
-    store.importPlaylistPathBatchAsync([{ name: 'Failed', paths: ['deep.flac'] }]),
-    /discovery failed/
-  )
-  assert.equal(store.playlists.value.length, 0)
-  assert.equal(reads, 0)
-  failure = false
-  mode = 'json'
-  const json = await store.importPlaylistDocumentAsync('JSON', 'mix.m3u8', 'deep.flac')
-  assert.equal(json.unresolvedEntries, 1)
-  assert.equal(reads, 0)
-  await store.flushPlaylists()
-  mode = 'sqlite'
-  const result = await store.importPlaylistPathBatchAsync([{ name: 'SQL', paths: ['deep.flac'] }])
-  assert.equal(result[0].importedCount, 1)
-  assert.deepEqual(store.playlists.value.at(-1)?.trackIds, ['deep-track'])
-  assert.deepEqual(store.tracks.value, [])
-  assert.equal(reads, 1)
-  await store.flushPlaylists()
+  return exports.usePlaylistLifecycleActions!
+}
 
-  // Exercise the production file-input action, not an imitation of its logic.
-  const currentPlaylist = shallowRef<Playlist | null>(store.playlists.value.at(-1)!)
-  const message = ref('')
-  const actions = usePlaylistLifecycleActions({
-    currentPlaylist,
-    isPlaylistDetail: ref(true),
-    repairMessage: message,
-    getSelectedTracks: () => [],
-    isSelected: () => false,
-    clearSelection: () => {},
-    selectPlaylist: () => {}
+test('the production file-input action imports through Core SQL authority without transferring full membership or a library array', async (t) => {
+  const f = await coreLibraryFixture(t, {
+    tracks: [
+      {
+        id: 'deep-track',
+        filePath: 'D:/Music/deep.flac',
+        title: 'Authoritative',
+        artist: 'Artist',
+        album: 'Album'
+      }
+    ]
   })
+  const store = createCoreMusicStore(f.core)
+  t.after(store.dispose)
+  await store.loadPlaylists()
+  const id = await store.createPlaylist('SQL')
+  const currentPlaylist = vue.shallowRef<CorePlaylistDescriptor | null>(
+    store.playlists.value.find((item) => item.id === id)!
+  )
+  const message = vue.ref('')
+  const scope = vue.effectScope()
+  t.after(() => scope.stop())
+  const actions = scope.run(() =>
+    lifecycle(store)({
+      currentPlaylist,
+      isPlaylistDetail: vue.ref(true),
+      repairMessage: message,
+      getSelectedTracks: () => [],
+      isSelected: () => false,
+      clearSelection() {},
+      selectPlaylist() {}
+    })
+  )!
   const event = (text: () => Promise<string>) =>
     ({
       target: { files: [{ name: 'mix.pls', size: 64, text }], value: 'mix.pls' }
@@ -104,22 +83,35 @@ test('store imports only through discovered authority and the production file-in
     event(async () => '[playlist]\nFile1=deep.flac\nNumberOfEntries=1')
   )
   assert.match(message.value, /已导入 1 首/)
-  assert.equal(reads, 2)
-  await store.flushPlaylists()
+  const members = await store.getPlaylistMembers(id)
+  assert.deepEqual(
+    members.items.map((item) => item.id),
+    ['deep-track']
+  )
+  assert.equal(store.playlists.value.find((item) => item.id === id)?.count, 1)
+  assert.equal('trackIds' in store.playlists.value.find((item) => item.id === id)!, false)
+  assert.equal('tracks' in store, false)
+  assert.equal(
+    f.commands.filter((command) => command.name === 'playlists.importDocument').length,
+    1
+  )
+  assert.equal(
+    f.queries.some((query) => query.name === 'library.tracks'),
+    false
+  )
   let release!: (text: string) => void
   const held = new Promise<string>((resolve) => {
     release = resolve
   })
   const pending = actions.handlePlaylistImport(event(() => held))
-  store.deletePlaylist(currentPlaylist.value!.id)
-  const before = reads
+  await store.deletePlaylist(id)
+  const before = f.commands.length
   release('deep.flac')
   await pending
   assert.match(message.value, /重命名或删除/)
-  assert.equal(reads, before)
+  assert.equal(f.commands.length, before)
   assert.equal(
-    store.playlists.value.some((p) => p.name === 'SQL'),
+    store.playlists.value.some((playlist) => playlist.id === id),
     false
   )
-  assert.ok(writes > 0)
 })

@@ -142,11 +142,25 @@ test('one failed import does not discard subsequent queued requests', async () =
   stop()
 })
 
-test('app gates imports on uncaught hydration promises and IPC restricts draining to the main frame', () => {
+test('plugin imports route through Core with a permission gate and serialized applies', () => {
+  // After the Core migration a plugin imports playlists through the Core
+  // plugin manager directly: the call is permission-gated there and applied
+  // through the serialized playlists service, so the renderer no longer
+  // consumes or gates the import queue.
   const app = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
-  assert.match(app, /const libraryLoad = loadApplicationLibrary\(\)/)
-  assert.match(app, /const playlistsLoad = loadPlaylists\(\)/)
-  assert.match(app, /startPluginPlaylistImports\(Promise\.all\(\[libraryLoad, playlistsLoad\]\)\)/)
+  assert.doesNotMatch(app, /startPluginPlaylistImports/, 'renderer must not consume plugin imports')
+  const coreEntry = readFileSync(
+    new URL('../../../main/coreProcess/entry.ts', import.meta.url),
+    'utf8'
+  )
+  assert.match(coreEntry, /importPlaylists: \(request\) => playlists\.importFromPlugin\(request\)/)
+  const manager = readFileSync(new URL('../../../core/plugins/manager.ts', import.meta.url), 'utf8')
+  assert.match(manager, /requirePermission\(id, 'library:write', 'library\.importPlaylists'\)/)
+  const service = readFileSync(
+    new URL('../../../core/playlists/service.ts', import.meta.url),
+    'utf8'
+  )
+  assert.match(service, /importPlaylistPathBatchAsync\(request\.playlists\)/)
   const ipc = readFileSync(new URL('../../../main/ipc/plugins.ts', import.meta.url), 'utf8')
   assert.match(ipc, /playlistImports\.enqueue\(request\)/)
   assert.match(ipc, /event\.sender !== runtime\.mainWindow\?\.webContents/)

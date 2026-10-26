@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import test, { after, type TestContext } from 'node:test'
-import { LibraryDatabase } from '../../../main/library/libraryDatabase.ts'
-import type { LocalLibraryScanStatus } from '../../../shared/localLibraryScan.ts'
-import { useMusicStore } from './useMusicStore.ts'
-import { useSettingsStore } from './useSettingsStore.ts'
+import test from 'node:test'
+import { nextTick } from 'vue'
+import { coreLibraryFixture } from './coreLibraryTestFixture.ts'
+import { createCoreMusicStore } from './library/coreMusicStore.ts'
+import { coreSnapshot } from './coreTestFixtures.ts'
+import type { CoreScanStatus } from '../../../shared/coreScan.ts'
 
 const track = {
   id: 'local:a',
@@ -11,348 +12,272 @@ const track = {
   artist: 'Audrey',
   album: '',
   filePath: 'D:/Music/a.flac',
-  fileName: 'a.flac',
-  size: 1,
   duration: 180,
-  cover: null,
-  lyrics: null,
-  source: 'local' as const
+  source: 'local'
 }
-const status = (
-  state: Exclude<LocalLibraryScanStatus['state'], 'idle'>,
-  revision: number
-): LocalLibraryScanStatus => ({
-  jobId: 'scan',
-  mode: 'startup',
+const tick = async () => {
+  await nextTick()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+const scan = (state: CoreScanStatus['state'], jobId = 'scan'): CoreScanStatus => ({
+  jobId,
   state,
-  current: 1,
-  total: 1,
-  parsedFileCount: 1,
-  skippedUnchanged: 0,
-  error: '',
-  databaseProgress: {
-    jobId: 'scan',
-    state,
-    phase: 'idle',
-    checkedFiles: 1,
-    parsedFiles: 1,
-    committedFiles: 1,
-    failedFiles: 0,
-    trackCount: 1,
-    revision
-  }
+  phase: 'idle',
+  checkedFiles: 1,
+  parsedFiles: 1,
+  committedFiles: 1,
+  failedFiles: 0,
+  trackCount: 1,
+  revision: 1,
+  error: ''
 })
-const database = new LibraryDatabase(':memory:')
-after(() => database.close())
-
-function fixture(t: TestContext) {
-  const db = database
-  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [track] })
-  const store = useMusicStore()
-  store.clearTracks()
-  const settings = useSettingsStore().settings
-  settings.value.cachePolicy = {
-    ...settings.value.cachePolicy,
-    metadata: false,
-    cover: false,
-    lyrics: false
-  }
-  let reads = 0,
-    metadataReads = 0,
-    writes = 0,
-    scans = 0,
-    fail = false
-  const api = {
-    library: {
-      getStorageMode: async () => 'sqlite',
-      scanStartup: async () => {
-        scans++
-        throw new Error('must not rescan')
-      },
-      reset: async () => {
-        db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks: [] })
-        return {
-          library: db.exportDocument(),
-          removedTrackIds: [track.id],
-          removedFilePaths: [track.filePath]
-        }
-      },
-      database: {
-        getMetadata: async () => {
-          metadataReads++
-          if (fail) throw new Error('database offline')
-          return db.getMetadata()
-        },
-        getTracksByIds: async (ids: string[]) => db.getTracksByIds(ids),
-        lookupTracksByPaths: async (paths: string[], revision?: number) =>
-          db.lookupTracksByPaths(paths, revision),
-        queryTracks: async (query?: Parameters<typeof db.queryTracks>[0]) =>
-          db.queryTracks(query),
-        patchTracks: async (patches: Parameters<typeof db.patchTracks>[0]) => {
-          const saved = db.patchTracks(patches)
-          void store.handleLibraryChange({ kind: 'database', revision: saved.revision })
-          return saved
-        }
-      }
-    },
-    data: {
-      loadMusicLibrary: async () => {
-        reads++
-        if (fail) throw new Error('database offline')
-        return db.exportDocument()
-      },
-      saveMusicLibrary: async () => {
-        writes++
-        throw new Error('must not replace whole database')
-      }
-    },
-    providers: { list: async () => [], call: async () => ({ items: [], total: 0 }) }
-  }
-  ;(globalThis as Record<string, unknown>).window = { api }
-  t.after(() => {
-    store.cancelLibraryMetadataEnrichment()
-    store.clearTracks()
-  })
-  return {
-    db,
-    store,
-    api,
-    version: db.getTracksByIds([track.id]).versions[track.id],
-    get counts() {
-      return { reads, metadataReads, writes, scans }
-    },
-    setFail(value: boolean) {
-      fail = value
-    }
-  }
+async function fixture(t: test.TestContext) {
+  const f = await coreLibraryFixture(t, { tracks: [track] })
+  const store = createCoreMusicStore(f.core)
+  t.after(store.dispose)
+  await store.loadApplicationLibrary()
+  return { ...f, store }
 }
 
-test('application authority discovery fails explicitly, without loading or writing a stale snapshot', async (t) => {
-  const f = fixture(t)
-  f.api.library.getStorageMode = async () => {
-    throw new Error('storage discovery failed')
-  }
-  await assert.rejects(f.store.loadApplicationLibrary(), /storage discovery failed/)
-  assert.deepEqual(f.counts, { reads: 0, metadataReads: 0, writes: 0, scans: 0 })
+test('application startup requires Core ready and never reads a legacy renderer document', async (t) => {
+  const f = await coreLibraryFixture(t, { tracks: [track] })
+  f.state.value = coreSnapshot({ phase: 'starting' })
+  const store = createCoreMusicStore(f.core)
+  t.after(store.dispose)
+  await assert.rejects(store.loadApplicationLibrary(), /Core 正在初始化/)
+  assert.equal(f.queries.length, 0)
+  assert.equal('tracks' in store, false)
+  assert.equal('albums' in store, false)
 })
 
-test('SQLite legacy file events never fall back to renderer folder scans', async (t) => {
-  const f = fixture(t)
-  let legacyScanCalls = 0
-  Object.assign(f.api, {
-    fs: {
-      scanMusicFiles: async () => {
-        legacyScanCalls += 1
-        throw new Error('legacy renderer scan must not run')
-      }
+test('SQLite content refresh only reads bounded Core metadata and playlist descriptors, never starts a scan', async (t) => {
+  const f = await fixture(t)
+  f.queries.length = 0
+  const saved = f.db.patchTracks([
+    { id: track.id, expectedVersion: 1, patch: { title: 'Committed while scanning' } }
+  ])
+  for (let i = 0; i < 500; i++)
+    f.publish({ libraryRevision: saved.revision, scan: scan('running') })
+  await tick()
+  assert.equal(f.store.isScanning.value, true)
+  assert.equal(f.store.libraryTrackCount.value, 1)
+  assert.equal(f.queries.filter((query) => query.name === 'library.metadata').length, 1)
+  assert.equal(f.queries.filter((query) => query.name === 'playlists.catalog').length, 0)
+  assert.equal(
+    f.queries.some((query) => query.name === 'library.tracks'),
+    false
+  )
+  assert.deepEqual(f.commands, [])
+  f.publish({ scan: scan('cancelled') })
+  await tick()
+  assert.equal(f.store.libraryScanStatus.value.state, 'cancelled')
+})
+
+test('library-only refreshes preserve playlist descriptors and favorite presentation', async (t) => {
+  const f = await fixture(t)
+  const descriptors = f.store.playlists.value
+  const favoriteTrack = { ...track, size: 0, source: 'local' as const }
+  const query = f.core.query
+  f.core.query = async (name, payload, signal) => name === 'playlists.favorites'
+    ? { revision: f.state.value.playlistsRevision, contains: [true] } as never
+    : query(name, payload, signal)
+  await f.store.getFavoriteTrackStates([favoriteTrack])
+  f.publish({ libraryRevision: f.state.value.libraryRevision! + 1 })
+  await tick()
+  assert.equal(f.store.playlists.value, descriptors)
+  assert.equal(f.store.isFavoriteTrack(favoriteTrack), true)
+})
+
+test('superseded playlist catalog failures do not publish compatibility warnings', async (t) => {
+  const f = await fixture(t)
+  let reject!: (error: Error) => void
+  const stale = new Promise<never>((_resolve, no) => { reject = no })
+  let held = false
+  const query = f.core.query
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'playlists.catalog' && !held) {
+      held = true
+      return stale
     }
-  })
-  await f.store.loadApplicationLibrary()
-  await assert.rejects(
-    f.store.handleLibraryChange({ kind: 'add', path: track.filePath }),
-    /must not rescan/
-  )
-  assert.equal(legacyScanCalls, 0)
-  assert.equal(f.counts.scans, 1)
-})
-
-test('database commits during a scan do not start scans or full exports; cancel refreshes metadata', async (t) => {
-  const f = fixture(t)
-  await f.store.loadApplicationLibrary()
-  f.store.applyLibraryScanStatus(status('running', f.db.getMetadata().revision))
-  const saved = f.db.patchTracks([
-    { id: track.id, expectedVersion: f.version, patch: { title: 'Committed while scanning' } }
-  ])
-  await Promise.all(
-    Array.from({ length: 500 }, () =>
-      f.store.handleLibraryChange({ kind: 'database', revision: saved.revision })
-    )
-  )
-  f.store.flushSaveLibrary()
-  await Promise.resolve()
-  assert.deepEqual(f.counts, { reads: 0, metadataReads: 1, writes: 0, scans: 0 })
-  assert.equal(f.store.tracks.value.length, 0)
-  f.store.applyLibraryScanStatus(status('cancelled', saved.revision))
-  await f.store.retryLibraryCompatibility()
-  assert.equal(f.store.tracks.value.length, 0)
-  assert.deepEqual(f.counts, { reads: 0, metadataReads: 2, writes: 0, scans: 0 })
-})
-
-test('metadata read failure preserves renderer state and retries the read, not the scanner', async (t) => {
-  const f = fixture(t)
-  await f.store.loadApplicationLibrary()
-  const saved = f.db.patchTracks([
-    { id: track.id, expectedVersion: f.version, patch: { title: 'Latest' } }
-  ])
-  f.setFail(true)
-  await assert.rejects(
-    f.store.handleLibraryChange({ kind: 'database', revision: saved.revision }),
-    /database offline/
-  )
-  assert.equal(f.store.tracks.value.length, 0)
-  assert.equal(f.store.libraryCompatibilityError.value, 'database offline')
-  f.setFail(false)
-  await f.store.retryLibraryCompatibility()
-  assert.equal(f.store.tracks.value.length, 0)
+    return query(name, payload, signal)
+  }
+  // Force a new epoch to require a new catalog even with the same revision.
+  f.publish({ epoch: 'new-core' })
+  await tick()
+  assert.equal(held, true)
+  f.publish({ libraryRevision: f.state.value.libraryRevision! + 1 })
+  await tick()
+  reject(Object.assign(new Error('Playlists changed; read a fresh page'), { code: 'STALE_REVISION' }))
+  await tick()
   assert.equal(f.store.libraryCompatibilityError.value, '')
-  assert.equal(f.counts.scans, 0)
 })
 
-test('an old in-flight metadata read cannot resurrect state after a database reset', async (t) => {
-  const f = fixture(t)
-  await f.store.loadApplicationLibrary()
-  const saved = f.db.patchTracks([
-    { id: track.id, expectedVersion: f.version, patch: { title: 'Before reset' } }
-  ])
+test('metadata read failure preserves the last projection; retry reads Core rather than invoking a scanner', async (t) => {
+  const f = await fixture(t)
+  f.intercept(async (name) => {
+    if (name === 'library.metadata') throw new Error('database offline')
+  })
+  f.publish({ libraryRevision: 5 })
+  await tick()
+  assert.equal(f.store.libraryCompatibilityError.value, 'database offline')
+  assert.equal(f.store.libraryTrackCount.value, 1)
+  f.intercept()
+  await f.store.retryLibraryCompatibility()
+  assert.equal(f.store.libraryCompatibilityError.value, '')
+  assert.deepEqual(f.commands, [])
+})
+
+test('a playlist revision race rereads fresh state and never publishes a mixed catalog', async (t) => {
+  const f = await fixture(t)
+  const query = f.core.query
+  let attempt = 0
+  const offsets: number[] = []
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'playlists.state') {
+      attempt++
+      return { ...await query('playlists.state', {}, signal), revision: 100 + attempt } as never
+    }
+    if (name === 'playlists.catalog') {
+      const offset = (payload as { offset: number }).offset
+      offsets.push(offset)
+      if (attempt === 1 && offset === 0)
+        return { revision: 101, offset, total: 201, items: Array.from({ length: 200 }, (_, i) => ({ id: `old-${i}`, name: 'Old' })) } as never
+      if (attempt === 1)
+        throw Object.assign(new Error('Playlists changed; read a fresh page'), { code: 'STALE_REVISION' })
+      return { revision: 102, offset, total: 1, items: [{ id: 'fresh', name: 'Fresh' }] } as never
+    }
+    return query(name, payload, signal)
+  }
+  await f.store.loadPlaylists()
+  assert.equal(attempt, 2)
+  assert.deepEqual(offsets, [0, 200, 0])
+  assert.deepEqual(f.store.playlists.value.map(p => p.id), ['fresh'])
+  assert.equal(f.store.libraryCompatibilityError.value, '')
+  assert.deepEqual(f.commands, [])
+})
+
+test('repeated playlist revision conflicts stay bounded and preserve the previous catalog', async (t) => {
+  const f = await fixture(t)
+  const before = f.store.playlists.value
+  const query = f.core.query
+  let attempts = 0
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'playlists.catalog') {
+      attempts++
+      throw Object.assign(new Error('Playlists changed; read a fresh page'), { code: 'STALE_REVISION' })
+    }
+    return query(name, payload, signal)
+  }
+  f.publish({ epoch: 'conflict-core' })
+  await tick()
+  assert.equal(attempts, 2)
+  assert.equal(f.store.playlists.value, before)
+  assert.match(f.store.libraryCompatibilityError.value, /Playlists changed/)
+  assert.deepEqual(f.commands, [])
+})
+
+test('an in-flight refresh cannot resurrect metadata after a Core reset publishes a newer generation', async (t) => {
+  const f = await fixture(t)
   let release!: () => void, started!: () => void
-  const hold = new Promise<void>((resolve) => {
+  const held = new Promise<void>((resolve) => {
     release = resolve
   })
   const ready = new Promise<void>((resolve) => {
     started = resolve
   })
-  f.api.library.database.getMetadata = async () => {
-    started()
-    await hold
-    return f.db.getMetadata()
+  let first = true
+  const query = f.core.query
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'library.metadata' && first) {
+      first = false
+      const old = await query(name, payload, signal)
+      started()
+      await held
+      return old as never
+    }
+    return query(name, payload, signal)
   }
-  const pending = f.store.handleLibraryChange({ kind: 'database', revision: saved.revision })
+  const pending = f.store.handleLibraryChange()
   await ready
   await f.store.resetLibrary()
-  assert.equal(f.store.tracks.value.length, 0)
+  await tick()
+  assert.equal(f.store.libraryTrackCount.value, 0)
   release()
   await pending
-  assert.equal(f.store.tracks.value.length, 0)
-  assert.equal(f.store.libraryCompatibilityError.value, '')
+  assert.equal(f.store.libraryTrackCount.value, 0)
 })
 
-test('a delayed SQLite scan RPC cannot overwrite the newer job status or exclusions', async (t) => {
-  const f = fixture(t)
-  await f.store.loadApplicationLibrary()
-  const revision = f.db.getMetadata().revision
-  f.store.applyLibraryScanStatus({ ...status('running', revision), jobId: 'newer-job' })
-  Object.assign(f.api.library, {
-    scanStartup: async () => ({
-      jobId: 'older-job',
-      mode: 'startup',
-      state: 'completed',
-      libraryRevision: revision,
-      exclusions: [{ filePath: track.filePath }],
-      addedTracks: [],
-      updatedTracks: [],
-      removedFilePaths: [],
-      parsedFileCount: 1,
-      skippedUnchanged: 0,
-      reloadRequired: true
-    })
+test('a delayed scan response does not overwrite the newer authoritative job or exclusions', async (t) => {
+  const f = await fixture(t)
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
   })
-  await f.store.startStartupLibraryScan()
+  f.intercept(async (name) => {
+    if (name === 'scan.start') await held
+  })
+  const pending = f.store.startStartupLibraryScan()
+  f.publish({ scan: scan('running', 'newer-job') })
+  release()
+  await pending
   assert.equal(f.store.libraryScanStatus.value.jobId, 'newer-job')
   assert.equal(f.store.libraryScanStatus.value.state, 'running')
   assert.deepEqual(f.store.excludedTracks.value, [])
-  f.store.applyLibraryScanStatus(status('completed', revision))
+  assert.deepEqual(f.commands, [{ name: 'scan.start', payload: { mode: 'startup' } }])
 })
 
-test('SQLite automatic enrichment commits per-track patches and keeps unrelated concurrent fields', async (t) => {
-  const f = fixture(t)
-  const settings = useSettingsStore().settings
-  settings.value.cachePolicy = {
-    ...settings.value.cachePolicy,
-    metadata: true,
-    cover: false,
-    lyrics: false
+test('enrichment controls are Core commands and renderer disposal cannot cancel the background work', async (t) => {
+  const f = await fixture(t)
+  await f.store.cancelLibraryMetadataEnrichment()
+  const count = f.commands.length
+  f.store.dispose()
+  assert.equal(f.commands.length, count)
+  assert.deepEqual(f.commands, [{ name: 'metadata.cancel', payload: {} }])
+  assert.equal('whenLibrarySettled' in f.store, false)
+  assert.equal('applyLocalTagWriteAsync' in f.store, false)
+})
+
+test('tag editing submits the Core selection and patch without a renderer database write', async (t) => {
+  const f = await fixture(t)
+  const calls: unknown[] = []
+  f.core.command = async (name, payload) => {
+    calls.push({ name, payload })
+    return { items: [] } as never
   }
-  let release!: (value: unknown) => void
-  const search = new Promise((resolve) => {
-    release = resolve
-  })
-  let markStarted!: () => void
-  const started = new Promise<void>((resolve) => {
-    markStarted = resolve
-  })
-  Object.assign(f.api.providers, {
-    list: async () => [
-      {
-        id: 'sqlite-enrichment',
-        name: 'Enrichment',
-        capabilities: ['search'],
-        health: { available: true }
-      }
-    ],
-    call: async () => {
-      markStarted()
-      return search
-    }
-  })
-  await f.store.loadApplicationLibrary()
-  // SQLite startup intentionally keeps the renderer bounded. Enrichment is
-  // exercised with an explicitly hydrated row rather than a full startup
-  // compatibility snapshot.
-  await f.store.addTracks([track])
-  await started
-  f.db.patchTracks([
-    { id: track.id, expectedVersion: f.version, patch: { custom: { preserve: true } } }
-  ])
-  release({
-    items: [
-      {
-        ...track,
-        id: 'sqlite-enrichment:1',
-        album: 'Provider Album',
-        genre: 'Jazz',
-        source: 'sqlite-enrichment'
-      }
-    ],
-    total: 1
-  })
-  await f.store.whenLibrarySettled()
-  await f.store.retryLibraryCompatibility()
-  const saved = f.db.getTracksByIds([track.id])
-  assert.equal(saved.versions[track.id], f.version + 2)
-  assert.equal(saved.tracks[0].album, 'Provider Album')
-  assert.deepEqual(saved.tracks[0].custom, { preserve: true })
-  assert.equal(f.store.tracks.value[0].album, 'Provider Album')
-  assert.equal(f.counts.writes, 0)
-  assert.equal(f.counts.scans, 0)
-})
-
-test('SQLite tag writes patch rows by path without hydrating or saving a renderer library array', async (t) => {
-  const f = fixture(t)
-  await f.store.loadApplicationLibrary()
-  const changed = await f.store.applyLocalTagWriteAsync([track.filePath], {
+  await f.store.writeTrackTags('frozen-selection', {
     title: 'Edited title',
     artist: 'Edited artist',
     track: 3
   })
-  assert.equal(changed, 1)
-  const saved = f.db.getTracksByIds([track.id])
-  assert.equal(saved.tracks[0].title, 'Edited title')
-  assert.equal(saved.tracks[0].artist, 'Edited artist')
-  assert.equal(saved.tracks[0].trackNumber, 3)
-  assert.equal(f.store.tracks.value.length, 0)
-  assert.equal(f.counts.writes, 0)
-  t.after(() => f.store.clearTracks())
+  assert.deepEqual(calls, [
+    {
+      name: 'library.tags.write',
+      payload: {
+        selectionId: 'frozen-selection',
+        patch: { title: 'Edited title', artist: 'Edited artist', track: 3 }
+      }
+    }
+  ])
+  assert.equal(f.db.getTracksByIds([track.id]).tracks[0].title, 'Moon')
 })
 
-test('SQLite BPM analysis writes and cleanup stay paginated and out of the renderer array', async (t) => {
-  const f = fixture(t)
-  await f.store.loadApplicationLibrary()
+test('BPM changes remain Core database state and only bounded display analysis crosses the renderer boundary', async (t) => {
+  const f = await fixture(t)
   const analysis = {
     bpm: 120,
     confidence: 0.9,
-    source: 'analyzed' as const,
+    source: 'analyzed',
     analyzedAt: '2026-10-20T00:00:00Z',
-    algorithmVersion: 1
+    algorithmVersion: 1,
+    tempoMap: [{ time: 0, bpm: 120 }]
   }
-  assert.equal(f.store.applyBpmAnalysis(track.id, track.filePath, analysis), true)
-  for (let i = 0; i < 20 && !f.db.getTracksByIds([track.id]).tracks[0].bpmAnalysis; i++)
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  assert.deepEqual(f.db.getTracksByIds([track.id]).tracks[0].bpmAnalysis, analysis)
-  assert.equal(f.store.tracks.value.length, 0)
-  assert.equal(f.store.clearBpmAnalysis(), true)
-  for (let i = 0; i < 20 && f.db.getTracksByIds([track.id]).tracks[0].bpmAnalysis; i++)
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  assert.equal(f.db.getTracksByIds([track.id]).tracks[0].bpmAnalysis, null)
-  assert.equal(f.store.tracks.value.length, 0)
-  t.after(() => f.store.clearTracks())
+  f.db.patchTracks([
+    { id: track.id, expectedVersion: 1, patch: { bpm: 120, bpmAnalysis: analysis } }
+  ])
+  const page = await f.store.queryTracks({ ids: [track.id], limit: 1 })
+  assert.equal(page.tracks[0].bpmAnalysis?.bpm, 120)
+  assert.equal('tempoMap' in page.tracks[0].bpmAnalysis!, false)
+  assert.equal('filePath' in page.tracks[0], false)
+  assert.equal('applyBpmAnalysis' in f.store, false)
+  assert.equal('clearBpmAnalysis' in f.store, false)
 })

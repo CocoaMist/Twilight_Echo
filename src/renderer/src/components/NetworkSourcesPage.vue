@@ -6,10 +6,15 @@ import { usePlayerStore } from '../stores/usePlayerStore'
 import { useDomTrackLocator } from '../composables/useDomTrackLocator'
 import type { Track } from '../types/music'
 import type {
-  NetworkEntry,
-  NetworkPlaybackPlan,
+  CoreNetworkEntry,
+  CoreNetworkJobCommand,
+  CoreNetworkState
+} from '../../../shared/coreNetwork.ts'
+import type {
+  NetworkSourceProfileInput,
   NetworkSourceProfileSummary
 } from '../../../shared/networkSources.ts'
+import { useCoreConnection } from '../stores/coreConnection.ts'
 import NetworkCoverThumb from './network-sources/NetworkCoverThumb.vue'
 import {
   createNetworkBrowser,
@@ -17,7 +22,7 @@ import {
   parseOptionalPort
 } from './network-sources/networkViewState.ts'
 
-const networkSourcesApi = window.api?.networkSources
+const core = useCoreConnection()
 const player = usePlayerStore()
 useDomTrackLocator('locatorRoot', () => player.currentTrack.value?.id)
 
@@ -41,10 +46,49 @@ const form = ref({
   passphrase: ''
 })
 
-const browser = createNetworkBrowser(networkSourcesApi?.listDirectory)
+async function networkRevision(): Promise<number> {
+  if (!core.state.value) await core.attach()
+  return (await core.query('network.state', {})).revision
+}
+
+function waitForNetworkJob(id: string): Promise<CoreNetworkState['jobs'][number]> {
+  return new Promise((resolve) => {
+    let unsubscribe = () => {}
+    const check = (state: CoreNetworkState | null | undefined) => {
+      const job = state?.jobs.find((item) => item.id === id)
+      if (job && job.state !== 'running') {
+        unsubscribe()
+        resolve(job)
+      }
+    }
+    unsubscribe = core.subscribe((message) => {
+      if (message.kind === 'state') check(message.snapshot.network)
+    })
+    check(core.state.value?.network)
+  })
+}
+
+async function runNetworkJob(command: CoreNetworkJobCommand) {
+  const state = (await core.command('network.job', command)) as CoreNetworkState
+  const started = state.jobs[state.jobs.length - 1]!
+  return started.state === 'running' ? waitForNetworkJob(started.id) : started
+}
+
+const browser = createNetworkBrowser(async (profileId, path, page) =>
+  core.query('network.directory', {
+    revision: page.revision ?? (await networkRevision()),
+    profileId,
+    path,
+    offset: page.offset,
+    limit: page.limit,
+    ...(page.token ? { token: page.token } : {})
+  })
+)
 const browsingProfile = browser.profile
 const currentPath = browser.path
 const entries = browser.entries
+const browserTotal = browser.total
+const browserHasMore = browser.hasMore
 const directoryLoading = browser.loading
 const resolvingDirectory = ref(false)
 const browsing = computed(() => directoryLoading.value || resolvingDirectory.value)
@@ -53,9 +97,18 @@ const scanError = ref('')
 const browsingError = computed(() => browser.error.value || scanError.value)
 
 const viewMode = ref<'profiles' | 'library'>('profiles')
-const library = createNetworkLibraryView(networkSourcesApi?.searchLibrary)
+const library = createNetworkLibraryView(async (query, page) =>
+  core.query('network.library', {
+    revision: page.revision ?? (await networkRevision()),
+    query,
+    offset: page.offset,
+    limit: page.limit
+  })
+)
 const libraryQuery = library.query
 const libraryEntries = library.items
+const libraryTotal = library.total
+const libraryHasMore = library.hasMore
 const libraryLoading = library.loading
 const libraryError = library.error
 const enriching = ref(false)
@@ -96,13 +149,23 @@ function setNotice(message: string): void {
 }
 
 async function loadProfiles(): Promise<void> {
-  if (!networkSourcesApi || disposed) return
+  if (disposed) return
   const request = ++profileLoadRevision
   const current = (): boolean => !disposed && request === profileLoadRevision
   loading.value = true
   error.value = ''
   try {
-    const result = await networkSourcesApi.listProfiles()
+    const revision = await networkRevision()
+    const first = await core.query('network.profiles', { revision, offset: 0, limit: 200 })
+    const result = [...first.items]
+    for (let offset = result.length; offset < first.total; offset += 200) {
+      const page = await core.query('network.profiles', {
+        revision: first.revision,
+        offset,
+        limit: 200
+      })
+      result.push(...page.items)
+    }
     if (current()) profiles.value = result
   } catch (err) {
     if (current())
@@ -113,12 +176,11 @@ async function loadProfiles(): Promise<void> {
 }
 
 async function createProfile(): Promise<void> {
-  if (!networkSourcesApi) return
   creating.value = true
   error.value = ''
   try {
     const port = parseOptionalPort(form.value.port)
-    await networkSourcesApi.createProfile({
+    const input: NetworkSourceProfileInput = {
       protocol: form.value.protocol,
       name: form.value.name.trim(),
       host: form.value.host.trim(),
@@ -136,6 +198,11 @@ async function createProfile(): Promise<void> {
               }
             : { kind: 'anonymous' },
       keyPath: form.value.authKind === 'privateKey' ? form.value.keyPath.trim() : undefined
+    }
+    await core.command('network.profiles.edit', {
+      kind: 'create',
+      revision: await networkRevision(),
+      input
     })
     showCreateForm.value = false
     form.value = {
@@ -160,10 +227,13 @@ async function createProfile(): Promise<void> {
 }
 
 async function deleteProfile(id: string): Promise<void> {
-  if (!networkSourcesApi) return
   if (!window.confirm('确定删除该网络源吗？（不会删除远程文件）')) return
   try {
-    await networkSourcesApi.deleteProfile(id)
+    await core.command('network.profiles.edit', {
+      kind: 'delete',
+      revision: await networkRevision(),
+      id
+    })
     await loadProfiles()
     setNotice('已删除')
   } catch (err) {
@@ -172,9 +242,8 @@ async function deleteProfile(id: string): Promise<void> {
 }
 
 async function testConnection(id: string): Promise<void> {
-  if (!networkSourcesApi) return
   try {
-    const result = await networkSourcesApi.testConnection(id)
+    const result = await core.query('network.test', { profileId: id })
     if (result.ok) {
       setNotice('连接成功')
     } else {
@@ -251,86 +320,71 @@ function formatSeconds(seconds: number | undefined): string {
   return `${minutes}:${remainder.toString().padStart(2, '0')}`
 }
 
-function buildTrack(
-  profileId: string,
-  entry: NetworkEntry,
-  plan: NetworkPlaybackPlan,
-  profileName: string
-): Track {
+function buildTrack(entry: CoreNetworkEntry, profileName: string): Track {
   const extension = entry.name.includes('.') ? (entry.name.split('.').pop() ?? '') : ''
   return {
     id: entry.id,
     title: entry.name.replace(/\.[^.]+$/, ''),
     artist: profileName,
     album: profileName,
-    filePath: plan.kind === 'direct-url' ? (plan.url ?? '') : (plan.cacheFilePath ?? ''),
+    filePath: '',
     fileName: entry.name,
     duration: 0,
     size: entry.sizeBytes ?? 0,
     cover: null,
     lyrics: null,
     source: 'network',
-    networkSource: { profileId, entry },
+    networkSource: { profileId: entry.profileId, entry },
     format: extension
   }
 }
 
-async function resolvePlan(
-  profileId: string,
-  entry: NetworkEntry
-): Promise<NetworkPlaybackPlan | null> {
-  if (!networkSourcesApi) return null
-  return networkSourcesApi.resolvePlayback(profileId, entry)
+async function playEntry(entry: CoreNetworkEntry): Promise<void> {
+  try {
+    await core.command('network.play', {
+      revision: await networkRevision(),
+      profileId: entry.profileId,
+      entryId: entry.id,
+      play: true
+    })
+  } catch (err) {
+    setError(`播放失败：${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
-async function playEntry(entry: NetworkEntry): Promise<void> {
-  const { playTrack } = player
-  const profileId = entry.profileId
-  const profileName = profiles.value.find((profile) => profile.id === profileId)?.name ?? '网络源'
-  const plan = await resolvePlan(profileId, entry)
-  if (!plan) return
-  if (disposed) return
-  const track = buildTrack(profileId, entry, plan, profileName)
-  playTrack(track, [track])
-}
-
-async function enqueueEntry(entry: NetworkEntry): Promise<void> {
+async function enqueueEntry(entry: CoreNetworkEntry): Promise<void> {
   const { enqueueTrack } = player
-  const profileId = entry.profileId
-  const profileName = profiles.value.find((profile) => profile.id === profileId)?.name ?? '网络源'
-  const plan = await resolvePlan(profileId, entry)
-  if (!plan) return
-  if (!disposed) enqueueTrack(buildTrack(profileId, entry, plan, profileName))
+  const profileName =
+    profiles.value.find((profile) => profile.id === entry.profileId)?.name ?? '网络源'
+  try {
+    await enqueueTrack(buildTrack(entry, profileName))
+  } catch (err) {
+    setError(`加入队列失败：${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 async function playAllInDirectory(): Promise<void> {
-  const { playTrack } = player
   const profile = browsingProfile.value
   if (!profile || resolvingDirectory.value) return
   const current = browser.capture()
-  const sourceEntries = [...audioEntries.value]
-  const tracks: Track[] = []
   resolvingDirectory.value = true
   try {
-    for (const entry of sourceEntries) {
-      if (!current()) return
-      const plan = await resolvePlan(profile.id, entry)
-      if (!current()) return
-      if (plan) tracks.push(buildTrack(profile.id, entry, plan, profile.name))
+    await browser.loadAll()
+    if (!current() || browser.error.value) return
+    const tracks = audioEntries.value.map((entry) => buildTrack(entry, profile.name))
+    if (tracks.length > 0) {
+      await player.playTrack(tracks[0], tracks)
+      setNotice(`开始播放 ${tracks.length} 首`)
     }
   } catch (err) {
-    if (current()) setError(`解析播放失败：${err instanceof Error ? err.message : String(err)}`)
+    if (current()) setError(`创建播放队列失败：${err instanceof Error ? err.message : String(err)}`)
   } finally {
     resolvingDirectory.value = false
-  }
-  if (current() && tracks.length > 0) {
-    playTrack(tracks[0], tracks)
-    setNotice(`开始播放 ${tracks.length} 首`)
   }
 }
 
 async function importCurrentDirectory(): Promise<void> {
-  if (!networkSourcesApi || !browsingProfile.value) return
+  if (!browsingProfile.value) return
   if (scanning.value) return
   const profileId = browsingProfile.value.id
   const path = currentPath.value
@@ -338,8 +392,18 @@ async function importCurrentDirectory(): Promise<void> {
   scanning.value = true
   scanError.value = ''
   try {
-    const result = await networkSourcesApi.scanDirectory(profileId, path)
-    if (current()) setNotice(`入库完成：新增 ${result.added} 首，当前共 ${result.total} 首`)
+    const job = await runNetworkJob({
+      kind: 'scan',
+      revision: await networkRevision(),
+      profileId,
+      path
+    })
+    if (job.state !== 'completed') throw new Error(job.error ?? '目录入库失败')
+    if (current()) {
+      const added = job.result?.added ?? 0
+      const total = job.result?.total ?? added
+      setNotice(`入库完成：新增 ${added} 首，当前共 ${total} 首`)
+    }
   } catch (err) {
     if (current()) scanError.value = `入库失败：${err instanceof Error ? err.message : String(err)}`
   } finally {
@@ -347,10 +411,13 @@ async function importCurrentDirectory(): Promise<void> {
   }
 }
 
-async function removeLibraryEntry(entry: NetworkEntry): Promise<void> {
-  if (!networkSourcesApi) return
+async function removeLibraryEntry(entry: CoreNetworkEntry): Promise<void> {
   try {
-    await networkSourcesApi.removeLibraryEntry(entry.profileId, entry.id)
+    await core.command('network.removeEntry', {
+      revision: await networkRevision(),
+      profileId: entry.profileId,
+      entryId: entry.id
+    })
     if (!disposed && viewMode.value === 'library' && !browsingProfile.value) await loadLibrary()
     setNotice('已从媒体库移除')
   } catch (err) {
@@ -359,7 +426,7 @@ async function removeLibraryEntry(entry: NetworkEntry): Promise<void> {
 }
 
 async function enrichLibraryAll(): Promise<void> {
-  if (!networkSourcesApi || enriching.value || disposed) return
+  if (enriching.value || disposed) return
   enriching.value = true
   error.value = ''
   try {
@@ -367,9 +434,14 @@ async function enrichLibraryAll(): Promise<void> {
     let failed = 0
     for (const profile of profiles.value) {
       if (disposed) return
-      const result = await networkSourcesApi.enrichLibrary(profile.id)
-      enriched += result.enriched
-      failed += result.failed
+      const job = await runNetworkJob({
+        kind: 'enrich',
+        revision: await networkRevision(),
+        profileId: profile.id
+      })
+      if (job.state !== 'completed') throw new Error(job.error ?? `${profile.name} 元数据解析失败`)
+      enriched += job.result?.enriched ?? 0
+      failed += job.result?.failed ?? 0
     }
     if (!disposed && viewMode.value === 'library' && !browsingProfile.value) await loadLibrary()
     setNotice(`元数据解析完成：成功 ${enriched} 首，失败 ${failed} 首`)
@@ -405,7 +477,7 @@ function scheduleLibrarySearch(): void {
 }
 
 async function toggleBookmark(): Promise<void> {
-  if (!networkSourcesApi || !browsingProfile.value) return
+  if (!browsingProfile.value) return
   const current = browser.capture()
   const path = currentPath.value
   const profileId = browsingProfile.value.id
@@ -416,9 +488,14 @@ async function toggleBookmark(): Promise<void> {
     bookmarks.add(currentPath.value)
   }
   try {
-    const updated = await networkSourcesApi.updateProfile(profileId, {
-      bookmarks: [...bookmarks]
+    const result = await core.command('network.profiles.edit', {
+      kind: 'update',
+      revision: await networkRevision(),
+      id: profileId,
+      patch: { bookmarks: [...bookmarks] }
     })
+    const updated = (result as { profile?: NetworkSourceProfileSummary }).profile
+    if (!updated) throw new Error('网络源更新未返回 profile')
     if (!current()) return
     browser.replaceProfile(updated)
     setNotice(bookmarks.has(path) ? '已收藏此目录' : '已取消收藏')
@@ -428,14 +505,19 @@ async function toggleBookmark(): Promise<void> {
 }
 
 async function removeBookmark(path: string): Promise<void> {
-  if (!networkSourcesApi || !browsingProfile.value) return
+  if (!browsingProfile.value) return
   const current = browser.capture()
   const profileId = browsingProfile.value.id
   const bookmarks = browsingProfile.value.bookmarks.filter((item) => item !== path)
   try {
-    const updated = await networkSourcesApi.updateProfile(profileId, {
-      bookmarks
+    const result = await core.command('network.profiles.edit', {
+      kind: 'update',
+      revision: await networkRevision(),
+      id: profileId,
+      patch: { bookmarks }
     })
+    const updated = (result as { profile?: NetworkSourceProfileSummary }).profile
+    if (!updated) throw new Error('网络源更新未返回 profile')
     if (current()) browser.replaceProfile(updated)
   } catch (err) {
     if (current()) setError(`移除书签失败：${err instanceof Error ? err.message : String(err)}`)
@@ -443,9 +525,8 @@ async function removeBookmark(path: string): Promise<void> {
 }
 
 async function loadCacheInfo(): Promise<void> {
-  if (!networkSourcesApi) return
   try {
-    const info = await networkSourcesApi.cacheInfo()
+    const info = await core.query('network.cacheInfo', {})
     cacheSizeBytes.value = info.sizeBytes
   } catch {
     cacheSizeBytes.value = 0
@@ -453,10 +534,9 @@ async function loadCacheInfo(): Promise<void> {
 }
 
 async function clearNetworkCache(): Promise<void> {
-  if (!networkSourcesApi) return
   if (!window.confirm('确定清空网络源下载缓存吗？已入库条目不受影响，下次播放会重新下载。')) return
   try {
-    await networkSourcesApi.clearCache()
+    await core.command('network.clearCache', {})
     await loadCacheInfo()
     setNotice('网络源缓存已清空')
   } catch (err) {
@@ -579,16 +659,22 @@ onBeforeUnmount(() => {
       <div class="network-directory-actions">
         <div>
           <span class="network-subheading">目录操作</span>
-          <p>{{ audioEntries.length }} 首可播放音频</p>
+          <p>
+            {{ audioEntries.length }} 首已加载音频{{
+              browserHasMore ? `（目录共 ${browserTotal} 项）` : ''
+            }}
+          </p>
         </div>
         <div class="network-browser-toolbar">
           <button
             type="button"
             class="brand-soft-button"
-            :disabled="audioEntries.length === 0 || browsing"
+            :disabled="(audioEntries.length === 0 && !browserHasMore) || browsing"
             @click="playAllInDirectory"
           >
-            <PlaybackIcon name="play" />播放全部（{{ audioEntries.length }}）
+            <PlaybackIcon name="play" />播放全部（{{
+              browserHasMore ? '全部' : audioEntries.length
+            }}）
           </button>
           <button
             type="button"
@@ -639,7 +725,18 @@ onBeforeUnmount(() => {
           >
         </li>
       </ul>
-      <p v-else-if="!browsing && !browsingError" class="network-empty">该目录为空</p>
+      <button
+        v-if="browserHasMore"
+        type="button"
+        class="soft-button network-load-more"
+        :disabled="directoryLoading"
+        @click="browser.loadMore"
+      >
+        {{ directoryLoading ? '加载中…' : `加载更多（${entries.length}/${browserTotal}）` }}
+      </button>
+      <p v-if="entries.length === 0 && !browsing && !browsingError" class="network-empty">
+        该目录为空
+      </p>
     </section>
 
     <section
@@ -708,6 +805,15 @@ onBeforeUnmount(() => {
           >
         </li>
       </ul>
+      <button
+        v-if="libraryHasMore"
+        type="button"
+        class="soft-button network-load-more"
+        :disabled="libraryLoading"
+        @click="library.loadMore"
+      >
+        {{ libraryLoading ? '加载中…' : `加载更多（${libraryEntries.length}/${libraryTotal}）` }}
+      </button>
       <div v-else-if="!libraryLoading" class="network-empty network-library-empty">
         <span class="network-empty-icon"><i class="pi pi-book"></i></span>
         <h3>媒体库还是空的</h3>

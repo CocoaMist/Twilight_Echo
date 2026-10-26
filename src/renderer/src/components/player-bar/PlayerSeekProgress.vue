@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import SmoothedProgressFill from '../SmoothedProgressFill.vue'
+import { decodeWaveformPeaks } from '../../../../shared/waveformPeaks.ts'
 
 const props = defineProps<{
   position: number
@@ -8,11 +9,15 @@ const props = defineProps<{
   live: boolean
   abStart: number | null
   abEnd: number | null
+  waveformPeaks?: string | null
   formatTime: (seconds: number) => string
 }>()
 const emit = defineEmits<{ seek: [seconds: number] }>()
 const preview = ref<number | null>(null)
 const keyboardFocus = ref(false)
+const waveformBars = computed(() =>
+  !props.live && props.waveformPeaks ? decodeWaveformPeaks(props.waveformPeaks, 120) : []
+)
 let activePointer: number | null = null
 let dragLeft = 0
 let dragWidth = 1
@@ -111,7 +116,23 @@ function onBlur(): void {
     :class="{ 'is-scrubbing': preview !== null, 'is-keyboard-focus': keyboardFocus }"
   >
     <span class="time-label">{{ live ? 'LIVE' : formatTime(position) }}</span>
-    <div class="progress-slider-wrap" :class="{ 'is-disabled': disabled }">
+    <div
+      class="progress-slider-wrap"
+      :class="{ 'is-disabled': disabled, 'has-waveform': waveformBars.length > 0 }"
+    >
+      <div
+        v-if="waveformBars.length > 0"
+        class="progress-waveform"
+        aria-hidden="true"
+      >
+        <span
+          v-for="(amp, idx) in waveformBars"
+          :key="idx"
+          class="waveform-bar"
+          :class="{ 'is-played': (idx / waveformBars.length) * 100 <= percent }"
+          :style="{ '--wf-amp': Math.max(0.12, amp).toFixed(3) }"
+        ></span>
+      </div>
       <div class="progress-track" aria-hidden="true">
         <div
           v-if="preview !== null"
@@ -151,3 +172,31 @@ function onBlur(): void {
     <span class="time-label">{{ live ? 'LIVE' : formatTime(duration) }}</span>
   </div>
 </template>
+
+<style scoped>
+.progress-waveform {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.waveform-bar {
+  flex: 1;
+  height: calc(var(--wf-amp, 0.2) * 100%);
+  min-height: 2px;
+  max-height: 18px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.24;
+  transition: opacity 0.12s ease;
+}
+
+.waveform-bar.is-played {
+  opacity: 0.82;
+}
+</style>

@@ -9,6 +9,7 @@ import {
 } from 'electron'
 import { existsSync } from 'fs'
 import { runtime } from '../core/runtime'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
 import {
   MEDIA_KEY_SHORTCUTS,
   type PlayerShortcutAction,
@@ -65,6 +66,11 @@ let playerShortcutStatuses: PlayerShortcutStatus[] = buildPlayerShortcutStatuses
 )
 
 export function sendPlayerShortcut(action: PlayerShortcutAction): void {
+  const core = getCoreSystemPlayer()
+  if (core) {
+    core.shortcut(action)
+    return
+  }
   if (isAfterglowModeActive()) {
     const command = typeof action === 'string' ? afterglowTransportCommandForAction(action) : null
     if (command) {
@@ -83,11 +89,15 @@ export function sendPlayerShortcut(action: PlayerShortcutAction): void {
 
 export function handleGlobalShortcutAction(action: PlayerShortcutKeyAction): void {
   if (action === 'toggleDesktopLyrics') {
-    toggleDesktopLyrics()
+    void Promise.resolve(toggleDesktopLyrics()).catch((error) => {
+      console.error('[desktop-lyrics] toggle failed', error)
+    })
     return
   }
   if (action === 'toggleDesktopLyricsLock') {
-    toggleDesktopLyricsLock()
+    void Promise.resolve(toggleDesktopLyricsLock()).catch((error) => {
+      console.error('[desktop-lyrics] toggle lock failed', error)
+    })
     return
   }
   sendPlayerShortcut(action)
@@ -244,6 +254,11 @@ function routeAfterglowMiniPlayerCommand(command: MiniPlayerCommand): void {
 }
 
 function sendMiniPlayerCommand(command: MiniPlayerCommand): void {
+  const core = getCoreSystemPlayer()
+  if (core) {
+    core.dispatch(command)
+    return
+  }
   if (isAfterglowModeActive()) {
     routeAfterglowMiniPlayerCommand(command)
     return
@@ -288,7 +303,7 @@ function buildPlayModeSubmenu(): MenuItemConstructorOptions[] {
       checked: mode === activeMode,
       // Shuffle and heart are renderer-owned streams; the unloaded engine only
       // understands the three native modes.
-      enabled: !afterglow || (mode !== 'shuffle' && mode !== 'heart'),
+      enabled: !!getCoreSystemPlayer() || !afterglow || (mode !== 'shuffle' && mode !== 'heart'),
       click: () => sendMiniPlayerCommand({ type: 'set-play-mode', value: mode })
     })
   )
@@ -360,7 +375,7 @@ function buildTrayMenuTemplate(): MenuItemConstructorOptions[] {
       enabled: !isAfterglowModeActive(),
       checked: runtime.appSettings.desktopLyrics.enabled,
       click: () => {
-        toggleDesktopLyrics()
+        handleGlobalShortcutAction('toggleDesktopLyrics')
       }
     },
     {
@@ -369,7 +384,7 @@ function buildTrayMenuTemplate(): MenuItemConstructorOptions[] {
       enabled: !isAfterglowModeActive() && runtime.appSettings.desktopLyrics.enabled,
       checked: runtime.appSettings.desktopLyrics.locked,
       click: () => {
-        toggleDesktopLyricsLock()
+        handleGlobalShortcutAction('toggleDesktopLyricsLock')
       }
     },
     { type: 'separator' },

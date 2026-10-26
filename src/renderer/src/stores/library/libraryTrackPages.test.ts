@@ -2,14 +2,17 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { computed, effectScope } from 'vue'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
-import type { LibraryPage, LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { CoreLibraryPage as LibraryPage } from '../../../../shared/coreViews.ts'
+import { coreLibraryPage } from '../coreTestFixtures.ts'
+import { projectCoreTrack } from '../../../../core/projections.ts'
 import { createLibraryStorageState } from './libraryStorageState.ts'
 import { createLibraryTrackPages } from './libraryTrackPages.ts'
 import { createLibraryPlaybackController } from '../player/libraryPlaybackController.ts'
 import { libraryTrackQuery } from '../../utils/libraryTrackQuery.ts'
 import { createDefaultLibraryViewState } from '../../utils/libraryViewPreferences.ts'
 import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
-import { toPlaylistTrackSnapshot } from './musicStoreData.ts'
+import { libraryTrack as privateLibraryTrack } from '../../../../core/playback/libraryTrack.ts'
 import { useTrackMultiSelect } from '../../components/song-list/useTrackMultiSelect.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -27,8 +30,10 @@ function page(query: LibraryQuery = {}, revision = 1, total = 300_000): LibraryP
     revision,
     total,
     tracks: Array.from({ length: Math.max(0, Math.min(200, total - offset)) }, (_, i) => ({
-      id: `${query.search ?? 'song'}:${offset + i}`,
-      filePath: 'D:/Music/disc.flac'
+      ...projectCoreTrack({
+        id: `${query.search ?? 'song'}:${offset + i}`,
+        filePath: 'D:/Music/disc.flac'
+      })
     })),
     versions: {}
   }
@@ -145,14 +150,7 @@ test('selection fences distinguish page navigation from content changes, retry a
 test('selected compact rows survive ten-page cache eviction, while unselected page traversal retains no action records', async (t) => {
   let revision = 1
   const pages = createLibraryTrackPages({
-    queryTracks: async (query) => ({
-      ...page(query, revision),
-      tracks: page(query, revision).tracks.map((track) => ({
-        ...track,
-        lyrics: 'heavy lyrics',
-        custom: { heavy: true }
-      }))
-    })
+    queryTracks: async (query) => page(query, revision)
   })
   const scope = effectScope()
   const tracks = computed(() => (pages.state.value.page?.tracks ?? []).map(libraryTrack))
@@ -160,7 +158,7 @@ test('selected compact rows survive ten-page cache eviction, while unselected pa
     useTrackMultiSelect({
       tracks,
       preserveSelectedTracks: () => true,
-      snapshotTrack: toPlaylistTrackSnapshot,
+      snapshotTrack: (track) => ({ ...track }),
       selectionOrder: (_track, index) => (pages.state.value.page?.offset ?? 0) + index,
       resetSources: [pages.selectionEpoch],
       rangeContext: () => pages.state.value.requestedPage
@@ -180,7 +178,7 @@ test('selected compact rows survive ten-page cache eviction, while unselected pa
   assert.equal(pages.cacheState.cachedTracks, 2000)
   assert.deepEqual(multi.getSelectedTrackIds(), ['song:0'])
   const selected = multi.getSelectedTracks()[0]
-  assert.equal(selected.lyrics, null)
+  assert.equal(selected.lyrics, undefined)
   assert.equal((selected as unknown as Record<string, unknown>).custom, undefined)
   multi.toggle('song:2801', 1)
   assert.deepEqual(
@@ -314,7 +312,7 @@ function databaseFixture(t: test.TestContext) {
   const pages = createLibraryTrackPages({
     queryTracks: async (query = {}) => {
       queries.push(query)
-      return db.queryTracks(query)
+      return coreLibraryPage(db.queryTracks(query))
     }
   })
   t.after(() => {
@@ -424,11 +422,11 @@ test('query changes or disposal fence successful late reads and preserve the las
 })
 
 test('legacy display defaults preserve CUE and extension data but never inherit a queue occurrence', () => {
-  const track = libraryTrack({
+  const track = privateLibraryTrack({
     id: 'cue',
     filePath: 'D:/disc.flac',
     queueEntryId: 'old',
-    cueRange: { startSeconds: 30, endSeconds: 40 },
+    cueRange: { startSeconds: 30, endSeconds: 40, pregapSeconds: 0 },
     custom: { keep: true }
   })
   assert.equal(track.title, 'disc.flac')

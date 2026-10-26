@@ -1,13 +1,11 @@
-import {
-  LIBRARY_CACHE_PAGES,
-  type LibraryDatabaseApi,
-  type LibraryPage
-} from '../../../../shared/libraryDatabase.ts'
+import type { CoreLibraryReadApi } from './coreLibraryApi.ts'
+import type { CoreLibraryPage as LibraryPage } from '../../../../shared/coreViews.ts'
+import { LIBRARY_CACHE_PAGES } from '../../../../shared/libraryDatabase.ts'
 import { LibraryResultPageCache } from './libraryResultPageCache.ts'
 
 /** Track-specific occurrence validation over the shared bounded page transport. */
 export class LibraryPageCache extends LibraryResultPageCache<LibraryPage> {
-  constructor(api: Pick<LibraryDatabaseApi, 'queryTracks'>, capacity = LIBRARY_CACHE_PAGES) {
+  constructor(api: CoreLibraryReadApi, capacity = LIBRARY_CACHE_PAGES) {
     super(
       {
         readPage: (query) => api.queryTracks(query),

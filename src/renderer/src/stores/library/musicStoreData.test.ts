@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../../types/music'
-import type { Playlist } from '../useMusicStore.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
+import type { Playlist } from '../../../../shared/playlists.ts'
 import {
   albumOrderIndex,
   clonePlaylist,

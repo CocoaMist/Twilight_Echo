@@ -19,33 +19,33 @@ import {
   toRaw,
   watch
 } from 'vue'
-import type { LocalLibraryTagPatch } from '../../../shared/localLibraryTags.ts'
 import { useUnifiedMusicSearch } from '../app/useUnifiedMusicSearch'
-import { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
-import { syncPluginProviders, useMediaProviders } from '../providers'
+const GenreWorkspacePanel = defineAsyncComponent(() => import('./music-genres/GenreWorkspacePanel.vue'))
+const GenreBrowsePanel = defineAsyncComponent(() => import('./music-genres/GenreBrowsePanel.vue'))
+const MusicTagsPanel = defineAsyncComponent(() => import('./music-tags/MusicTagsPanel.vue'))
+const MusicFocusPanel = defineAsyncComponent(() => import('./music-focus/MusicFocusPanel.vue'))
+const MusicExplorationSearch = defineAsyncComponent(() => import('./music-exploration/MusicExplorationSearch.vue'))
+import { useMediaProviders } from '../providers'
 import { useMusicStore } from '../stores/useMusicStore'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import { useCoreLibraryApi } from '../stores/library/coreLibraryApi.ts'
+import { coreLibrarySelectionApi } from '../stores/library/coreSelection.ts'
+import { coreQueueTrackInput } from '../stores/player/corePlayerQueue.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { usePlaybackBookmarks } from '../stores/playbackBookmarks'
 import { useProviderStore } from '../stores/useProviderStore'
 import {
   buildLastPlayedByTrackId,
-  getRecentTracks,
   libraryListeningProjection,
   useListeningStatsStore
 } from '../stores/useListeningStatsStore'
 import type { Track } from '../types/music'
 import { copyTrackNamePages } from '../utils/copyTrackNames'
-import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
 import { getTrackSearchBlob, normalizeSearchText } from '../utils/localLibrarySearch'
-import { getTrackSource as getLogicalTrackSource } from '../utils/logicalTrackModel'
+const getLogicalTrackSource = (track: Track): string => track.source ?? 'local'
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
 import { useBackHandler } from '../app/useBackStack.ts'
-import {
-  buildMetadataMatchCandidates,
-  enrichLocalTrackMetadata
-} from '../utils/musicMetadataMatching'
-import { searchMetadataTracks } from '../utils/musicMetadataSearch'
 import {
   applyLibraryCollectionView,
   availableCollectionGenres,
@@ -55,19 +55,11 @@ import {
   collectionLetterAtScroll,
   firstCollectionIndexForLetter,
   LibraryCollectionViewPreferences,
-  resolveLibraryArtistTracks,
   type LibraryCollectionSort,
   type LibraryCollectionViewState
 } from '../utils/libraryCollectionView.ts'
-import {
-  formatPlaylistSourceSummary,
-  summarizePlaylistSources
-} from '../utils/playlistSourceSummary'
-import {
-  selectLocalLibraryActionTracks,
-  notifyLocalTracksUnavailable,
-  prepareLocalTracksForRemoval
-} from '../utils/localTrackRemovalPolicy'
+import { formatPlaylistSourceSummary } from '../utils/playlistSourceSummary'
+import { selectLocalLibraryActionTracks } from '../utils/localTrackRemovalPolicy'
 import {
   applyLibraryView,
   createDefaultLibraryViewState,
@@ -82,6 +74,12 @@ import {
 import CoverImg from './CoverImg.vue'
 import AlbumCard from './song-list/AlbumCard.vue'
 import AlbumDetailHeader from './song-list/AlbumDetailHeader.vue'
+import ArtistDetailPage from './song-list/ArtistDetailPage.vue'
+import type { ArtistSection } from './song-list/artistDetailView.ts'
+import EntityMetadataPanel from './music-metadata/EntityMetadataPanel.vue'
+import ArtistMetadataIdentity from './music-metadata/ArtistMetadataIdentity.vue'
+import ArtistImageCredit from './music-metadata/ArtistImageCredit.vue'
+import { collectionMetadataContext } from './music-metadata/entityMetadataView.ts'
 import CreateAggregatePlaylistDialog from './aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import LocalLibraryTagManager from './LocalLibraryTagManager.vue'
 const LibraryInboxDialog = defineAsyncComponent(
@@ -99,27 +97,23 @@ import { useLocatePlayingTrack } from './song-list/useLocatePlayingTrack'
 import { useTrackMultiSelect } from './song-list/useTrackMultiSelect'
 import {
   createSongListActionSource,
-  readSongListTagTargets,
-  readSongListLoudnessTargets,
   type SongListActionLease,
   type SongListActionSource
 } from './song-list/songListActionSource.ts'
-import { buildLibraryLoudnessDatabasePlan } from './library-loudness/libraryLoudnessDatabasePlan.ts'
 import { addSelectionRange } from '../../../shared/librarySelectionRanges.ts'
-import type { LibrarySelectionRange } from '../../../shared/librarySelection.ts'
+import type {
+  LibrarySelectionRange,
+  LibrarySelectionRequest
+} from '../../../shared/librarySelection.ts'
 import { trackRowKeyAction } from './song-list/trackRowKeyboard'
-import {
-  type LibraryCollectionKind,
-  type LibraryTrackRecord
-} from '../../../shared/libraryDatabase.ts'
+import { splitGenreValues } from '../../../shared/genreSeparators.ts'
+import { libraryArtistNames } from '../../../shared/libraryCollections.ts'
+import type { LibraryCollectionKind, LibraryQuery } from '../../../shared/libraryDatabase.ts'
 import { createLibraryStorageState } from '../stores/library/libraryStorageState.ts'
-import { libraryDirectoriesForFiles } from '../utils/libraryScanDirectories.ts'
 import { createLibraryTrackWindow } from '../stores/library/libraryTrackWindow.ts'
-import { toPlaylistTrackSnapshot } from '../stores/library/musicStoreData.ts'
-import { createLibraryPlaylistView } from '../stores/library/libraryPlaylistView.ts'
 import { createLibraryCollectionPages } from '../stores/library/libraryCollectionPages.ts'
 import { createLibraryCollectionWindow } from '../stores/library/libraryCollectionWindow.ts'
-import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
+import { musicVersionRevision } from '../stores/musicVersions.ts'
 import { libraryTrackQuery, libraryDetailScope } from '../utils/libraryTrackQuery.ts'
 import { libraryTrack } from '../utils/libraryQueuePlayback.ts'
 import {
@@ -148,33 +142,22 @@ const emit = defineEmits<{
 }>()
 
 const {
-  tracks,
-  artists,
-  albums,
-  genres,
   localPlaylists,
   aggregatePlaylists,
-  folders,
   scannedFolders,
   libraryRepairReport,
   excludedTracks,
-  getPlaylistTracks,
   removeTrack,
   removeLocalTracks,
   restoreExcludedTracks,
   clearExcludedTracks,
-  applyLocalTagWrite,
   startFullLibraryScan,
-  scanLibraryDirectories,
   isScanning,
-  clearTrackMetadataMatch,
-  applyTrackMetadataMatch,
   refreshLibraryIndex,
   addToPlaylist,
   removeFromPlaylist,
   addTracksToPlaylist,
   removeTracksFromPlaylist,
-  replaceTrackReference,
   createPlaylist,
   deletePlaylist,
   isFavoriteTrack,
@@ -186,23 +169,36 @@ const {
   createPlaylistWithTrackPages,
   createAggregatePlaylistWithTrackPages
 } = useMusicStore()
+const musicStore = useMusicStore()
+const core = useCoreConnection()
+const libraryApi = useCoreLibraryApi()
+const selectionApi = coreLibrarySelectionApi(core)
+const trackInput = (track: Track) =>
+  coreQueueTrackInput(
+    track,
+    core.state.value?.network?.revision ?? null,
+    core.state.value?.queue ?? undefined
+  )
+const playlistRevision = () => {
+  const revision = core.state.value?.playlistsRevision
+  if (revision == null) throw new Error('Core 歌单尚未就绪')
+  return revision
+}
 const playbackStore = usePlayerStore()
 const settingsStore = useSettingsStore()
 const { currentTrack } = playbackStore
 const { playTrack, playTrackFromPosition, setPlayMode, playNextTrack } = playbackStore
-const playbackBookmarks = usePlaybackBookmarks()
-if (!props.previewTracks) void playbackBookmarks.ensureLoaded()
+const playbackBookmarks = props.previewTracks ? null : usePlaybackBookmarks()
+if (playbackBookmarks) void playbackBookmarks.ensureLoaded()
 const mediaProviders = useMediaProviders({ sync: !props.previewTracks })
-const unifiedSearch = useUnifiedMusicSearch({
-  sync: !props.previewTracks,
-  listen: !props.previewTracks
-})
-const rematchSearchSource = useLibraryUnifiedSearch(undefined, { listen: !props.previewTracks })
+const unifiedSearch = useUnifiedMusicSearch({ listen: !props.previewTracks })
 const providerStore = useProviderStore({ listen: !props.previewTracks })
-const { listeningStats } = useListeningStatsStore()
+const listeningStats = props.previewTracks
+  ? shallowRef({ days: {}, tracks: {} })
+  : useListeningStatsStore().listeningStats
 const EMPTY_LAST_PLAYED_BY_TRACK_ID: ReadonlyMap<string, number> = new Map()
 const libraryStorage = createLibraryStorageState({
-  getStorageMode: () => window.api.library.getStorageMode()
+  getStorageMode: async () => 'sqlite'
 })
 onMounted(() => {
   if (!props.previewTracks) void libraryStorage.load()
@@ -256,103 +252,110 @@ const LibraryLoudnessDialog = defineAsyncComponent(
   () => import('@renderer/components/library-loudness/LibraryLoudnessDialog.vue')
 )
 const loudnessOpen = ref(false)
-const loudnessSelection = shallowRef<Track[] | null>(null)
-const loudnessPlanResolver = shallowRef<
-  | ((
-      mode: 'track' | 'album',
-      signal: AbortSignal
-    ) => ReturnType<typeof buildLibraryLoudnessDatabasePlan>)
-  | undefined
->()
+const loudnessSelection = shallowRef<LibrarySelectionRequest>()
 const loudnessFocusTarget = shallowRef<HTMLElement | null>(null)
+
+async function selectionRequestForTracks(tracks: Track[]): Promise<LibrarySelectionRequest> {
+  const metadata = await core.query('library.metadata', {})
+  const ids = [...new Set(tracks.map((track) => track.id).filter(Boolean))]
+  return {
+    query: { ids, contentRevision: metadata.revision, sort: 'insertion' },
+    total: ids.length,
+    ranges: ids.length ? [[0, ids.length]] : []
+  }
+}
 
 async function openLoudness(all: boolean, event: Event): Promise<void> {
   const target = event.currentTarget as HTMLElement
   loudnessFocusTarget.value =
     target.closest('.library-tools-dropdown')?.querySelector('button') ?? target
-  if (libraryStorage.mode.value === 'sqlite' && !props.previewTracks) {
-    try {
-      let source: SongListActionSource
-      if (all) {
-        const metadata = await window.api.library.database.getMetadata()
-        if (metadata.trackCount > 10_000) throw new Error('单次最多分析 10,000 首，请选择较小范围')
-        source = createSongListActionSource({
-          api: window.api.library.database,
-          request: {
-            query: { contentRevision: metadata.revision, sort: 'insertion' },
-            total: metadata.trackCount,
-            ranges: metadata.trackCount ? [[0, metadata.trackCount]] : []
-          }
-        })
-      } else source = captureActionSource()
-      await withActionSource(source, async (lease) => {
-        const selected = await readSongListLoudnessTargets(lease)
-        source.guard()
-        const revision = lease.revision!
-        loudnessSelection.value = selected
-        loudnessPlanResolver.value = (mode, signal) =>
-          buildLibraryLoudnessDatabasePlan(
-            window.api.library.database,
-            selected,
-            revision,
-            mode,
-            signal
-          )
-        libraryToolsMenuOpen.value = false
-        loudnessOpen.value = true
-      })
-    } catch (error) {
-      repairMessage.value = error instanceof Error ? error.message : '读取响度分析范围失败'
+  try {
+    let request: LibrarySelectionRequest
+    if (all) {
+      const metadata = await core.query('library.metadata', {})
+      request = {
+        query: { contentRevision: metadata.revision, sort: 'insertion' },
+        total: metadata.trackCount,
+        ranges: metadata.trackCount ? [[0, metadata.trackCount]] : []
+      }
+    } else {
+      const source = captureActionSource()
+      source.guard()
+      request = source.request ?? (await selectionRequestForTracks(getSelectedTracks()))
     }
-    return
+    loudnessSelection.value = request
+    libraryToolsMenuOpen.value = false
+    loudnessOpen.value = true
+  } catch (error) {
+    repairMessage.value = error instanceof Error ? error.message : '读取响度分析范围失败'
   }
-  loudnessPlanResolver.value = undefined
-  loudnessSelection.value = all ? null : selectLocalLibraryActionTracks(getSelectedTracks())
-  libraryToolsMenuOpen.value = false
-  loudnessOpen.value = true
 }
 
-const baseDisplayTracks = computed(() => {
-  if (props.previewTracks) return props.previewTracks
-  if (databaseTableCandidate.value && libraryStorage.mode.value !== 'json') return []
-  if (props.category === 'allSongs') return tracks.value
-  if (props.category === 'recent') {
-    const recentStats = getRecentTracks()
-    const source = recentSource.value
-    if (source === 'all') {
-      return resolveUnifiedRecentTracks({ recentStats, localTracks: tracks.value })
+const baseDisplayTracks = computed(() => props.previewTracks ?? [])
+type GenreSortMode = 'trackCount-desc' | 'name-asc' | 'name-desc' | 'added-newest'
+const genreSort = ref<GenreSortMode>('trackCount-desc')
+const genreWorkspaceOpen = ref(false)
+const compareGenreNames = new Intl.Collator(['zh-CN', 'en'], {
+  numeric: true,
+  sensitivity: 'base'
+}).compare
+
+// Only explicit preview rows are grouped here; the actual library is Core-paged.
+function previewGroups(kind: 'artist' | 'album' | 'genre'): GridItem[] {
+  const groups = new Map<string, GridItem>()
+  const separators = settingsStore.settings.value.genreSeparators
+  for (const track of props.previewTracks ?? []) {
+    const names =
+      kind === 'genre'
+        ? (() => {
+            const values = splitGenreValues(track.genre, separators)
+            return values.length ? values : ['未知流派']
+          })()
+        : kind === 'artist' ? libraryArtistNames(track) : [track[kind] || '未知']
+    for (const name of names) {
+      const key = kind === 'album' ? String(track.albumId ?? name) : name
+      let group = groups.get(key)
+      if (!group)
+        groups.set(
+          key,
+          (group = {
+            id: key,
+            name,
+            artist: track.artist,
+            cover: null,
+            tracks: [],
+            trackCount: 0
+          })
+        )
+      group.tracks!.push(track)
+      group.trackCount!++
+      if (!group.cover && track.cover) group.cover = track.cover
+      if (!group.coverSource && track.coverSource) group.coverSource = track.coverSource
     }
-    const filteredStats =
-      source === 'local'
-        ? recentStats.filter((stat) => stat.sourceIds?.some((sid) => sid.source === 'local'))
-        : recentStats.filter((stat) => stat.sourceIds?.some((sid) => sid.source === source))
-    return resolveUnifiedRecentTracks({ recentStats: filteredStats, localTracks: tracks.value })
   }
-  if (props.filter) {
-    if (props.filter.startsWith('artist:')) {
-      const name = props.filter.slice(7)
-      return resolveLibraryArtistTracks(tracks.value, name)
+  return [...groups.values()]
+}
+const artists = computed(() => previewGroups('artist'))
+const albums = computed(() => previewGroups('album'))
+const genres = computed(() => {
+  const list = previewGroups('genre')
+  const mode = genreSort.value
+  return list.sort((left, right) => {
+    if (mode === 'trackCount-desc') {
+      return (
+        (right.trackCount ?? 0) - (left.trackCount ?? 0) ||
+        compareGenreNames(left.name, right.name)
+      )
     }
-    if (props.filter.startsWith('album:')) {
-      const id = props.filter.slice(6)
-      return albums.value.find((album) => album.id === id)?.tracks ?? []
+    if (mode === 'added-newest') {
+      const leftAdded = Math.max(0, ...(left.tracks ?? []).map((t) => t.addedAt || 0))
+      const rightAdded = Math.max(0, ...(right.tracks ?? []).map((t) => t.addedAt || 0))
+      return rightAdded - leftAdded || compareGenreNames(left.name, right.name)
     }
-    if (props.filter.startsWith('genre:')) {
-      const name = props.filter.slice(6)
-      return genres.value.find((genre) => genre.name === name)?.tracks ?? []
-    }
-    if (props.filter.startsWith('playlist:')) {
-      const name = props.filter.slice(9)
-      return getPlaylistTracks(name)
-    }
-    if (props.filter.startsWith('folder:')) {
-      const path = props.filter.slice(7)
-      const folder = folders.value.find((f) => f.path === path)
-      return folder?.tracks ?? []
-    }
-  }
-  return []
+    return compareGenreNames(left.name, right.name) * (mode === 'name-desc' ? -1 : 1)
+  })
 })
+const folders = computed<GridItem[]>(() => [])
 
 const libraryViewPreferences = new LibraryViewPreferences(
   props.previewTracks ? { getItem: () => null, setItem: () => {} } : undefined
@@ -530,7 +533,8 @@ const viewTitle = computed(() => {
 })
 
 const gridStatsText = computed(() => {
-  const count = collectionResultCount.value
+  const count =
+    props.category === 'genres' ? genreMosaicItems.value.length : collectionResultCount.value
   if (count === 0) return ''
   const unit =
     props.category === 'artists'
@@ -574,7 +578,27 @@ const isPlaylistDetail = computed(() => currentPlaylistName.value !== null)
 const isAlbumDetail = computed(
   () => props.category === 'albums' && props.filter?.startsWith('album:') === true
 )
-const currentAlbum = computed(() => {
+const isArtistDetail = computed(
+  () =>
+    !props.previewTracks &&
+    props.category === 'artists' &&
+    props.filter?.startsWith('artist:') === true
+)
+const artistSection = ref<ArtistSection>('overview')
+watch(currentLibraryViewKey, () => {
+  artistSection.value = 'overview'
+})
+async function playArtistTracks(query: LibraryQuery, shuffle: boolean): Promise<void> {
+  await playbackStore.playLibraryQuery(
+    query,
+    undefined,
+    shuffle ? { randomStart: true, playMode: 'shuffle' } : {}
+  )
+}
+const metadataTarget = computed(() =>
+  props.previewTracks ? null : collectionMetadataContext(props.category, props.filter)
+)
+const currentAlbum = computed<GridItem | null>(() => {
   if (!isAlbumDetail.value) return null
   if (!props.previewTracks && libraryStorage.mode.value !== 'json')
     return databaseAlbumState.value.page?.items[0] ?? null
@@ -583,15 +607,82 @@ const currentAlbum = computed(() => {
 const albumDurationText = computed(() => {
   const album = currentAlbum.value
   const seconds =
-    album && 'duration' in album
-      ? album.duration
-      : (album?.tracks.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0) ?? 0)
+    album?.duration ??
+    album?.tracks?.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0) ?? 0
   const minutes = Math.round(seconds / 60)
   if (seconds <= 0) return ''
   if (minutes < 1) return '不足 1 分钟'
   const hours = Math.floor(minutes / 60)
   return hours ? `${hours} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`
 })
+const albumSampleTracks = computed(() => {
+  if (!isAlbumDetail.value) return []
+  const album = currentAlbum.value
+  if (album?.tracks && album.tracks.length > 0) return album.tracks
+  return tableTracks.value
+})
+const albumGenres = computed(() => {
+  const album = currentAlbum.value
+  if (!album) return []
+  const separators = settingsStore.settings.value.genreSeparators
+  const collected = new Set<string>()
+  const addRaw = (raw?: string | null) => {
+    for (const genre of splitGenreValues(raw, separators)) {
+      if (genre !== '未知') collected.add(genre)
+    }
+  }
+  addRaw(album.genre)
+  for (const track of albumSampleTracks.value) {
+    addRaw(track.genre)
+    if (collected.size >= 6) break
+  }
+  return [...collected].slice(0, 6)
+})
+const albumFormatText = computed(() => {
+  if (!isAlbumDetail.value) return ''
+  for (const track of albumSampleTracks.value) {
+    const label = trackQualityLabel(track)
+    if (label) return label
+    const ext = track.filePath?.split('.').pop()?.trim().toUpperCase()
+    if (ext && ext.length <= 5) return ext
+  }
+  return ''
+})
+const albumTypeText = computed(() => {
+  const album = currentAlbum.value
+  if (!album) return ''
+  if (album.compilation) return '合辑'
+  const count = album.trackCount ?? album.tracks?.length ?? tableTrackCount.value
+  if (count > 0 && count <= 3) return '单曲 / EP'
+  return '专辑'
+})
+const albumFavoriteState = ref<boolean | null>(null)
+let albumFavoriteReadGeneration = 0
+const albumAllFavorited = computed(() => {
+  if (!isAlbumDetail.value) return false
+  if (databaseAlbumEnabled.value) return albumFavoriteState.value
+  const tracks = albumSampleTracks.value
+  if (tracks.length === 0) return false
+  return tracks.every((track) => isFavoriteTrack(track))
+})
+const currentAlbumSummary = computed(() => {
+  const album = currentAlbum.value
+  if (!album) return null
+  return {
+    name: album.name,
+    artist: album.artist,
+    releaseDate: album.releaseDate,
+    trackCount: album.trackCount ?? album.tracks?.length ?? tableTrackCount.value,
+    durationText: albumDurationText.value,
+    formatText: albumFormatText.value,
+    typeText: albumTypeText.value,
+    genres: albumGenres.value
+  }
+})
+function openAlbumGenre(genre: string): void {
+  if (!genre) return
+  emit('selectView', 'genres', `genre:${genre}`)
+}
 
 function trackListNumber(track: Track, visibleIndex: number): number {
   if (
@@ -623,33 +714,32 @@ const MusicVersionsHost = defineAsyncComponent(
 const libraryToolsTrigger = ref<HTMLButtonElement | null>(null)
 const tagManagerInitialView = ref<'edit' | 'duplicates'>('edit')
 const tagManagerTracks = ref<Track[]>([])
-const tagManagerContentRevision = ref<number | null>(null)
+const tagManagerSelection = shallowRef<LibrarySelectionRequest>()
+const tagManagerInstance = ref(0)
 const tagManagerFocusRestoreTarget = ref<HTMLElement | null>(null)
 const libraryMutationPending = ref(false)
 const exclusionRestorePending = ref(false)
 const searchOnlineSongs = ref(false)
 
-const showOnlineSearchToggle = computed(() => props.category === 'allSongs' && !props.filter)
+const showOnlineSearchToggle = computed(
+  () => !props.previewTracks && props.category === 'allSongs' && !props.filter
+)
 const shouldUseUnifiedSearch = computed(
   () => showOnlineSearchToggle.value && searchOnlineSongs.value
 )
-const databasePlaylistView = createLibraryPlaylistView({
-  syncPlaylistView: (request) => window.api.library.database.syncPlaylistView(request)
-})
+const databasePlaylistView = libraryApi.createPlaylistView()
 const databasePlaylistState = databasePlaylistView.state
 watch(
   [
     () => libraryStorage.mode.value,
     localPlaylists,
-    musicVersionRevision,
+    () => (props.previewTracks ? 0 : musicVersionRevision.value),
     currentPlaylistName,
     () => props.previewTracks
   ],
   () => {
-    const versions = props.previewTracks ? [] : getMusicVersions().tracks.versions
     void databasePlaylistView.setPlaylist(
-      !props.previewTracks && libraryStorage.mode.value === 'sqlite' ? currentPlaylist.value : null,
-      { revision: musicVersionRevision.value, versions }
+      !props.previewTracks && libraryStorage.mode.value === 'sqlite' ? currentPlaylist.value : null
     )
   },
   { immediate: true, flush: 'sync' }
@@ -708,7 +798,7 @@ const databaseQuery = computed(() =>
 const databasePages = createLibraryTrackWindow({
   queryTracks: async (query) => {
     try {
-      const page = await window.api.library.database.queryTracks(query)
+      const page = await libraryApi.queryTracks(query)
       return { ...page, tracks: page.tracks.map((record) => ({ ...libraryTrack(record) })) }
     } catch (error) {
       if (query?.playlistView) databasePlaylistView.recover(query.playlistView, error)
@@ -750,28 +840,14 @@ watch(
   },
   { immediate: true, flush: 'sync' }
 )
-let unsubscribeDatabasePages: (() => void) | undefined
-onMounted(() => {
-  if (props.previewTracks) return
-  unsubscribeDatabasePages = window.api?.library?.onChanged((change) => {
-    const revision = change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
-    if (
-      showTagManager.value &&
-      tagManagerContentRevision.value !== null &&
-      revision !== undefined &&
-      revision > tagManagerContentRevision.value
-    ) {
-      closeTagManager()
-      repairMessage.value = '曲库已变化，请重新选择歌曲后编辑标签'
-    }
-    if (databaseTableEnabled.value) databasePages.invalidate(revision)
-    if (databaseGridEnabled.value) databaseCollections.invalidate(revision)
-    if (databaseAlbumEnabled.value) databaseAlbumPages.invalidate(revision)
-    if (databaseGridEnabled.value && isCollectionGrid.value) databaseGenrePages.invalidate(revision)
-  })
+watch(musicStore.libraryRevision, (revision) => {
+  if (databaseTableEnabled.value) databasePages.invalidate(revision)
+  if (databaseGridEnabled.value) databaseCollections.invalidate(revision)
+  if (databaseAlbumEnabled.value) databaseAlbumPages.invalidate(revision)
+  if (databaseGridEnabled.value && isCollectionGrid.value) databaseGenrePages.invalidate(revision)
 })
+
 onBeforeUnmount(() => {
-  unsubscribeDatabasePages?.()
   databasePages.dispose()
   void databasePlaylistView.dispose()
   void databasePlaylistCatalog.dispose()
@@ -790,13 +866,15 @@ function retryDatabaseRead(): void {
 const libraryRepairStatusText = computed(() => {
   if (props.previewTracks || props.category !== 'allSongs' || props.filter) return ''
   const report = libraryRepairReport.value
-  if (!report || (report.repairedCount === 0 && report.unresolvedCount === 0)) return ''
-  const parts: string[] = []
-  if (report.repairedCount > 0) parts.push(`已自动重定位 ${report.repairedCount} 首`)
-  if (report.unresolvedCount > 0) {
-    parts.push(`${report.unresolvedCount} 首本地文件未找到，可右键重新匹配音源`)
-  }
-  return parts.join('，')
+  if (!report) return ''
+  if (report.state === 'running') return '正在后台修复歌单引用'
+  if (report.error) return report.error
+  return [
+    report.relocated ? `已自动重定位 ${report.relocated} 首` : '',
+    report.unresolved ? `${report.unresolved} 首本地文件未找到` : ''
+  ]
+    .filter(Boolean)
+    .join(' · ')
 })
 
 watch(
@@ -857,7 +935,7 @@ const tableRowPositions = computed(
     )
 )
 function databasePageForTrack(track: Track) {
-  return databasePages.pageForTrack(toRaw(track) as unknown as LibraryTrackRecord)
+  return databasePages.pageForTrack(toRaw(track))
 }
 // Weak keys retain only selected compact records, not evicted pages or row payloads.
 const selectedTableRows = new WeakMap<
@@ -876,11 +954,17 @@ function playlistDefinitionTrack(track: Track): Track {
   const entry = tableEntryIds.value.get(toRaw(track))
   const id =
     selectedTableRows.get(toRaw(track))?.definitionId ??
-    (entry === undefined ? undefined : currentPlaylist.value?.trackIds[Number(entry)])
+    (entry === undefined
+      ? undefined
+      : (() => {
+          const page = databasePageForTrack(track)
+          const index = page?.tracks.indexOf(toRaw(track)) ?? -1
+          return page?.definitionIds?.[index]
+        })())
   return id === undefined || id === track.id ? track : { ...track, id }
 }
 function snapshotSelectedTableTrack(track: Track): Track {
-  const snapshot = toPlaylistTrackSnapshot(track)
+  const snapshot = { ...track }
   // Old embedded covers can be megabytes; action records use cache/remote covers.
   if (snapshot.cover?.startsWith('data:')) snapshot.cover = null
   if (snapshot.coverSmall?.startsWith('data:')) delete snapshot.coverSmall
@@ -971,6 +1055,7 @@ const showGrid = computed(() => {
 })
 
 const showTable = computed(() => {
+  if (isArtistDetail.value) return artistSection.value === 'songs'
   if (props.category === 'allSongs' || props.category === 'recent') return true
   return !!props.filter
 })
@@ -1025,9 +1110,7 @@ const localPlaylistOrder = useLocalPlaylistOrder(
   },
   { persist: !props.previewTracks }
 )
-const databasePlaylistCatalog = createLibraryPlaylistView({
-  syncPlaylistView: (request) => window.api.library.database.syncPlaylistView(request)
-})
+const databasePlaylistCatalog = libraryApi.createPlaylistView()
 const databaseCatalogState = databasePlaylistCatalog.state
 const databaseGridKind = computed<LibraryCollectionKind | null>(() =>
   !props.previewTracks &&
@@ -1042,7 +1125,7 @@ const databaseGridEnabled = computed(
 const databaseCollections = createLibraryCollectionWindow({
   queryCollections: async (kind, query) => {
     try {
-      return await window.api.library.database.queryCollections(kind, query)
+      return await libraryApi.queryCollections(kind, query)
     } catch (error) {
       if (query?.playlistView) databasePlaylistCatalog.recover(query.playlistView, error)
       throw error
@@ -1053,13 +1136,9 @@ watch(
   () => ({
     enabled: databaseGridEnabled.value && databaseGridKind.value === 'playlists',
     playlists: localPlaylistEntries.value,
-    revision: musicVersionRevision.value
+    revision: props.previewTracks ? 0 : musicVersionRevision.value
   }),
-  ({ enabled, playlists, revision }) =>
-    void databasePlaylistCatalog.setCatalog(enabled ? playlists : null, {
-      revision,
-      versions: props.previewTracks ? [] : getMusicVersions().tracks.versions
-    }),
+  ({ enabled, playlists }) => void databasePlaylistCatalog.setCatalog(enabled ? playlists : null),
   { immediate: true, flush: 'sync' }
 )
 const databaseCollectionState = databaseCollections.state
@@ -1109,6 +1188,16 @@ const databaseGridSelection = computed(() => ({
                   ? ('desc' as const)
                   : ('asc' as const)
               }
+            : {}),
+          ...(databaseGridKind.value === 'genres'
+            ? genreSort.value === 'trackCount-desc'
+              ? { collectionSort: 'trackCount' as const, direction: 'desc' as const }
+              : genreSort.value === 'added-newest'
+                ? { sort: 'addedAt' as const, direction: 'desc' as const }
+                : {
+                    collectionSort: 'label' as const,
+                    direction: genreSort.value === 'name-desc' ? ('desc' as const) : ('asc' as const)
+                  }
             : {})
         }
 }))
@@ -1121,7 +1210,8 @@ watch(
       databaseGridEnabled.value,
       databaseGridKind.value,
       debouncedSearchQuery.value,
-      isCollectionGrid.value ? collectionViewState.value : null
+      isCollectionGrid.value ? collectionViewState.value : null,
+      databaseGridKind.value === 'genres' ? genreSort.value : null
     ])
     const preservePosition = databaseGridEnabled.value && intent === databaseGridIntent
     databaseGridIntent = intent
@@ -1143,7 +1233,7 @@ const databaseAlbumEnabled = computed(
 )
 const databaseAlbumPages = createLibraryCollectionPages(
   {
-    queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query)
+    queryCollections: (kind, query) => libraryApi.queryCollections(kind, query)
   },
   1
 )
@@ -1157,7 +1247,7 @@ watch(
 // Keep suggestions bounded and searchable instead of exporting every genre to
 // populate a select. The filter still accepts any complete, case-insensitive label.
 const databaseGenrePages = createLibraryCollectionPages({
-  queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query)
+  queryCollections: (kind, query) => libraryApi.queryCollections(kind, query)
 })
 const databaseGenreState = databaseGenrePages.state
 const databaseGenreSearch = ref(collectionViewState.value.genre ?? '')
@@ -1268,15 +1358,9 @@ function playTableTrack(track: Track): void {
 }
 
 async function playNetworkTrack(track: Track): Promise<void> {
-  const network = track.networkSource
-  if (!network || !window.api?.networkSources) return
+  if (!track.networkSource) return
   try {
-    const plan = await window.api.networkSources.resolvePlayback(network.profileId, network.entry)
-    const resolved: Track = {
-      ...track,
-      filePath: plan.kind === 'direct-url' ? (plan.url ?? '') : (plan.cacheFilePath ?? '')
-    }
-    playTrack(resolved, [resolved])
+    await playTrack(track, [track])
   } catch (err) {
     unifiedSearch.error.value = `网络源播放失败：${err instanceof Error ? err.message : String(err)}`
   }
@@ -1419,95 +1503,46 @@ function trackSourceClass(track: Track): string {
 
 function playlistSourceSummaryLabel(playlist: GridItem): string {
   if (playlist.imported) return ''
-  return formatPlaylistSourceSummary(playlist.sourceSummary ?? summarizePlaylistSources(playlist))
+  return playlist.sourceSummary ? formatPlaylistSourceSummary(playlist.sourceSummary) : ''
 }
 
 async function handleManualRematch(track: Track): Promise<void> {
-  repairMessage.value = `正在重新匹配 ${track.title || '当前曲目'}...`
+  repairMessage.value = '正在重新匹配 ' + (track.title || '当前曲目')
   try {
-    await syncPluginProviders()
-    const query = [track.title, track.artist].filter(Boolean).join(' ')
-    const result = await mediaProviders.searchAllSongs({
-      query,
-      localTracks: [],
-      localSource: rematchSearchSource,
-      limit: 20,
-      offset: 0
-    })
-    const candidates = buildMetadataMatchCandidates(
-      track,
-      result.items.map((item) => item.track)
-    )
-    const rematched = candidates[0]?.track
-    if (!rematched) {
-      repairMessage.value = `未找到可替换 ${track.title || '当前曲目'} 的音源`
-      return
-    }
-    const replacedCount = replaceTrackReference(track.id, rematched)
-    repairMessage.value =
-      replacedCount > 0
-        ? `已重新匹配到 ${rematched.source ?? getTrackSource(rematched)}：${rematched.title || track.title}`
-        : `找到 ${rematched.title || track.title}，但没有需要替换的引用`
+    const result = (await core.command('playlists.rematch', {
+      revision: playlistRevision(),
+      input: trackInput(track)
+    })) as { count: number; track: Track | null }
+    repairMessage.value = result.track
+      ? '已重新匹配到 ' + (result.track.title || track.title)
+      : '未找到可替换的音源'
   } catch (error) {
     repairMessage.value = error instanceof Error ? error.message : '重新匹配音源失败'
   }
 }
 
+async function trackVersion(track: Track): Promise<number> {
+  const cached = databasePageForTrack(track)?.versions[track.id]
+  if (cached !== undefined) return cached
+  const page = await libraryApi.queryTracks({ ids: [track.id], limit: 1 })
+  const version = page.versions[track.id]
+  if (version === undefined) throw new Error('此曲目已不在曲库中')
+  return version
+}
+
 async function handleMetadataRematch(track: Track): Promise<void> {
-  const expectedVersion = databaseTableEnabled.value
-    ? databasePageForTrack(track)?.versions[track.id]
-    : undefined
-  const useDatabase = databaseTableEnabled.value
-  repairMessage.value = `正在匹配 ${track.title || '当前曲目'} 的流媒体元数据...`
+  repairMessage.value = '正在匹配 ' + (track.title || '当前曲目') + ' 的流媒体元数据'
   try {
-    await syncPluginProviders()
-    const providerTracks = await searchMetadataTracks([track], async (query, limit, offset) => {
-      const result = await mediaProviders.searchAllSongs({
-        query,
-        localTracks: [],
-        limit,
-        offset
-      })
-      return { items: result.items.map((item) => item.track) }
+    const candidates = await core.query('metadata.candidates', {
+      id: track.id,
+      version: await trackVersion(track)
     })
-    const candidates = buildMetadataMatchCandidates(track, providerTracks)
-    const best = candidates[0]
-    if (!best) {
-      repairMessage.value = `未找到可匹配 ${track.title || '当前曲目'} 的流媒体元数据`
+    if (!candidates.items.length) {
+      repairMessage.value = '未找到可匹配的流媒体元数据'
       return
     }
-    let changed: boolean
-    if (useDatabase) {
-      if (expectedVersion === undefined) throw new Error('曲目窗口已变化，请刷新后重试')
-      const next = enrichLocalTrackMetadata(track, best, settingsStore.settings.value.cachePolicy)
-      const patch = Object.fromEntries(
-        (
-          [
-            'artist',
-            'album',
-            'genre',
-            'cover',
-            'lyrics',
-            'translatedLyrics',
-            'lyricsSource',
-            'translatedLyricsSource',
-            'metadataMatch'
-          ] as const
-        )
-          .filter((key) => next[key] !== track[key])
-          .map((key) => [key, next[key]])
-      )
-      if (track.streamUrl !== undefined) patch.streamUrl = null
-      await window.api.library.database.patchTracks([{ id: track.id, expectedVersion, patch }])
-      changed = true
-    } else
-      changed = applyTrackMetadataMatch(track.id, best.track, {
-        confidence: best.confidence,
-        score: best.score
-      })
-    repairMessage.value = changed
-      ? `已匹配 ${best.sourceLabel}：${best.track.title || track.title}`
-      : `找到 ${best.track.title || track.title}，但未能应用到本地曲目`
+    await core.command('metadata.apply', { token: candidates.token, index: 0 })
+    repairMessage.value = '已匹配 ' + (candidates.items[0].track.title || track.title)
   } catch (error) {
     repairMessage.value = error instanceof Error ? error.message : '重新匹配流媒体元数据失败'
   }
@@ -1550,20 +1585,13 @@ const {
   rematchTrack: handleManualRematch,
   rematchMetadata: handleMetadataRematch,
   clearMetadataMatch: async (track) => {
-    if (!databaseTableEnabled.value) {
-      clearTrackMetadataMatch(track.id)
-      return
-    }
     try {
-      const expectedVersion = databasePageForTrack(track)?.versions[track.id]
-      if (expectedVersion === undefined) throw new Error('曲目窗口已变化，请刷新后重试')
-      await window.api.library.database.patchTracks([
-        { id: track.id, expectedVersion, patch: { metadataMatch: null } }
-      ])
+      await core.command('metadata.clear', { id: track.id, version: await trackVersion(track) })
     } catch (error) {
       repairMessage.value = error instanceof Error ? error.message : String(error)
     }
   },
+
   createPlaylist,
   deletePlaylist,
   playNext: playNextTrack,
@@ -1580,7 +1608,7 @@ const {
       return
     }
     const albumItem = albums.value.find((item) =>
-      item.tracks.some((albumTrack) => albumTrack.id === track.id)
+      item.tracks?.some((albumTrack) => albumTrack.id === track.id)
     )
     if (!albumItem?.id) return
     emit('selectView', 'albums', `album:${albumItem.id}`)
@@ -1606,7 +1634,7 @@ onBeforeUnmount(() => {
 async function openDatabaseAlbum(track: Track): Promise<void> {
   const intent = ++albumNavigationIntent
   try {
-    const result = await window.api.library.database.queryCollections('albums', {
+    const result = await libraryApi.queryCollections('albums', {
       ids: [track.id],
       limit: 1
     })
@@ -1655,8 +1683,7 @@ async function createSelectedAggregatePlaylist(
   if (!done) throw new Error(repairMessage.value || '创建聚合歌单失败')
   return {
     playlistId,
-    addedCount:
-      aggregatePlaylists.value.find((playlist) => playlist.id === playlistId)?.trackIds.length ?? 0
+    addedCount: aggregatePlaylists.value.find((playlist) => playlist.id === playlistId)?.count ?? 0
   }
 }
 
@@ -1706,6 +1733,17 @@ const {
         (databaseGridEnabled.value && databaseCollectionState.value.total !== null))
   ),
   resetSources: [],
+  resetScrollTop: () => {
+    const container = containerRef.value
+    const navigation = container?.querySelector<HTMLElement>('.artist-navigation-row')
+    if (!isArtistDetail.value || !container || !navigation) return 0
+    const navigationTop =
+      navigation.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop -
+      container.clientTop
+    return Math.min(container.scrollTop, Math.max(0, navigationTop - 24))
+  },
   viewIdentity: props.previewTracks ? undefined : currentLibraryViewKey,
   viewKey: props.previewTracks
     ? undefined
@@ -1714,7 +1752,8 @@ const {
           currentLibraryViewKey.value,
           debouncedSearchQuery.value,
           libraryViewState.value,
-          databaseGridEnabled.value ? collectionViewState.value : null
+          databaseGridEnabled.value ? collectionViewState.value : null,
+          isArtistDetail.value ? artistSection.value : null
         ])
       ),
   shouldResetOnSearch: showTable,
@@ -1722,6 +1761,21 @@ const {
 })
 void containerRef.value
 void tbodyRef.value
+const albumTracksRef = ref<HTMLElement | null>(null)
+const trackToolbarRef = ref<HTMLElement | null>(null)
+let albumToolbarObserver: ResizeObserver | undefined
+watch([albumTracksRef, trackToolbarRef, isAlbumDetail], ([main, toolbar, album]) => {
+  albumToolbarObserver?.disconnect()
+  if (!album || !main || !toolbar) return
+  const measure = () => {
+    main.style.setProperty('--album-toolbar-height', toolbar.getBoundingClientRect().height + 'px')
+    updateViewportHeight()
+  }
+  measure()
+  albumToolbarObserver = new ResizeObserver(measure)
+  albumToolbarObserver.observe(toolbar)
+}, { flush: 'post' })
+onBeforeUnmount(() => albumToolbarObserver?.disconnect())
 const visibleTracks = computed(() =>
   databaseTableEnabled.value
     ? Array.from(
@@ -1821,6 +1875,288 @@ watch(
 )
 onBeforeUnmount(() => providerCoverController.abort())
 
+const CUSTOM_GENRES_STORAGE_KEY = 'twilight-echo:user-custom-genres:v1'
+const QUICK_GENRE_SUGGESTIONS: readonly string[] = [
+  'Pop/Rock',
+  'Electronic',
+  'Jazz',
+  'Classical',
+  'R&B',
+  'Hip-Hop/Rap',
+  'Soundtrack',
+  'Folk',
+  'Ambient'
+]
+
+function readStoredCustomGenres(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_GENRES_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map((item) => item.trim())
+  } catch {
+    return []
+  }
+}
+
+function writeStoredCustomGenres(names: readonly string[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(CUSTOM_GENRES_STORAGE_KEY, JSON.stringify(names))
+  } catch {
+    // Ignore storage quota errors.
+  }
+}
+
+const userCustomGenres = ref<string[]>(readStoredCustomGenres())
+const showAddGenreBar = ref(false)
+const newGenreName = ref('')
+
+async function syncCustomGenreToCore(name: string): Promise<void> {
+  if (libraryStorage.mode.value !== 'sqlite') return
+  try {
+    const tree = await core.query('genres.tree', { limit: 1 })
+    if (tree && typeof tree.revision === 'number') {
+      await core.command('genres.edit', {
+        revision: tree.revision,
+        action: 'create',
+        name,
+        nameEn: name
+      })
+    }
+  } catch {
+    // Local custom genre list remains authoritative for the puzzle view even if core tree rejects duplicates.
+  }
+}
+
+function addCustomGenre(rawName?: string): void {
+  const candidate = (typeof rawName === 'string' ? rawName : newGenreName.value).trim()
+  if (!candidate) return
+  const exists = userCustomGenres.value.some(
+    (name) => name.toLowerCase() === candidate.toLowerCase()
+  )
+  if (!exists) {
+    const next = [...userCustomGenres.value, candidate]
+    userCustomGenres.value = next
+    writeStoredCustomGenres(next)
+    void syncCustomGenreToCore(candidate)
+  }
+  if (typeof rawName !== 'string') {
+    newGenreName.value = ''
+    showAddGenreBar.value = false
+  }
+}
+
+function removeCustomGenre(targetName: string): void {
+  const normalized = targetName.trim().toLowerCase()
+  const next = userCustomGenres.value.filter((name) => name.trim().toLowerCase() !== normalized)
+  userCustomGenres.value = next
+  writeStoredCustomGenres(next)
+}
+
+const genreCoverTracks = shallowRef<Track[]>([])
+async function loadGenreCoverTracks(): Promise<void> {
+  if (props.previewTracks || props.category !== 'genres' || !showGrid.value) return
+  if (libraryStorage.mode.value !== 'sqlite') return
+  try {
+    const page = await libraryApi.queryTracks({
+      sort: 'recentlyAdded',
+      limit: 120
+    })
+    const tracks = page.tracks.map((record) => ({ ...libraryTrack(record) }))
+    genreCoverTracks.value = tracks
+    for (const track of tracks.slice(0, 36)) {
+      void resolveMissingTrackCover(track)
+    }
+  } catch {
+    // Fallback to collection covers if sample track query fails.
+  }
+}
+watch(
+  [
+    () => props.category,
+    showGrid,
+    () => libraryStorage.mode.value,
+    musicStore.libraryRevision
+  ],
+  ([category, grid, mode]) => {
+    if (category === 'genres' && grid && mode === 'sqlite' && !props.previewTracks) {
+      void loadGenreCoverTracks()
+    }
+  },
+  { immediate: true }
+)
+
+type GenreMosaicItem = GridItem & {
+  filterName: string
+  hasDirectTracks: boolean
+  isCustom?: boolean
+  coverTrackId?: string
+  toneIndex: number
+}
+
+const genreMosaicItems = computed<GenreMosaicItem[]>(() => {
+  const rawItems: GridItem[] = databaseGridEnabled.value
+    ? (databaseCollectionState.value.page?.items ?? [])
+    : genres.value
+  const sampleTracks = props.previewTracks ?? genreCoverTracks.value
+  const coverPool: Array<{
+    key: string
+    cover: string | null
+    coverSource: string | null
+    trackId?: string
+  }> = []
+  const seenCoverKeys = new Set<string>()
+  const pushCoverCandidate = (
+    cover: string | null | undefined,
+    coverSource: string | null | undefined,
+    trackId?: string
+  ): void => {
+    const cleanCover = typeof cover === 'string' && cover.trim() ? cover.trim() : null
+    const cleanSource =
+      typeof coverSource === 'string' && coverSource.trim() ? coverSource.trim() : null
+    if (!cleanCover && !cleanSource && !trackId) return
+    const key = cleanCover || cleanSource || `track:${trackId}`
+    if (seenCoverKeys.has(key)) return
+    seenCoverKeys.add(key)
+    coverPool.push({
+      key,
+      cover: cleanCover,
+      coverSource: cleanSource,
+      trackId
+    })
+  }
+  for (const track of sampleTracks) {
+    pushCoverCandidate(
+      displayTrackCover(track) || track.cover,
+      displayTrackCoverSource(track) || track.coverSource,
+      track.id
+    )
+  }
+  for (const item of rawItems) {
+    pushCoverCandidate(item.cover, item.coverSource)
+  }
+
+  const tiles: Array<GenreMosaicItem & { orderIndex: number; addedAt?: number }> = []
+  const seenGenreNames = new Set<string>()
+
+  rawItems.forEach((raw, index) => {
+    const normalized = raw.name.trim().toLowerCase()
+    if (!normalized || seenGenreNames.has(normalized)) return
+    seenGenreNames.add(normalized)
+    tiles.push({
+      ...raw,
+      id: raw.id ?? `genre:${raw.name}`,
+      name: raw.name,
+      filterName: raw.name,
+      hasDirectTracks: true,
+      isCustom: false,
+      trackCount: raw.trackCount ?? 0,
+      cover: raw.cover ?? null,
+      coverSource: raw.coverSource ?? null,
+      toneIndex: index % 4,
+      orderIndex: index,
+      addedAt: 'addedAt' in raw && typeof raw.addedAt === 'number' ? raw.addedAt : 0
+    })
+  })
+
+  userCustomGenres.value.forEach((customName, customIdx) => {
+    const trimmed = customName.trim()
+    const normalized = trimmed.toLowerCase()
+    if (!trimmed || seenGenreNames.has(normalized)) return
+    seenGenreNames.add(normalized)
+    tiles.push({
+      id: `custom-genre:${trimmed}`,
+      name: trimmed,
+      filterName: trimmed,
+      hasDirectTracks: false,
+      isCustom: true,
+      trackCount: 0,
+      cover: null,
+      coverSource: null,
+      toneIndex: (tiles.length + customIdx) % 4,
+      orderIndex: 1000 + customIdx,
+      addedAt: Date.now()
+    })
+  })
+
+  if (tiles.length === 0) return []
+
+  const q = normalizeSearchText(debouncedSearchQuery.value.trim())
+  const filtered = q
+    ? tiles.filter(
+        (tile) =>
+          normalizeSearchText(tile.name).includes(q) ||
+          normalizeSearchText(tile.filterName).includes(q)
+      )
+    : tiles
+
+  const mode = genreSort.value
+  filtered.sort((left, right) => {
+    if (mode === 'name-asc' || mode === 'name-desc') {
+      return compareGenreNames(left.name, right.name) * (mode === 'name-desc' ? -1 : 1)
+    }
+    if (mode === 'added-newest') {
+      return (right.addedAt ?? 0) - (left.addedAt ?? 0) || left.orderIndex - right.orderIndex
+    }
+    // Rank named genres with tracks first, then '未知流派', then newly added custom genres.
+    const leftNamedDirect = left.hasDirectTracks && left.name !== '未知流派' ? 1 : 0
+    const rightNamedDirect = right.hasDirectTracks && right.name !== '未知流派' ? 1 : 0
+    if (leftNamedDirect !== rightNamedDirect) return rightNamedDirect - leftNamedDirect
+    if ((right.trackCount ?? 0) !== (left.trackCount ?? 0)) {
+      return (right.trackCount ?? 0) - (left.trackCount ?? 0)
+    }
+    return left.orderIndex - right.orderIndex
+  })
+
+  const usedCoverKeys = new Set<string>()
+  let poolCursor = 0
+  return filtered.map((tile, index) => {
+    let cover = tile.cover ?? null
+    let coverSource = tile.coverSource ?? null
+    let coverTrackId = tile.coverTrackId
+    const directKey = cover || coverSource || ''
+    if (directKey && !usedCoverKeys.has(directKey)) {
+      usedCoverKeys.add(directKey)
+    } else if (coverPool.length > 0) {
+      let chosen = coverPool.find((candidate) => !usedCoverKeys.has(candidate.key))
+      if (!chosen) {
+        chosen = coverPool[poolCursor % coverPool.length]
+        poolCursor++
+      } else {
+        usedCoverKeys.add(chosen.key)
+      }
+      if (chosen) {
+        cover = chosen.cover
+        coverSource = chosen.coverSource
+        coverTrackId = chosen.trackId
+      }
+    }
+    return {
+      ...tile,
+      cover,
+      coverSource,
+      coverTrackId,
+      toneIndex: index % 4
+    }
+  })
+})
+
+const availableQuickGenreSuggestions = computed(() => {
+  const existing = new Set(genreMosaicItems.value.map((item) => item.name.trim().toLowerCase()))
+  return QUICK_GENRE_SUGGESTIONS.filter((name) => !existing.has(name.toLowerCase()))
+})
+
+function genreTileSpanClass(index: number): string {
+  const mod = index % 9
+  if (mod === 0 || mod === 4 || mod === 8) return 'genre-card--wide'
+  return 'genre-card--square'
+}
+
 const databaseQuerySelection = computed(() =>
   databaseTableEnabled.value && databaseQuery.value
     ? {
@@ -1903,7 +2239,7 @@ function captureActionSource(actionTracks?: Track[]): SongListActionSource {
     }
     return createSongListActionSource(
       {
-        api: window.api.library.database,
+        api: selectionApi,
         request: {
           query: { ...query, contentRevision: page.revision },
           total,
@@ -2157,7 +2493,7 @@ async function runLocalLibraryRemoval(
     if (result.failures.length > 0) {
       const details = result.failures
         .slice(0, 8)
-        .map((failure) => `${failure.filePath}\n${failure.message}`)
+        .map((failure) => `${failure.id}\n${failure.message}`)
         .join('\n\n')
       window.alert(`${action}未全部完成：\n\n${details}`)
     }
@@ -2175,51 +2511,28 @@ async function removeDatabaseSelectionFiles(
   mode: 'library' | 'trash',
   signal: AbortSignal
 ): Promise<void> {
-  let removed = 0,
-    failed = 0
-  const details: string[] = []
-  try {
-    await lease.forEachPage(async (rows) => {
-      if (signal.aborted) throw new Error('选择操作已取消')
-      if (mode === 'trash')
-        await prepareLocalTracksForRemoval(
-          rows.map(({ track }) => track.id),
-          rows.map(({ track }) => track.filePath)
-        )
-      if (signal.aborted) throw new Error('选择操作已取消')
-      const result = await window.api.library.database.removeFiles({
-        mode,
-        items: rows.map(({ track, version, instance }) => {
-          if (version === undefined || instance === undefined)
-            throw new Error('本地文件选择缺少版本身份，请重新选择')
-          return {
-            id: track.id,
-            filePath: track.filePath,
-            title: track.title,
-            artist: track.artist,
-            expectedVersion: version,
-            expectedInstance: instance
-          }
-        })
-      })
-      // Confirmed results are published before another page is read. Never
-      // retain the entire removal result or replay a lost destructive reply.
-      removed += result.removedTrackIds.length
-      failed += result.failures.length
-      for (const failure of result.failures)
-        if (details.length < 8) details.push(`${failure.filePath}\n${failure.message}`)
-      notifyLocalTracksUnavailable(result.removedTrackIds, result.removedFilePaths)
-      databasePages.invalidate(result.metadata.revision)
-    }, 'files')
-  } catch (error) {
-    databasePages.invalidate()
-    throw new Error(
-      `已确认移除 ${removed} 首，${failed} 项失败；操作中断，请刷新后检查，不要直接重试未知批次：${error instanceof Error ? error.message : String(error)}`
-    )
-  }
+  signal.throwIfAborted()
+  if (!lease.selectionId) throw new Error('本地文件选择已失效')
+  const result = (await core.command(
+    'library.remove',
+    { selectionId: lease.selectionId, mode },
+    signal
+  )) as import('../../../shared/coreLibraryMaintenance.ts').CoreLibraryRemovalResult
   const action = mode === 'trash' ? '移到回收站' : '从音乐库移除'
-  repairMessage.value = `${action} ${removed} 首${failed ? `，${failed} 项失败` : ''}`
-  if (details.length) window.alert(`${action}未全部完成：\n\n${details.join('\n\n')}`)
+  repairMessage.value =
+    action +
+    ' ' +
+    result.removedTrackIds.length +
+    ' 首' +
+    (result.failures.length ? '，' + result.failures.length + ' 项失败' : '')
+  if (result.failures.length)
+    window.alert(
+      result.failures
+        .slice(0, 8)
+        .map((item) => item.id + '\n' + item.message)
+        .join('\n\n')
+    )
+  databasePages.invalidate(result.revision)
 }
 
 async function handleRestoreExclusions(filePaths: string[]): Promise<void> {
@@ -2277,16 +2590,7 @@ async function appendActionTracksToQueue(actionTracks?: Track[]): Promise<void> 
       async (lease, signal) => {
         await playbackStore.appendLibraryQueuePages(
           async (append) => {
-            await lease.forEachPage((rows) =>
-              append(
-                rows.map(({ track }) => ({
-                  id: track.id,
-                  ...(getTrackSource(track) === 'local'
-                    ? {}
-                    : { snapshot: toPlaylistTrackSnapshot(track) as unknown as LibraryTrackRecord })
-                }))
-              )
-            )
+            await lease.forEachPage((rows) => append(rows.map(({ track }) => trackInput(track))))
           },
           true,
           { signal, guard: source.guard }
@@ -2366,6 +2670,124 @@ async function favoriteActionTracks(actionTracks?: Track[]): Promise<void> {
 
 function handleBatchFavorite(): void {
   void favoriteActionTracks()
+}
+
+function captureAllTableActionSource(): SongListActionSource {
+  const unavailable = (message: string) => {
+    repairMessage.value = message
+    return createSongListActionSource({ rows: [] }, () => {
+      throw new Error(message)
+    })
+  }
+  const view = currentLibraryViewKey.value
+  const mode = libraryStorage.mode.value
+  const queryKey = JSON.stringify(databaseQuery.value)
+  const guard = () => {
+    if (
+      view !== currentLibraryViewKey.value ||
+      mode !== libraryStorage.mode.value ||
+      queryKey !== JSON.stringify(databaseQuery.value)
+    )
+      throw new Error('歌曲视图已变化，请重新操作')
+  }
+  if (databaseTableEnabled.value) {
+    const page = databasePageState.value.page
+    const query = databaseQuery.value
+    const total = databasePageState.value.total
+    if (!page || !query || total === null || total <= 0)
+      return unavailable('歌曲查询尚未准备完成，请稍后重试')
+    return createSongListActionSource(
+      {
+        api: selectionApi,
+        request: {
+          query: { ...query, contentRevision: page.revision },
+          total,
+          ranges: [[0, total]]
+        }
+      },
+      guard
+    )
+  }
+  return createSongListActionSource(
+    {
+      rows: displayTracks.value.map((track) => ({
+        track,
+        definitionId: track.id
+      }))
+    },
+    guard
+  )
+}
+
+// The store's favorite cache is populated on demand. Read the bounded album
+// window on entry; a partial all-favorite window cannot speak for unseen songs.
+watch(
+  () => ({
+    enabled: databaseAlbumEnabled.value && !databaseReadPending.value,
+    tracks: albumSampleTracks.value,
+    total: tableTrackCount.value,
+    query: databaseQuery.value,
+    revision: core.state.value?.playlistsRevision
+  }),
+  async ({ enabled, tracks, total, revision }, _previous, onCleanup) => {
+    const generation = ++albumFavoriteReadGeneration
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    albumFavoriteState.value = null
+    if (!enabled || revision == null || !tracks.length) return
+    try {
+      let count = 0
+      let favoriteCount = 0
+      for (let offset = 0; offset < tracks.length; offset += 200) {
+        const page = tracks.slice(offset, offset + 200)
+        const result = await core.query('playlists.favorites', {
+          revision,
+          items: page.map(trackInput)
+        }, controller.signal)
+        count += result.contains.length
+        favoriteCount += result.contains.filter(Boolean).length
+      }
+      if (!controller.signal.aborted && generation === albumFavoriteReadGeneration)
+        albumFavoriteState.value = favoriteCount < count ? false : count >= total ? true : null
+    } catch {
+      // The explicit action rereads the full query before deciding whether to collect it.
+    }
+  },
+  { immediate: true }
+)
+
+async function favoriteCurrentAlbum(): Promise<void> {
+  if (!isAlbumDetail.value || libraryMutationPending.value) return
+  if (databaseTableEnabled.value) {
+    const source = captureAllTableActionSource()
+    await withActionSource(source, async (lease, signal) => {
+      const state = await readFavoriteTrackPages(lease.tracks, signal)
+      const favorite = state.favoriteCount !== state.count
+      const changed = await setFavoriteTrackPages(lease.tracks, favorite, signal)
+      const confirmed = await readFavoriteTrackPages(lease.tracks, signal)
+      albumFavoriteReadGeneration++
+      albumFavoriteState.value = confirmed.count > 0 && confirmed.favoriteCount === confirmed.count
+      repairMessage.value = favorite
+        ? `已收藏专辑（${changed} 首）`
+        : `已取消收藏专辑（${changed} 首）`
+    })
+    return
+  }
+  const tracks = displayTracks.value
+  if (tracks.length === 0) return
+  const nextFavorite = !tracks.every((track) => isFavoriteTrack(track))
+  setFavoriteTracks(tracks, nextFavorite)
+  repairMessage.value = nextFavorite
+    ? `已收藏专辑（${tracks.length} 首）`
+    : `已取消收藏专辑（${tracks.length} 首）`
+}
+
+function addCurrentAlbumToPlaylist(): void {
+  if (!isAlbumDetail.value || libraryMutationPending.value) return
+  const source = captureAllTableActionSource()
+  if (!source.count) return
+  pendingBatchCreateSource.value = source
+  openCreatePlaylistDialog()
 }
 
 async function addActionTracksToPlaylist(
@@ -2464,7 +2886,7 @@ function handleContextCreatePlaylist(): void {
 
 const canContinueFromBookmark = computed(() => {
   const track = selectedTrack.value
-  if (!track || contextActionCount.value > 1) return false
+  if (!track || !playbackBookmarks || contextActionCount.value > 1) return false
   return (
     !!playbackBookmarks.resumeBookmarkFor(track) || playbackBookmarks.bookmarksFor(track).length > 0
   )
@@ -2472,7 +2894,7 @@ const canContinueFromBookmark = computed(() => {
 
 function handleContinueFromBookmark(): void {
   const track = selectedTrack.value
-  if (!track) return
+  if (!track || !playbackBookmarks) return
   const resume =
     playbackBookmarks.resumeBookmarkFor(track) ?? playbackBookmarks.bookmarksFor(track)[0]
   if (!resume) return
@@ -2503,29 +2925,25 @@ function handleToolbarFavorite(): void {
 }
 
 async function openTagManager(initialView: 'edit' | 'duplicates' = 'edit'): Promise<void> {
-  if (databaseTableEnabled.value && initialView === 'edit') {
-    const source = captureActionSource()
-    await withActionSource(source, async (lease) => {
-      const selected = await readSongListTagTargets(lease)
+  const selected = selectLocalLibraryActionTracks(getSelectedTracks())
+  let request: LibrarySelectionRequest | undefined
+  if (initialView === 'edit') {
+    try {
+      const source = captureActionSource()
       source.guard()
-      if (!selected.length) return
-      tagManagerFocusRestoreTarget.value =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null
-      tagManagerTracks.value = selected
-      tagManagerContentRevision.value = lease.revision ?? null
-      tagManagerInitialView.value = initialView
-      showTagManager.value = true
-    })
-    return
+      request = source.request ?? (await selectionRequestForTracks(selected))
+      if (!request.ranges.length) return
+    } catch (error) {
+      repairMessage.value = error instanceof Error ? error.message : '读取标签编辑范围失败'
+      return
+    }
   }
-  const selected = databaseTableEnabled.value
-    ? []
-    : selectLocalLibraryActionTracks(getSelectedTracks())
   tagManagerFocusRestoreTarget.value =
     document.activeElement instanceof HTMLElement ? document.activeElement : null
   tagManagerTracks.value = selected
-  tagManagerContentRevision.value = null
+  tagManagerSelection.value = request
   tagManagerInitialView.value = initialView
+  tagManagerInstance.value++
   showTagManager.value = true
   closeContextMenu()
 }
@@ -2551,7 +2969,7 @@ async function openMusicVersions(): Promise<void> {
     if (isAlbumDetail.value) {
       if (!props.previewTracks && libraryStorage.mode.value !== 'json') {
         if (libraryStorage.mode.value !== 'sqlite') throw new Error('无法确认曲库存储，请重试读取')
-        const page = await window.api.library.database.queryTracks({
+        const page = await libraryApi.queryTracks({
           albumId: props.filter!.slice(6),
           sort: 'trackNumber',
           limit: 1
@@ -2588,53 +3006,14 @@ function closeTagManager(): void {
 
 const pendingTagRecheckPaths = ref<string[]>([])
 const tagRecheckPending = ref(false)
-let tagRecheckGeneration = 0
 
-async function applyTagManagerWrite(
-  filePaths: string[],
-  patch: LocalLibraryTagPatch
-): Promise<void> {
-  if (!libraryStorage.mode.value) await libraryStorage.load()
-  if (!libraryStorage.mode.value) {
-    pendingTagRecheckPaths.value = [...new Set([...pendingTagRecheckPaths.value, ...filePaths])]
-    repairMessage.value = `标签已写入，无法确认曲库存储：${libraryStorage.error.value}`
-    return
-  }
-  if (libraryStorage.mode.value === 'sqlite') {
-    pendingTagRecheckPaths.value = [...new Set([...pendingTagRecheckPaths.value, ...filePaths])]
-    tagRecheckGeneration++
-    await recheckWrittenTags()
-    return
-  }
-  const changed = applyLocalTagWrite(filePaths, patch)
-  repairMessage.value =
-    changed > 0 ? `已更新 ${changed} 首本地歌曲的本地视图` : '标签已写入，等待下次扫描刷新本地视图'
+async function applyTagManagerWrite(_trackIds: string[]): Promise<void> {
+  await refreshLibraryIndex()
+  repairMessage.value = '标签已更新'
 }
-
 async function recheckWrittenTags(): Promise<void> {
-  if (tagRecheckPending.value || !pendingTagRecheckPaths.value.length) return
-  tagRecheckPending.value = true
-  const generation = tagRecheckGeneration
-  try {
-    await libraryStorage.load()
-    if (libraryStorage.mode.value !== 'sqlite')
-      throw new Error(libraryStorage.error.value || '请重新扫描已写入标签的文件夹')
-    repairMessage.value = '标签已写入，正在检查受影响目录'
-    const update = await scanLibraryDirectories({
-      directories: libraryDirectoriesForFiles(pendingTagRecheckPaths.value),
-      reason: 'tags'
-    })
-    if (update.state === 'completed' && generation === tagRecheckGeneration) {
-      pendingTagRecheckPaths.value = []
-      repairMessage.value = '标签检查已完成'
-    } else {
-      repairMessage.value = '标签检查尚未完成，可继续扫描或重试目录检查'
-    }
-  } catch (error) {
-    repairMessage.value = `标签已写入，目录检查未完成：${error instanceof Error ? error.message : String(error)}；可在当前扫描结束后重试`
-  } finally {
-    tagRecheckPending.value = false
-  }
+  await refreshLibraryIndex()
+  pendingTagRecheckPaths.value = []
 }
 
 const {
@@ -2689,11 +3068,7 @@ useLocatePlayingTrack({
   tbodyRef,
   displayTracks,
   // Application playlists and device history can retain online snapshots.
-  libraryTracks: computed(() =>
-    props.category === 'playlists' || props.category === 'recent'
-      ? displayTracks.value
-      : tracks.value
-  ),
+  libraryTracks: tableTracks,
   currentTrack,
   enabled: computed(
     () =>
@@ -2769,12 +3144,6 @@ watch([scrollTop, gridDataRange], () => {
   if (isCollectionGrid.value) updateActiveCollectionLetter()
 })
 
-function getTrackSource(track: Pick<Track, 'id' | 'source'>): string {
-  if (track.source) return track.source
-  if (/^[a-zA-Z]:[\\/]/.test(track.id) || /^[\\/]/.test(track.id)) return 'local'
-  const separatorIndex = track.id.indexOf(':')
-  return separatorIndex > 0 ? track.id.slice(0, separatorIndex) : 'local'
-}
 function openRowArtist(track: Track): void {
   selectedTrack.value = track
   handleViewArtist()
@@ -2793,14 +3162,22 @@ function openSourcePicker(track: Track | null): void {
   sourcePickerTrack.value = track
 }
 
-function applySourceSelection(replacement: Track): void {
+async function applySourceSelection(replacement: Track): Promise<void> {
   const original = sourcePickerTrack.value
   if (!original) return
-  const replacedCount = replaceTrackReference(original.id, replacement)
-  repairMessage.value = replacedCount
-    ? `已切换到 ${replacement.source || '本地音乐'}：${replacement.title || original.title}`
-    : `已选择 ${replacement.title || original.title}，但没有需要替换的歌单引用`
-  sourcePickerTrack.value = null
+  try {
+    const result = (await core.command('playlists.replaceSource', {
+      revision: playlistRevision(),
+      oldTrackId: original.id,
+      input: trackInput(replacement)
+    })) as { count: number }
+    repairMessage.value = result.count
+      ? '已切换到 ' + (replacement.title || original.title)
+      : '没有需要替换的歌单引用'
+    sourcePickerTrack.value = null
+  } catch (error) {
+    repairMessage.value = error instanceof Error ? error.message : '切换音源失败'
+  }
 }
 
 function openSelectedSourcePicker(): void {
@@ -2845,7 +3222,9 @@ watch(
     :class="{
       'has-player': props.hasPlayer,
       'is-switching': isSwitching,
-      'playlist-library': category === 'playlists' && showGrid
+      'playlist-library': category === 'playlists' && showGrid,
+      'album-detail': isAlbumDetail,
+      'genre-library': category === 'genres' && showGrid
     }"
     :style="{ height: '100vh' }"
     @scroll="onSongListScroll"
@@ -2881,8 +3260,24 @@ watch(
             <div class="title-group">
               <div class="title-line">
                 <h2 class="song-list-title">{{ viewTitle }}</h2>
-                <span v-if="gridStatsText" class="view-stats">{{ gridStatsText }}</span>
+                <span v-if="gridStatsText && category !== 'genres'" class="view-stats">{{
+                  gridStatsText
+                }}</span>
               </div>
+              <label v-if="category === 'genres'" class="genre-sort-control">
+                <span class="genre-sort-prefix">排序</span>
+                <select
+                  :value="genreSort"
+                  aria-label="流派排序方式"
+                  @change="genreSort = ($event.target as HTMLSelectElement).value as GenreSortMode"
+                >
+                  <option value="trackCount-desc">按歌曲数量</option>
+                  <option value="name-asc">按名称 A-Z</option>
+                  <option value="name-desc">按名称 Z-A</option>
+                  <option value="added-newest">按最近添加</option>
+                </select>
+                <span class="genre-sort-caret" aria-hidden="true">▾</span>
+              </label>
             </div>
             <div class="header-right">
               <div v-if="isCollectionGrid" class="collection-view-controls" aria-label="分类与排序">
@@ -2931,6 +3326,33 @@ watch(
                   </select>
                 </label>
               </div>
+              <div
+                v-if="category === 'genres'"
+                class="genre-view-controls"
+                aria-label="流派排序与工具"
+              >
+                <button
+                  type="button"
+                  class="genre-add-trigger"
+                  :class="{ active: showAddGenreBar }"
+                  :aria-expanded="showAddGenreBar"
+                  @click="showAddGenreBar = !showAddGenreBar"
+                >
+                  <i class="pi pi-plus" aria-hidden="true"></i>
+                  <span>新建流派</span>
+                </button>
+                <button
+                  v-if="databaseGridEnabled"
+                  type="button"
+                  class="genre-workspace-toggle"
+                  :class="{ active: genreWorkspaceOpen }"
+                  :aria-expanded="genreWorkspaceOpen"
+                  @click="genreWorkspaceOpen = !genreWorkspaceOpen"
+                >
+                  <i class="pi pi-sitemap" aria-hidden="true"></i>
+                  <span>流派层级与整理</span>
+                </button>
+              </div>
               <div class="search-box" :class="{ focused: searchInputFocused }">
                 <ThemeIcon class="search-icon" icon-slot="library.search" />
                 <input
@@ -2940,18 +3362,82 @@ watch(
                   :placeholder="
                     category === 'playlists' && showGrid
                       ? '搜索歌单'
-                      : '搜索歌曲、歌手、专辑或文件夹'
+                      : category === 'genres' && showGrid
+                        ? '搜索流派'
+                        : '搜索歌曲、歌手、专辑或文件夹'
                   "
+                  :aria-label="category === 'genres' ? '搜索流派' : undefined"
                   @focus="searchInputFocused = true"
                   @blur="searchInputFocused = false"
                 />
-                <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
+                <button
+                  v-if="searchQuery"
+                  class="search-clear"
+                  aria-label="清除搜索"
+                  @click="searchQuery = ''"
+                >
                   <ThemeIcon icon-slot="library.clear" />
                 </button>
               </div>
             </div>
           </div>
-          <div v-if="databaseGridEnabled" class="database-page-controls" aria-label="分类读取状态">
+          <div
+            v-if="category === 'genres' && showAddGenreBar"
+            class="genre-add-bar"
+            role="region"
+            aria-label="添加新流派"
+          >
+            <div class="genre-add-form">
+              <input
+                v-model="newGenreName"
+                type="text"
+                class="genre-add-input"
+                placeholder="输入新流派名称（例如：Pop/Rock、Jazz、ACG）…"
+                aria-label="新流派名称"
+                @keydown.enter.prevent="addCustomGenre()"
+                @keydown.esc.prevent="showAddGenreBar = false"
+              />
+              <button
+                type="button"
+                class="genre-add-submit"
+                :disabled="!newGenreName.trim()"
+                @click="addCustomGenre()"
+              >
+                添加流派
+              </button>
+              <button
+                type="button"
+                class="genre-add-cancel"
+                @click="showAddGenreBar = false"
+              >
+                收起
+              </button>
+            </div>
+            <div v-if="availableQuickGenreSuggestions.length > 0" class="genre-quick-suggestions">
+              <span class="genre-quick-label">快速添加：</span>
+              <button
+                v-for="suggestion in availableQuickGenreSuggestions"
+                :key="suggestion"
+                type="button"
+                class="genre-quick-chip"
+                @click="addCustomGenre(suggestion)"
+              >
+                + {{ suggestion }}
+              </button>
+            </div>
+          </div>
+          <div
+            v-if="databaseGridEnabled && category === 'genres' && genreWorkspaceOpen"
+            class="genre-workspace-drawer"
+          >
+            <GenreBrowsePanel />
+            <GenreWorkspacePanel />
+          </div>
+          <div
+            v-if="databaseGridEnabled && category !== 'genres'"
+            class="database-page-controls"
+            aria-label="分类读取状态"
+          >
             <span role="status" aria-live="polite"
               >{{
                 databaseCollectionState.total === null
@@ -3010,7 +3496,11 @@ watch(
           </div>
           <div
             v-else-if="
-              databaseGridEnabled && category !== 'playlists' && collectionResultCount === 0
+              databaseGridEnabled &&
+              category !== 'playlists' &&
+              (category === 'genres'
+                ? genreMosaicItems.length === 0
+                : collectionResultCount === 0)
             "
             class="empty-state"
           >
@@ -3048,11 +3538,11 @@ watch(
             <p class="empty-hint">请更改流派筛选或搜索条件</p>
           </div>
           <div
-            v-else-if="!databaseGridEnabled && category === 'genres' && genres.length === 0"
+            v-else-if="!databaseGridEnabled && category === 'genres' && genreMosaicItems.length === 0"
             class="empty-state"
           >
             <p class="empty-text">暂无流派</p>
-            <p class="empty-hint">导入带流派标签的音乐，或完整重扫媒体库以回填</p>
+            <p class="empty-hint">导入带流派标签的音乐，或点击右上角「新建流派」自行添加</p>
           </div>
           <div
             v-else-if="!databaseGridEnabled && category === 'folders' && folders.length === 0"
@@ -3064,7 +3554,13 @@ watch(
             <p class="empty-text">暂无可显示的文件夹</p>
             <p class="empty-hint">打开左侧菜单，点击「导入歌曲」选择并扫描音乐文件夹。</p>
           </div>
-          <div v-else-if="gridTotalCount === 0 && category !== 'playlists'" class="empty-state">
+          <div
+            v-else-if="
+              (category === 'genres' ? genreMosaicItems.length === 0 : gridTotalCount === 0) &&
+              category !== 'playlists'
+            "
+            class="empty-state"
+          >
             <p class="empty-text">没有符合搜索条件的内容</p>
             <p class="empty-hint">请清除搜索内容后重试</p>
           </div>
@@ -3072,7 +3568,66 @@ watch(
             <p v-if="category === 'playlists'" class="playlist-order-notice" role="status">
               {{ playlistOrderNotice || '长按歌单拖动排序，顺序保存在当前设备。' }}
             </p>
-            <div class="card-grid" data-reorder-group @click.capture="localPlaylistReorder.click">
+            <div
+              class="card-grid"
+              :class="{ 'genre-mosaic-grid': category === 'genres' }"
+              data-reorder-group
+              @click.capture="localPlaylistReorder.click"
+            >
+              <template v-if="category === 'genres'">
+                <div
+                  v-for="(item, index) in genreMosaicItems"
+                  :key="item.id ?? item.name"
+                  class="genre-card"
+                  :class="[
+                    genreTileSpanClass(index),
+                    `genre-tone-${item.toneIndex}`,
+                    { 'has-cover': Boolean(item.cover || item.coverSource || item.coverTrackId) }
+                  ]"
+                  :data-collection-index="index"
+                  :aria-label="`${item.name}，${item.trackCount ?? 0} 首歌曲`"
+                  role="button"
+                  tabindex="0"
+                  data-te-interactive
+                  @keydown="activateCollectionCard"
+                  @click="emit('selectView', 'genres', `genre:${item.filterName ?? item.name}`)"
+                >
+                  <div class="genre-card-backdrop" aria-hidden="true">
+                    <ThemeIcon class="genre-card-watermark" icon-slot="library.genre" />
+                  </div>
+                  <CoverImg
+                    v-if="item.cover || item.coverSource || item.coverTrackId"
+                    :cover="item.cover"
+                    :cover-source="item.coverSource"
+                    :core-track-id="
+                      previewTracks || item.cover || item.coverSource
+                        ? undefined
+                        : item.coverTrackId
+                    "
+                    :identity="item.id ?? item.name"
+                    class="genre-card-bg"
+                    alt=""
+                    fallback=""
+                    loading="lazy"
+                  />
+                  <div class="genre-card-scrim" aria-hidden="true"></div>
+                  <button
+                    v-if="item.isCustom && !item.trackCount"
+                    type="button"
+                    class="genre-card-remove"
+                    :title="`移除流派 ${item.name}`"
+                    :aria-label="`移除流派 ${item.name}`"
+                    @click.stop="removeCustomGenre(item.name)"
+                  >
+                    ×
+                  </button>
+                  <div class="genre-card-overlay">
+                    <span v-if="item.trackCount" class="genre-card-count">{{ item.trackCount }} 首</span>
+                    <div class="genre-card-title" :title="item.name">{{ item.name }}</div>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
               <div
                 v-if="gridPaddingTop > 0"
                 class="grid-virtual-spacer"
@@ -3119,17 +3674,32 @@ watch(
                       data-te-interactive
                       @click="emit('selectView', 'artists', `artist:${item.name}`)"
                     >
-                      <CoverImg
-                        v-if="item.cover"
+                      <ArtistMetadataIdentity
+                        :name="item.name"
                         :cover="item.cover"
-                        class="artist-cover"
-                        alt="cover"
-                        loading="lazy"
-                      />
-                      <div v-else class="artist-cover-placeholder">
-                        <ThemeIcon class="library-placeholder-icon" icon-slot="library.artist" />
-                      </div>
-                      <div class="artist-name">{{ item.name }}</div>
+                        :enabled="!props.previewTracks"
+                        v-slot="artist"
+                      >
+                        <CoverImg
+                          v-if="artist.cover"
+                          :cover="artist.cover"
+                          class="artist-cover"
+                          :alt="artist.name"
+                          loading="lazy"
+                          fallback=""
+                        >
+                          <template #placeholder>
+                            <div class="artist-cover-placeholder">
+                              <ThemeIcon class="library-placeholder-icon" icon-slot="library.artist" />
+                            </div>
+                          </template>
+                        </CoverImg>
+                        <div v-else class="artist-cover-placeholder">
+                          <ThemeIcon class="library-placeholder-icon" icon-slot="library.artist" />
+                        </div>
+                        <ArtistImageCredit v-if="artist.attribution" :attribution="artist.attribution" />
+                        <div class="artist-name" :title="artist.name">{{ artist.name }}</div>
+                      </ArtistMetadataIdentity>
                       <div class="artist-count">{{ item.trackCount }} 首</div>
                     </div>
                   </template>
@@ -3141,30 +3711,6 @@ watch(
                       :data-collection-letter="collectionIndexLetter(item.name) ?? undefined"
                       @open="emit('selectView', 'albums', `album:${item.id}`)"
                     />
-                  </template>
-                  <!-- Genre Cards -->
-                  <template v-if="category === 'genres'">
-                    <div
-                      class="artist-card"
-                      role="button"
-                      tabindex="0"
-                      @keydown="activateCollectionCard"
-                      data-te-interactive
-                      @click="emit('selectView', 'genres', `genre:${item.name}`)"
-                    >
-                      <CoverImg
-                        v-if="item.cover"
-                        :cover="item.cover"
-                        class="artist-cover"
-                        alt="cover"
-                        loading="lazy"
-                      />
-                      <div v-else class="artist-cover-placeholder">
-                        <ThemeIcon class="library-placeholder-icon" icon-slot="library.genre" />
-                      </div>
-                      <div class="artist-name">{{ item.name }}</div>
-                      <div class="artist-count">{{ item.trackCount }} 首</div>
-                    </div>
                   </template>
                   <!-- Playlist Cards -->
                   <template v-if="category === 'playlists'">
@@ -3205,12 +3751,7 @@ watch(
                       </div>
                       <div class="playlist-name">{{ item.name }}</div>
                       <div class="playlist-count">
-                        {{
-                          item.trackCount ??
-                          item.imported?.entries.length ??
-                          item.trackIds?.length ??
-                          0
-                        }}
+                        {{ item.trackCount ?? item.count ?? item.trackIds?.length ?? 0 }}
                         首
                       </div>
                       <div class="playlist-source-summary">
@@ -3265,6 +3806,7 @@ watch(
                 :style="{ height: `${gridPaddingBottom}px` }"
                 aria-hidden="true"
               ></div>
+              </template>
             </div>
             <nav v-if="isCollectionGrid" class="az-index" aria-label="A-Z 快捷索引">
               <button
@@ -3285,8 +3827,59 @@ watch(
           </div>
         </template>
         <template v-else>
-          <div class="song-list-header" :class="{ 'album-detail-toolbar': !!currentAlbum }">
-            <div v-if="!currentAlbum" class="header-left">
+          <ArtistDetailPage
+            v-if="isArtistDetail"
+            :key="filter!"
+            :name="filter!.slice(7)"
+            v-model:section="artistSection"
+            :play="playArtistTracks"
+            @open-album="emit('selectView', 'albums', `album:${$event}`)"
+            @back="emit('selectView', 'artists', null)"
+          />
+          <div
+            v-if="!isArtistDetail || artistSection === 'songs'"
+            :id="isArtistDetail ? 'artist-panel-songs' : undefined"
+            :role="isArtistDetail ? 'tabpanel' : undefined"
+            :aria-labelledby="isArtistDetail ? 'artist-tab-songs' : undefined"
+            :class="{ 'artist-songs-panel': isArtistDetail, 'album-detail-page': isAlbumDetail }"
+          >
+          <AlbumDetailHeader
+            v-if="currentAlbum"
+            :album="currentAlbum"
+            :duration-text="albumDurationText"
+            :can-play="tableTrackCount > 0 && !databaseReadPending"
+            :genres="albumGenres"
+            :format-text="albumFormatText"
+            :type-text="albumTypeText"
+            :favorited="albumAllFavorited"
+            :favorite-pending="libraryMutationPending"
+            @play="playAllTracks"
+            @shuffle="shufflePlayTracks"
+            @favorite="favoriteCurrentAlbum"
+            @add-to-playlist="addCurrentAlbumToPlaylist"
+            @open-versions="openMusicVersions"
+            @open-genre="openAlbumGenre"
+            @open-artist="emit('selectView', 'artists', `artist:${$event}`)"
+          />
+          <div :class="{ 'album-detail-layout': isAlbumDetail }">
+            <EntityMetadataPanel
+              v-if="isAlbumDetail && metadataTarget"
+              :target="metadataTarget"
+              :album-summary="currentAlbumSummary"
+              :show-artwork="false"
+              presentation="album-overview"
+              :favorited="albumAllFavorited"
+              :favorite-pending="libraryMutationPending"
+              @toggle-favorite="favoriteCurrentAlbum"
+              @add-to-playlist="addCurrentAlbumToPlaylist"
+            />
+            <div ref="albumTracksRef" class="collection-tracks-main">
+          <div ref="trackToolbarRef" class="song-list-header" :class="{ 'album-detail-toolbar': !!currentAlbum || isArtistDetail }">
+            <div v-if="isAlbumDetail" class="album-tracks-heading">
+              <h3>歌曲</h3><span>{{ tableTrackCount }} 首</span>
+              <span v-if="databaseReadPending" class="album-tracks-loading" role="status" aria-live="polite">正在读取…</span>
+            </div>
+            <div v-if="!isAlbumDetail && !isArtistDetail" class="header-left">
               <div class="title-group">
                 <div class="title-line">
                   <h2 class="song-list-title">{{ viewTitle }}</h2>
@@ -3333,13 +3926,14 @@ watch(
                 @repair="handlePlaylistRepair"
               />
               <button
-                v-if="category === 'albums'"
+                v-if="category === 'albums' && !isAlbumDetail"
                 type="button"
                 class="library-tools-trigger album-version-trigger"
                 @click="openMusicVersions"
               >
                 专辑版本管理
               </button>
+              <button v-if="isAlbumDetail && databaseTableEnabled" type="button" class="album-tracks-refresh" aria-label="刷新歌曲" title="刷新歌曲" :disabled="databaseReadPending" @click="databasePages.invalidate()"><i class="pi pi-refresh" aria-hidden="true"></i></button>
               <div
                 v-if="category === 'allSongs'"
                 class="library-tools-dropdown"
@@ -3382,7 +3976,7 @@ watch(
                     role="menuitem"
                     @click="openLibraryInbox"
                   >
-                    <i class="pi pi-inbox"></i><span>曲库整理收件箱</span>
+                    <i class="pi pi-inbox"></i><span>音乐库整理</span>
                   </button>
                   <button
                     type="button"
@@ -3702,38 +4296,52 @@ watch(
                   </div>
                 </div>
               </div>
-              <label
-                v-if="showOnlineSearchToggle"
-                class="online-search-toggle"
-                title="搜索网络歌曲"
-              >
-                <span>网络搜索</span>
-                <input v-model="searchOnlineSongs" type="checkbox" aria-label="搜索网络歌曲" />
-                <span class="online-search-toggle-track" aria-hidden="true"></span>
-              </label>
               <div class="search-box" :class="{ focused: searchInputFocused }">
                 <ThemeIcon class="search-icon" icon-slot="library.search" />
                 <input
                   v-model="searchQuery"
                   type="text"
                   class="search-input"
-                  placeholder="搜索歌曲、歌手、专辑或文件夹"
+                  :placeholder="isAlbumDetail ? '搜索本专辑歌曲' : '搜索歌曲、歌手、专辑或文件夹'"
+                  :aria-label="isAlbumDetail ? '搜索本专辑歌曲' : '搜索歌曲、歌手、专辑或文件夹'"
                   @focus="searchInputFocused = true"
                   @blur="searchInputFocused = false"
                 />
                 <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
                   <ThemeIcon icon-slot="library.clear" />
                 </button>
+                <label
+                  v-if="showOnlineSearchToggle"
+                  class="online-search-toggle"
+                  title="搜索网络歌曲"
+                >
+                  <span>网络搜索</span>
+                  <input v-model="searchOnlineSongs" type="checkbox" aria-label="搜索网络歌曲" />
+                  <span class="online-search-toggle-track" aria-hidden="true"></span>
+                </label>
               </div>
             </div>
           </div>
-          <AlbumDetailHeader
-            v-if="currentAlbum"
-            :album="currentAlbum"
-            :duration-text="albumDurationText"
-            :can-play="tableTrackCount > 0 && !databaseReadPending"
-            @play="playAllTracks"
-            @shuffle="shufflePlayTracks"
+          <div class="library-quick-drawers">
+            <MusicTagsPanel
+              v-if="!previewTracks && category === 'allSongs'"
+              label="音乐库"
+              scope="library-tags"
+            />
+            <MusicFocusPanel
+              v-if="!previewTracks && category === 'allSongs'"
+              scope="library-focus"
+            />
+          </div>
+          <EntityMetadataPanel
+            v-if="metadataTarget && !isArtistDetail && !isAlbumDetail"
+            :target="metadataTarget"
+            :album-summary="currentAlbumSummary"
+            :show-artwork="!isAlbumDetail"
+            :favorited="albumAllFavorited"
+            :favorite-pending="libraryMutationPending"
+            @toggle-favorite="favoriteCurrentAlbum"
+            @add-to-playlist="addCurrentAlbumToPlaylist"
           />
           <p
             v-if="databaseAlbumEnabled && databaseAlbumState.error"
@@ -3746,7 +4354,7 @@ watch(
             </button>
           </p>
           <nav
-            v-if="databaseTableEnabled"
+            v-if="databaseTableEnabled && !isAlbumDetail"
             class="database-page-controls database-track-window-status"
             aria-label="曲库浏览"
           >
@@ -3783,6 +4391,7 @@ watch(
               databaseReadError
             }}</span>
           </nav>
+          <p v-if="isAlbumDetail && databaseReadError && databasePageState.total !== null" class="repair-status" role="alert">{{ databaseReadError }} <button type="button" class="selection-btn" @click="retryDatabaseRead">重试</button></p>
           <div
             v-if="showUnifiedSearchStatus"
             class="unified-search-status"
@@ -3812,6 +4421,7 @@ watch(
               </span>
             </div>
           </div>
+          <MusicExplorationSearch v-if="!props.previewTracks && !isArtistDetail && debouncedSearchQuery.trim()" :query="debouncedSearchQuery" />
           <div
             v-if="databaseReadError && databasePageState.total === null"
             class="empty-state"
@@ -3971,9 +4581,9 @@ watch(
               <thead>
                 <tr>
                   <th class="col-index">#</th>
-                  <th class="col-cover-header"></th>
+                  <th v-if="!isAlbumDetail || hasSelection" class="col-cover-header"></th>
                   <th class="col-info">标题</th>
-                  <th class="col-album">专辑</th>
+                  <th v-if="!isAlbumDetail" class="col-album">专辑</th>
                   <th class="col-duration">时长</th>
                 </tr>
               </thead>
@@ -3983,7 +4593,7 @@ watch(
                   :style="{ height: paddingTop + 'px' }"
                   aria-hidden="true"
                 >
-                  <td colspan="5"></td>
+                  <td :colspan="isAlbumDetail ? (hasSelection ? 4 : 3) : 5"></td>
                 </tr>
                 <template
                   v-for="(track, index) in visibleTracks"
@@ -4018,7 +4628,7 @@ watch(
                       </span>
                       <span v-else>{{ trackListNumber(track, Number(index)) }}</span>
                     </td>
-                    <td class="col-cover">
+                    <td v-if="!isAlbumDetail || hasSelection" class="col-cover">
                       <div class="track-cover-cell" :class="{ 'has-selection': hasSelection }">
                         <label
                           v-if="hasSelection"
@@ -4040,9 +4650,11 @@ watch(
                           </span>
                         </label>
                         <CoverImg
+                          v-if="!isAlbumDetail"
                           :cover="displayTrackCover(track)"
                           :cover-source="displayTrackCoverSource(track)"
                           :identity="track.id"
+                          :core-track-id="previewTracks ? undefined : track.id"
                           class="cover-img"
                           alt="cover"
                         />
@@ -4085,7 +4697,7 @@ watch(
                         {{ track.artist }}
                       </button>
                     </td>
-                    <td class="col-album">
+                    <td v-if="!isAlbumDetail" class="col-album">
                       <button
                         type="button"
                         class="metadata-link"
@@ -4109,9 +4721,9 @@ watch(
                     :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
                   >
                     <td class="col-index">{{ visibleRange.start + index + 1 }}</td>
-                    <td class="col-cover"><span class="pending-cover"></span></td>
+                    <td v-if="!isAlbumDetail || hasSelection" class="col-cover"><span class="pending-cover"></span></td>
                     <td class="col-info"><span class="pending-line"></span></td>
-                    <td class="col-album"><span class="pending-line"></span></td>
+                    <td v-if="!isAlbumDetail" class="col-album"><span class="pending-line"></span></td>
                     <td class="col-duration"></td>
                   </tr>
                 </template>
@@ -4122,7 +4734,7 @@ watch(
                   }"
                   aria-hidden="true"
                 >
-                  <td colspan="5"></td>
+                  <td :colspan="isAlbumDetail ? (hasSelection ? 4 : 3) : 5"></td>
                 </tr>
               </tbody>
             </table>
@@ -4365,6 +4977,9 @@ watch(
               </NativeContextMenu>
             </Teleport>
           </div>
+            </div>
+          </div>
+          </div>
         </template>
       </div>
     </Transition>
@@ -4441,11 +5056,8 @@ watch(
     <Teleport to="body">
       <NativeDialogTransition>
         <LibraryLoudnessDialog
-          v-if="loudnessOpen"
-          :library-tracks="tracks"
-          :selected-tracks="loudnessSelection"
-          :resolve-plan="loudnessPlanResolver"
-          :albums="albums"
+          v-if="loudnessOpen && loudnessSelection"
+          :selection="loudnessSelection"
           :restore-focus="loudnessFocusTarget"
           @close="loudnessOpen = false"
         />
@@ -4465,7 +5077,7 @@ watch(
       <NativeDialogTransition overlay :restore-focus="libraryToolsTrigger">
         <LibraryInboxDialog
           v-if="showLibraryInbox"
-          :tracks="tracks"
+          :tracks="[]"
           :scanning="isScanning"
           :rescan="startFullLibraryScan"
           :restore-focus="libraryToolsTrigger"
@@ -4479,10 +5091,10 @@ watch(
       <Transition name="dialog-fade">
         <div v-if="showTagManager" class="dialog-overlay" @click.self="closeTagManager">
           <LocalLibraryTagManager
-            :key="`${tagManagerInitialView}:${tagManagerTracks.map((track) => track.id).join(',')}`"
+            :key="tagManagerInstance"
             :initial-view="tagManagerInitialView"
             :tracks="tagManagerTracks"
-            :current-tracks="databaseTableEnabled ? tagManagerTracks : tracks"
+            :selection="tagManagerSelection"
             @close="closeTagManager"
             @applied="applyTagManagerWrite"
           />

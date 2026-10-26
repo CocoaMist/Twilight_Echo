@@ -13,6 +13,7 @@ export class PlaylistRepairScanSession {
   private operation: Promise<void> | null = null
   private sequence = 0
   private stopped = false
+  private cacheSuspended = false
   readonly id: string
   private readonly send: (message: LocalLibraryScanWorkerRequest) => void
   private readonly stopWorker: () => void
@@ -38,7 +39,7 @@ export class PlaylistRepairScanSession {
   }
   private touch(): void {
     clearTimeout(this.timer)
-    if (!this.stopped && !this.operation)
+    if (!this.stopped && !this.operation && !this.cacheSuspended)
       this.timer = setTimeout(
         () => this.fail(new Error('歌单候选扫描超时，请重新修复')),
         this.watchdogMs
@@ -89,6 +90,10 @@ export class PlaylistRepairScanSession {
         if (this.operation === operation) this.operation = null
         this.touch()
       })
+  }
+  setCacheSuspended(suspended: boolean): void {
+    this.cacheSuspended = suspended
+    this.touch()
   }
   fail(error: unknown): void {
     if (this.stopped) return

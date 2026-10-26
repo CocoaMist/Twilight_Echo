@@ -15,6 +15,7 @@ import {
 } from '../../shared/libraryCollections.ts'
 import { getPinyinInitials } from '../../shared/pinyinInitials.ts'
 import { resolveAlbumReleaseDate } from '../../shared/releaseDate.ts'
+import { SymSpellIndex, getMaxSymSpellTolerance } from '../../shared/searchRelevance.ts'
 import { libraryPageBounds } from './libraryDatabaseValidation.ts'
 
 type Row = Record<string, string | number | null>
@@ -23,6 +24,7 @@ type Select = (sql: string, params: SQLInputValue[]) => Row[]
 type Summary = LibraryCollectionSummary & {
   firstSeq: number
   coverSeq: number
+  coverSourceSeq: number
   matched: boolean
   genreMatched: boolean
   nameVariants: number
@@ -83,12 +85,11 @@ export class LibraryDatabaseCollections {
       !query.collectionGenre?.trim() &&
       !selection.sql
     ) {
-      // Preserve raw artist labels (including whitespace), not the trimmed sort
-      // column or structured credit membership used by artist detail queries.
+      // Use the same credited members as the page, without hydrating Track objects.
       if (this.artistTotal?.revision !== revision) {
         const rows = select(
-          `SELECT count(DISTINCT CASE WHEN typeof(label)='text' THEN label ELSE '' END) AS total
-          FROM (SELECT COALESCE(NULLIF(json_extract(payload,'$.artist'),''),'未知艺术家') AS label FROM tracks)`,
+          `SELECT count(DISTINCT credit.value) AS total FROM tracks,
+          json_each(library_artist_names(json_extract(payload,'$.artist'),json_extract(payload,'$.artists'),json_extract(payload,'$.identityTags'))) credit`,
           []
         )
         this.artistTotal = { revision, total: Number(rows[0].total) }
@@ -174,6 +175,7 @@ export class LibraryDatabaseCollections {
         trackCount: row.trackCount,
         duration: row.duration,
         cover: row.cover,
+        ...(row.coverSource !== undefined ? { coverSource: row.coverSource } : {}),
         addedAt: row.addedAt,
         ...(row.path !== undefined ? { path: row.path } : {}),
         ...(row.artist !== undefined ? { artist: row.artist } : {}),
@@ -195,7 +197,7 @@ export class LibraryDatabaseCollections {
   ): Summary[] {
     const columns = {
       albums: 'album_key',
-      artists: "COALESCE(NULLIF(json_extract(payload,'$.artist'),''),'未知艺术家')",
+      artists: "library_artist_names(json_extract(payload,'$.artist'),json_extract(payload,'$.artists'),json_extract(payload,'$.identityTags'))",
       genres: "COALESCE(json_extract(payload,'$.genre'),'未知流派')",
       folders:
         "library_normalize_path(library_collection_directory(json_extract(payload,'$.filePath'),json_extract(payload,'$.dir'),?))"
@@ -211,12 +213,14 @@ export class LibraryDatabaseCollections {
       SELECT ${columns[kind]} AS id,count(*) AS trackCount,max(added_at) AS addedAt,
         sum(CASE WHEN duration>0 THEN duration ELSE 0 END) AS duration,
         min(seq) AS firstSeq,min(CASE WHEN COALESCE(json_extract(payload,'$.cover'),'')<>'' THEN seq END) AS coverSeq,
+        min(CASE WHEN COALESCE(json_extract(payload,'$.coverSource'),'')<>'' THEN seq END) AS coverSourceSeq,
         ${match} AS matched${kind === 'albums' ? ",count(DISTINCT json_extract(payload,'$.album')) AS nameVariants,json_group_array(DISTINCT artist) AS artists,json_group_array(DISTINCT json_extract(payload,'$.albumArtist')) AS owners" : ''}
         ,${genreMatch} AS genreMatched
       FROM tracks ${selection.sql} GROUP BY 1
     ) SELECT g.*,json_extract(first.payload,'$.album') AS album,json_extract(first.payload,'$.filePath') AS filePath,
-      json_extract(first.payload,'$.dir') AS dir,json_extract(art.payload,'$.cover') AS cover
-      FROM groups g JOIN tracks first ON first.seq=g.firstSeq LEFT JOIN tracks art ON art.seq=g.coverSeq
+      json_extract(first.payload,'$.dir') AS dir,json_extract(art.payload,'$.cover') AS cover,
+      json_extract(art.payload,'$.coverSource') AS coverSource
+      FROM groups g JOIN tracks first ON first.seq=g.firstSeq LEFT JOIN tracks art ON art.seq=COALESCE(g.coverSeq,g.coverSourceSeq)
       ORDER BY g.firstSeq`,
       [
         ...(kind === 'folders' ? [JSON.stringify(roots)] : []),
@@ -244,6 +248,8 @@ export class LibraryDatabaseCollections {
       } else if (kind === 'genres') {
         const names = splitGenreValues(raw, query.genreSeparators)
         targets = (names.length ? names : ['未知流派']).map((id) => ({ id, name: id }))
+      } else if (kind === 'artists') {
+        targets = (JSON.parse(raw) as string[]).map((id) => ({ id, name: id }))
       } else
         targets = [
           {
@@ -262,6 +268,7 @@ export class LibraryDatabaseCollections {
             addedAt: 0,
             firstSeq: Number(row.firstSeq),
             coverSeq: Infinity,
+            coverSourceSeq: Infinity,
             matched: false,
             genreMatched: false,
             nameVariants: 0,
@@ -278,6 +285,18 @@ export class LibraryDatabaseCollections {
         if (typeof row.cover === 'string' && Number(row.coverSeq) < group.coverSeq) {
           group.cover = row.cover
           group.coverSeq = Number(row.coverSeq)
+          if (typeof row.coverSource === 'string' && row.coverSource) {
+            group.coverSource = row.coverSource
+            group.coverSourceSeq = Number(row.coverSeq)
+          }
+        } else if (
+          !group.cover &&
+          typeof row.coverSource === 'string' &&
+          row.coverSource &&
+          Number(row.coverSourceSeq) < group.coverSourceSeq
+        ) {
+          group.coverSource = row.coverSource
+          group.coverSourceSeq = Number(row.coverSourceSeq)
         }
         if (kind === 'albums') {
           group.nameVariants += Number(row.nameVariants)
@@ -320,15 +339,32 @@ export class LibraryDatabaseCollections {
         .split(/\s+/u)
         .map(normalizeCollectionSearch)
         .filter(Boolean)
-      return groups.filter((group) => {
-        if (!group.genreMatched || !terms.length) return false
-        if (query.collectionSearchMode === 'artistName')
-          return normalizeCollectionSearch(group.name).includes(q)
-        const blob = [group.name, group.artist ?? '']
-          .flatMap((value) => [normalizeCollectionSearch(value), getPinyinInitials(value)])
-          .join('\0')
-        return terms.every((term) => blob.includes(term))
-      })
+      const matchTerms = (activeTerms: string[], activeQuery: string) =>
+        groups.filter((group) => {
+          if (!group.genreMatched || !activeTerms.length) return false
+          if (query.collectionSearchMode === 'artistName')
+            return normalizeCollectionSearch(group.name).includes(activeQuery)
+          const blob = [group.name, group.artist ?? '']
+            .flatMap((value) => [normalizeCollectionSearch(value), getPinyinInitials(value)])
+            .join('\0')
+          return activeTerms.every((term) => blob.includes(term))
+        })
+      const direct = matchTerms(terms, q)
+      if (direct.length > 0 || !terms.some((term) => getMaxSymSpellTolerance(term) > 0)) {
+        return direct
+      }
+      const symSpell = new SymSpellIndex()
+      for (const group of groups) {
+        if (!group.genreMatched) continue
+        symSpell.addText(group.name, 3)
+        if (group.artist) symSpell.addText(group.artist, 2)
+      }
+      const suggestion = symSpell.suggestQuery(query.search ?? '')
+      if (!suggestion) return direct
+      return matchTerms(
+        suggestion.tokens,
+        normalizeCollectionSearch(suggestion.correctedQuery)
+      )
     }
     return groups.filter(
       (group) =>

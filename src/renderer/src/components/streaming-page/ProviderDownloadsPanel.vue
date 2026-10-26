@@ -2,12 +2,12 @@
 import { computed, ref } from 'vue'
 import DownloadResultActions from './DownloadResultActions.vue'
 import { useEscapeToClose, useFocusTrap } from '../../app/useDismissLayer.ts'
-import type { ProviderDownloadTaskSnapshot } from '../../../../shared/providerDownloads.ts'
+import type { CoreDownloadTask } from '../../../../shared/coreDownloads.ts'
 import { downloadStatusLabel, filterActiveDownloadTasks } from './streamingDownloads.ts'
 
 const props = defineProps<{
   show: boolean
-  tasks: ProviderDownloadTaskSnapshot[]
+  tasks: CoreDownloadTask[]
 }>()
 
 const emit = defineEmits<{
@@ -25,7 +25,7 @@ useEscapeToClose(
   () => emit('close')
 )
 
-function isRunning(task: ProviderDownloadTaskSnapshot): boolean {
+function isRunning(task: CoreDownloadTask): boolean {
   return task.status === 'queued' || task.status === 'preparing' || task.status === 'downloading'
 }
 
@@ -106,13 +106,6 @@ function formatFileSize(bytes: number): string {
                   task.warning
                 }}</small>
                 <small v-if="task.error" class="provider-download-error">{{ task.error }}</small>
-                <small
-                  v-if="task.targetPath && task.status === 'completed'"
-                  class="provider-download-path"
-                  :title="task.targetPath"
-                >
-                  {{ task.targetPath }}
-                </small>
                 <DownloadResultActions v-if="task.status === 'completed'" :task="task" />
               </div>
               <div class="provider-download-item-actions">
@@ -334,13 +327,6 @@ function formatFileSize(bytes: number): string {
   font-size: calc(var(--te-font-size-body) * 11 / 14);
   color: var(--te-danger-soft-fg);
   word-break: break-word;
-}
-
-.provider-download-path {
-  font-size: calc(var(--te-font-size-body) * 11 / 14);
-  color: var(--te-settings-text-muted);
-  word-break: break-all;
-  font-family: monospace;
 }
 
 .provider-download-item-actions {

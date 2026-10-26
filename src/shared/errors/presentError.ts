@@ -133,5 +133,11 @@ function classifyPlatformError(message: string, locale: AppLocale): string | nul
   if (NETWORK_PATTERN.test(message)) return translate(locale, 'error.network.failed')
   if (UNAUTHORIZED_PATTERN.test(message)) return translate(locale, 'error.network.unauthorized')
   if (RATE_LIMIT_PATTERN.test(message)) return translate(locale, 'error.network.rate_limited')
+  if (
+    /Audio decoder (?:receive|send|flush) failed|Audio frame conversion failed|Audio source read failed/i.test(
+      message
+    )
+  )
+    return translate(locale, 'error.audio.decode_failed')
   return null
 }

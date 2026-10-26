@@ -1,53 +1,53 @@
-import { onBeforeUnmount, onMounted, watch } from 'vue'
-import { musicVersionRevision } from '../stores/musicVersions.ts'
-import { useMusicStore } from '../stores/useMusicStore.ts'
+import { onBeforeUnmount, watch } from 'vue'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import type { CoreCollectionSearchQuery } from '../../../shared/coreSearch.ts'
+import type { LibrarySearchSnapshot } from '../../../shared/unifiedMusicSearch.ts'
 
-/** Lazy, component-owned reads. Rendering an unused search (including previews)
- * must not load a library. All local consumers share the same invalidation rules. */
+/** Component-owned read cancellation only; matching and search belong to Core. */
 export function useLibraryUnifiedSearch(
   onInvalidate?: (revision?: number) => void,
   options?: { listen?: boolean }
 ) {
-  const store = useMusicStore()
-  let source: ReturnType<typeof store.createUnifiedSearchSource> | null = null
-  let minimumRevision = 0
-  let disposed = false
-  let unsubscribe: (() => void) | undefined
-  function getSource() {
-    if (disposed) throw new DOMException('Search was cancelled', 'AbortError')
-    if (!source) {
-      source = store.createUnifiedSearchSource()
-      source.invalidate(minimumRevision)
-    }
-    return source
+  const core = useCoreConnection()
+  const lifetime = new AbortController()
+  const signalFor = (signal?: AbortSignal) => AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])])
+  const stop =
+    options?.listen === false
+      ? () => {}
+      : watch(
+          [
+            () => core.state.value?.epoch,
+            () => core.state.value?.libraryRevision,
+            () => core.state.value?.versionsRevision
+          ],
+          ([, revision], previous) => {
+            if (previous[0] !== undefined) onInvalidate?.(revision ?? undefined)
+          }
+        )
+  onBeforeUnmount(() => { lifetime.abort(); stop() })
+  const songs = (query: string, limit = 30, offset = 0, signal?: AbortSignal) =>
+    core.query('search.songs', { query, scope: 'local', limit, offset }, signalFor(signal))
+  async function collections(kind: CoreCollectionSearchQuery['kind'], query: string, limit = 30, offset = 0, signal?: AbortSignal) {
+    const page = await core.query('search.collections', { kind, query, scope: 'local', limit, offset }, signalFor(signal))
+    return { ...page, items: page.items.map((item) => ({ ...item, cover: item.cover ?? null,
+      picUrl: item.picUrl ?? null, trackCount: item.trackCount ?? 0 })) }
   }
-  onMounted(() => {
-    if (options?.listen === false) return
-    unsubscribe = window.api?.library?.onChanged?.((change) => {
-      if (change?.kind !== 'database' || change.revision <= minimumRevision) return
-      minimumRevision = change.revision
-      source?.invalidate(change.revision)
-      onInvalidate?.(change.revision)
-    })
-  })
-  watch(musicVersionRevision, () => onInvalidate?.())
-  onBeforeUnmount(() => {
-    disposed = true
-    unsubscribe?.()
-    source?.dispose()
-  })
   return {
-    search: (...args: Parameters<ReturnType<typeof getSource>['search']>) =>
-      getSource().search(...args),
-    searchLocal: (...args: Parameters<ReturnType<typeof getSource>['searchLocal']>) =>
-      getSource().searchLocal(...args),
-    confirm: (...args: Parameters<ReturnType<typeof getSource>['confirm']>) =>
-      getSource().confirm(...args),
-    searchAlbums: (...args: Parameters<ReturnType<typeof getSource>['searchAlbums']>) =>
-      getSource().searchAlbums(...args),
-    searchArtists: (...args: Parameters<ReturnType<typeof getSource>['searchArtists']>) =>
-      getSource().searchArtists(...args),
-    resolveAlbum: (...args: Parameters<ReturnType<typeof getSource>['resolveAlbum']>) =>
-      getSource().resolveAlbum(...args)
+    search: songs, searchLocal: songs,
+    async confirm(page: LibrarySearchSnapshot, signal?: AbortSignal) {
+      const current = await core.query('library.metadata', {}, signalFor(signal))
+      if ((page.libraryRevision !== undefined && page.libraryRevision !== current.revision) ||
+        (page.preferenceRevision !== undefined && page.preferenceRevision !== core.state.value?.versionsRevision))
+        throw new Error('曲库在搜索期间发生变化，请重新搜索')
+    },
+    searchAlbums: (query: string, limit: number, offset: number, signal?: AbortSignal) => collections('albums', query, limit, offset, signal),
+    searchArtists: (query: string, limit: number, offset: number, signal?: AbortSignal) => collections('artists', query, limit, offset, signal),
+    async resolveAlbum(selection: { albumId: string } | { trackId: string }, signal?: AbortSignal) {
+      const page = await core.query('library.collections', { kind: 'albums', query: {
+        ...('albumId' in selection ? { albumId: selection.albumId } : { ids: [selection.trackId] }), limit: 1
+      } }, signalFor(signal))
+      if (!page.items[0]) throw new Error('这张专辑已不在本地音乐库中，请重新搜索')
+      return { mode: 'sqlite' as const, albumId: page.items[0].id }
+    }
   }
 }

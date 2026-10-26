@@ -58,7 +58,8 @@ test('production shell connects the title button, draft guard and full-window la
           name: 'appearance-shell-business-boundary',
           enforce: 'pre',
           resolveId(source) {
-            return /\/(useNcmStore|useProviderStore|useAppNoticeStore)(?:\.ts)?$/.test(source)
+            return /\/(useNcmStore|useProviderStore|useAppNoticeStore)(?:\.ts)?$/.test(source) ||
+              /\/extensions\/registry(?:\.ts)?$/.test(source)
               ? '\0shell-stores'
               : null
           },
@@ -66,6 +67,7 @@ test('production shell connects the title button, draft guard and full-window la
             if (id !== '\0shell-stores') return null
             return `import {ref} from 'vue';
             export const useNcmStore=()=>({isLoggedIn:ref(false),profile:ref(null)});
+            export const useExtensionRegistry=()=>({uiContributions:ref([])});
             export const useProviderStore=()=>({providers:ref([])});
             export const useAppNoticeStore=()=>({unreadCount:ref(0),activeTaskCount:ref(0),doNotDisturb:ref(false)});`
           }

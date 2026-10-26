@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { ProviderDownloadTaskSnapshot } from '../../../../shared/providerDownloads.ts'
+import type { CoreDownloadTask } from '../../../../shared/coreDownloads.ts'
 
 const { downloadStatusLabel, filterActiveDownloadTasks, formatDownloadProgress } = (await import(
   new URL('./streamingDownloads.ts', import.meta.url).href
@@ -8,20 +8,18 @@ const { downloadStatusLabel, filterActiveDownloadTasks, formatDownloadProgress }
 
 function createTask(
   id: string,
-  status: ProviderDownloadTaskSnapshot['status'],
-  overrides: Partial<ProviderDownloadTaskSnapshot> = {}
-): ProviderDownloadTaskSnapshot {
+  status: CoreDownloadTask['status'],
+  overrides: Partial<CoreDownloadTask> = {}
+): CoreDownloadTask {
   return {
     id,
     providerId: 'ncm',
-    providerJobId: `job-${id}`,
     track: { id, title: `Track ${id}`, artist: 'Artist' },
     requestedQuality: 'lossless',
     actualQuality: null,
     status,
     progress: 0,
     queuePosition: null,
-    targetPath: null,
     fileSize: null,
     error: null,
     createdAt: '2026-01-01T00:00:00.000Z',

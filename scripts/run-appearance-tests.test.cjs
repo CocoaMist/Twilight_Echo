@@ -28,6 +28,10 @@ test('unit mode cannot claim the UI tests and unsupported arguments fail closed'
       args.filter((arg) => /\.test\.(ts|cjs)$/.test(arg)),
       unit
     )
+    const pattern = args[args.indexOf('--test-skip-pattern') + 1]
+    assert.match('Chromium projects the actual editor', new RegExp(pattern))
+    assert.match('real input edge overlays follow viewport geometry', new RegExp(pattern))
+    assert.doesNotMatch('resolved full overrides the OS', new RegExp(pattern))
     return { status: 0 }
   })
   assert.throws(() => runAppearanceTests(['--unt']), /Usage:/)

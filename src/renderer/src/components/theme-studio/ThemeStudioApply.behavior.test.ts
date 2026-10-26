@@ -149,6 +149,7 @@ const runtime = String.raw`
 import {createApp,h,nextTick} from 'vue';
 import {useThemeStore} from '__RENDERER__/stores/useThemeStore.ts';
 import {useThemeStudioEditor} from '__RENDERER__/components/theme-studio/useThemeStudioEditor.ts';
+import {installCorePluginFixture} from '__RENDERER__/extensions/corePlugins.fixture.ts';
 import {storeThemeStudioRecovery} from '__RENDERER__/components/theme-studio/themeStudioRecovery.ts';
 import {createDefaultThemeLibraryDocument,normalizeThemeProfile,THEME_TOKEN_DEFINITIONS,TWILIGHT_DEFAULT_THEME,TWILIGHT_DEFAULT_THEME_ID} from '__RENDERER__/../../shared/theme.ts';
 import {normalizeAppBackgroundSettings,defaultCardAppearance} from '__RENDERER__/../../shared/appAppearance.ts';
@@ -184,6 +185,7 @@ window.api={
 
 window.runDarkApply=async options=>{
  configuration=options;sessionStorage.clear();storeThemeStudioRecovery(null);
+ await installCorePluginFixture();
  library={version:2,revision:0,savedAt:'2026-10-15T00:00:00.000Z',data:createDefaultThemeLibraryDocument()};
  window.fixtureSettings={theme:options.preference,accentColor:'blue',lightAccentColor:'blue',darkAccentColor:'blue',fontFamily:'system',fontRendering:'auto',uiDensity:'comfortable',appBackground:normalizeAppBackgroundSettings(),cardAppearance:defaultCardAppearance(),surfaceMaterial:'standard',liquidGlass:copy(DEFAULT_LIQUID_GLASS)};
  document.documentElement.dataset.theme=options.preference;

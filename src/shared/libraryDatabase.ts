@@ -100,6 +100,8 @@ export interface LibraryQuery {
   limit?: number
 }
 export interface LibraryPage {
+  /** Parallel to tracks; derived references never enter source tags or snapshots. */
+  catalog?: { revision: number; tracks: Array<import('./musicCatalog.ts').CatalogTrackReferences | null> }
   aggregate?: {
     /** Parallel to tracks for recording-row queries; variants use entryIds. */
     rows: Array<{
@@ -138,6 +140,8 @@ export interface LibraryPlaylistSourceSummary {
   additionalProviders?: number
 }
 export interface LibraryCollectionSummary {
+  /** Bounded preview; catalog.query(context) provides the complete paginated set. */
+  catalog?: import('./musicCatalog.ts').CatalogReferences
   id: string
   name: string
   trackCount: number
@@ -265,6 +269,10 @@ export interface LibraryScanCommit {
     dependencies?: LibraryScanDependency[]
     audioMetadata?: LibraryTrackRecord
     metadataReused?: boolean
+    /** Narrow legacy-date read; never replaces logical tracks. Published only at successful finish. */
+    releaseDateOnly?: true
+    /** An absent value on a successful date-only read clears an obsolete date. */
+    releaseDate?: string
   }>
 }
 export interface LibraryScanJob {
@@ -283,6 +291,8 @@ export interface LibraryScanDirectoryResult {
 }
 export interface LibraryScanWorkPage {
   identities: LocalLibraryFileIdentity[]
+  /** Subset of identities requiring only the legacy release-date backfill. */
+  releaseDateFilePaths?: string[]
   lastBatch: number
   state: LibraryScanJob['state']
 }
@@ -354,6 +364,8 @@ export interface LibraryDatabaseScanResult {
   removedFileCount: number
 }
 export interface LibraryQueueSnapshot {
+  canUndo?: boolean
+  undoLabel?: string | null
   id: string
   total: number
   index: number
@@ -397,6 +409,8 @@ export interface LibraryQueuePage {
 }
 
 export interface LibraryQueueReadOptions {
+  /** Exact indexed occurrence lookup; positions in the response remain absolute. */
+  occurrenceId?: string
   /** Reject an outdated displayed occurrence order before reading. */
   expectedRevision?: number
   /** Literal metadata substring; nonempty searches count/page matching

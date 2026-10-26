@@ -11,6 +11,7 @@ import type { AppStartupSnapshot } from '../../shared/appStartup.ts'
 import type { RendererClosePersistenceOutcome } from '../../shared/closePersistence.ts'
 import { normalizeIpcString } from '../security/ipcValidation.ts'
 import { consumePendingTrayNavigation } from '../integrations/trayPlayer.ts'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
 import {
   cancelAppUpdateDownload,
   checkForAppUpdate,
@@ -46,6 +47,16 @@ function normalizeRendererClosePersistenceOutcome(value: unknown): RendererClose
 export function registerAppIpc(ipcMain: IpcMain): void {
   ipcMain.handle('app:getStartupSnapshot', async (event): Promise<AppStartupSnapshot> => {
     assertTrustedIpcSender(event, 'app startup IPC')
+    const core = getCoreSettingsBridge()
+    if (core) {
+      const themeBootstrap = await core.request('themes.bootstrap', {})
+      return {
+        settings: await core.get(),
+        pendingNavigation: consumePendingTrayNavigation(),
+        systemTone: nativeTheme.shouldUseDarkColors ? 'dark' : 'pureWhite',
+        themeBootstrap
+      }
+    }
     const library = await loadThemeLibrary()
     await synchronizeThemePlayerBarDefault(library)
     const [settings, themeBootstrap] = await Promise.all([

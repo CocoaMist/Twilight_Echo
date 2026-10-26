@@ -16,6 +16,7 @@ import {
   resolveIslandAccent
 } from './islandPresentation.ts'
 import { VISUALIZER_BAR_COUNT, useIslandVisualizer } from './useIslandVisualizer.ts'
+import { useCoreConnection } from '../stores/coreConnection.ts'
 
 const defaultConfig = cloneDynamicIslandConfig(DEFAULT_DYNAMIC_ISLAND_CONFIG)
 const state = ref<DynamicIslandStateSnapshot>({ ...EMPTY_MINI_PLAYER_STATE, lyrics: [] })
@@ -45,7 +46,7 @@ const config = computed(() => presentation.value.config)
 const components = computed(() => config.value.components)
 const visualizer = useIslandVisualizer(
   computed(() => components.value.visualizer),
-  (options) => window.api.dynamicIsland.getVisualizationData(options)
+  useCoreConnection()
 )
 
 const islandStyle = computed<Record<string, string>>(() => ({

@@ -1,3 +1,4 @@
+import { createServicePort } from './services/servicePort.ts'
 import { initializeUtilityDiagnostics } from './diagnostics/utility.ts'
 import { observeDiagnosticOperation } from './diagnostics/observation.ts'
 import { writeDiagnostic } from './diagnostics/logger.ts'
@@ -31,50 +32,29 @@ type AudioServiceResponse = {
   error?: string
 }
 
-type ParentPort = {
-  postMessage: (
-    message:
-      | AudioServiceResponse
-      | { kind: 'pong'; requestId: string }
-      | { kind: 'ready'; capabilities: AudioServiceCapabilities }
-      | { kind: 'fatal'; error: string }
-  ) => void
-  on: (event: 'message', listener: (message: AudioServiceMessage) => void) => void
-}
-
-type ElectronParentPort = {
-  postMessage: ParentPort['postMessage']
-  on: (event: 'message', listener: (event: { data: AudioServiceMessage }) => void) => void
-}
-
-type NodeIpcProcess = {
-  send?: ParentPort['postMessage']
-  on?: (event: 'message', listener: (message: AudioServiceMessage) => void) => void
-}
-
-const maybeElectronParentPort = (process as unknown as { parentPort?: ElectronParentPort })
-  .parentPort
-const maybeNodeIpc = process as unknown as NodeIpcProcess
-const parentPort: ParentPort | null = maybeElectronParentPort
-  ? {
-      postMessage: (message) => maybeElectronParentPort.postMessage(message),
-      on: (_event, listener) =>
-        maybeElectronParentPort.on('message', (event) => listener(event.data))
+const servicePort = createServicePort<
+  AudioServiceMessage,
+  | AudioServiceResponse
+  | { kind: 'pong'; requestId: string }
+  | { kind: 'ready'; capabilities: AudioServiceCapabilities }
+  | { kind: 'fatal'; error: string }
+>({
+  supervise: (raw, reply) => {
+    const message = raw as { requestId: string }
+    try {
+      native?.Stop()
+      const rawInfo = native?.GetPlaybackInfo?.()
+      const info = typeof rawInfo === 'string' ? JSON.parse(rawInfo) : rawInfo
+      reply({
+        kind: 'supervisor:audio-stopped',
+        requestId: message.requestId,
+        stopped: !!native && info?.state === 'stopped'
+      })
+    } catch {
+      reply({ kind: 'supervisor:audio-stopped', requestId: message.requestId, stopped: false })
     }
-  : typeof maybeNodeIpc.send === 'function' && typeof maybeNodeIpc.on === 'function'
-    ? {
-        postMessage: (message) => {
-          maybeNodeIpc.send?.(message)
-        },
-        on: (_event, listener) => maybeNodeIpc.on?.('message', listener)
-      }
-    : null
-
-if (!parentPort) {
-  throw new Error('Twilight audio engine service must run with Electron parentPort or Node IPC')
-}
-
-const servicePort = parentPort
+  }
+})
 initializeUtilityDiagnostics('twilight-audio-engine')
 const nativeLoad = loadNativeBindingWithDiagnostics()
 const native = nativeLoad.binding

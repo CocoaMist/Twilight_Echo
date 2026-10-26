@@ -15,34 +15,28 @@ function fixture() {
   let sequence = 0
   const deliveries: LocalLibraryWatchChange[][] = []
   const watch = Object.assign(new EventEmitter(), { close() {} })
-  const runtime = {
-    libraryDatabase: {
-      enqueueWatcherChanges: (changes: LocalLibraryWatchChange[]) => deliveries.push(changes)
-    },
-    libraryWatcherDebounceMs: 350
-  }
-  const exports: { applyLibraryWatchers?: (folders: string[], enabled: boolean) => void } = {}
+  const exports: {
+    createLibraryWatchers?: typeof import('../../core/library/watcher.ts').createLibraryWatchers
+  } = {}
   const dependencies: Record<string, unknown> = {
-    fs: {
+    'node:fs': {
       watch: (_folder: string, _options: object, cb: typeof callback) => {
         callback = cb
         return watch
       },
       existsSync: () => true
     },
-    path,
-    '../core/runtime': { runtime },
-    './libraryRepository.ts': {
-      isActiveLibraryPathExcluded: () => false,
-      isLibraryPathMutationInProgress: () => false
-    },
+    'node:path': path,
     './watcherExtensions.ts': extensions,
-    './libraryWatcherPolling.ts': { LibraryWatcherPoller }
+    './watcherPolling.ts': { LibraryWatcherPoller }
   }
   runInNewContext(
-    ts.transpileModule(readFileSync(new URL('./watcher.ts', import.meta.url), 'utf8'), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
-    }).outputText,
+    ts.transpileModule(
+      readFileSync(new URL('../../core/library/watcher.ts', import.meta.url), 'utf8'),
+      {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+      }
+    ).outputText,
     {
       exports,
       console,
@@ -61,7 +55,20 @@ function fixture() {
     }
   )
   const root = path.resolve('media')
-  exports.applyLibraryWatchers!([root], true)
+  const watchers = exports.createLibraryWatchers!({
+    platform: 'win32',
+    now: () => new Date(),
+    debounceMs: () => 350,
+    database: () => ({
+      enqueueWatcherChanges: (changes) => deliveries.push(changes),
+      poll: async () => false
+    }),
+    coordinator: () => null,
+    isExcluded: () => false,
+    isMutating: () => false,
+    changed: () => {}
+  })
+  watchers.apply([root], true)
   return {
     root,
     deliveries,
@@ -75,7 +82,7 @@ function fixture() {
       timers.forEach((timer) => timer())
     },
     stop() {
-      exports.applyLibraryWatchers!([], false)
+      watchers.apply([], false)
     }
   }
 }

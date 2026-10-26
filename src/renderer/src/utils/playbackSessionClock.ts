@@ -1,6 +1,6 @@
 export type PlaybackTransportState = 'idle' | 'loading' | 'playing' | 'paused' | 'stalled' | 'ended'
 
-export type PlaybackSampleSource = 'native-time-pos' | 'native-info' | 'html-audio' | 'intent'
+export type PlaybackSampleSource = 'native-time-pos' | 'native-info' | 'intent'
 
 export interface PlaybackClockSnapshot {
   trackId: string

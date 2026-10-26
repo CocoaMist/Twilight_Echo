@@ -16,23 +16,13 @@ import { syncDesktopLyricsSettings } from '../integrations/desktopLyrics'
 import { applyRuntimeSettings } from '../integrations/shortcutsTray'
 import { reassertAfterglowShortcuts } from './AfterglowModeService.ts'
 import { applyLibraryWatchers } from '../library/watcher'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
 
-let settingsUpdateQueue: Promise<void> = Promise.resolve()
-
-export function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
-  // All windows and main-process callers share this queue. Build each snapshot
-  // only after the preceding update and its asynchronous engine work settle.
-  const update = settingsUpdateQueue.then(() => applyAppSettingsPatch(patch))
-  settingsUpdateQueue = update.then(
-    () => undefined,
-    () => undefined
-  )
-  return update
-}
-
-async function applyAppSettingsPatch(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
+export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
+  const core = getCoreSettingsBridge()
+  if (core) return core.update(patch)
   const previousLibraryFolders = runtime.appSettings.libraryFolders ?? []
-  let nextSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
+  const nextSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
   if (Object.prototype.hasOwnProperty.call(patch, 'autoMixMode')) {
     const accepted = await runtime.audioEngineManager?.setAutoMixMode(
       effectiveAutoMixMode(nextSettings.autoMixMode)
@@ -64,53 +54,6 @@ async function applyAppSettingsPatch(patch: Partial<AppSettings>): Promise<Setti
   const shouldUpdateWindowBackground =
     Object.prototype.hasOwnProperty.call(patch, 'theme') ||
     Object.prototype.hasOwnProperty.call(patch, 'appBackground')
-  let acknowledgedAudioState: AudioOutputState | undefined
-  if (
-    runtime.audioEngineManager &&
-    (shouldUpdateAudioOutput || shouldUpdateAudioDevice || shouldUpdateExclusiveMode)
-  ) {
-    let audioState: AudioOutputState
-    if (shouldUpdateAudioOutput) {
-      audioState = await runtime.audioEngineManager.setAudioOutput(
-        nextSettings.audioOutput,
-        nextSettings.audioDevice
-      )
-    } else if (shouldUpdateAudioDevice) {
-      audioState = await runtime.audioEngineManager.setAudioDevice(nextSettings.audioDevice)
-    } else {
-      audioState = await runtime.audioEngineManager.getAudioOutputState()
-    }
-
-    if (shouldUpdateExclusiveMode && audioState.exclusiveAvailable) {
-      audioState = await runtime.audioEngineManager.setExclusiveMode(
-        nextSettings.audioExclusiveMode
-      )
-    }
-
-    acknowledgedAudioState = audioState
-  }
-
-  if (shouldUpdateAudioOutputConfig) {
-    await runtime.audioEngineManager?.setOutputConfig(nextSettings.audioOutputConfig)
-  }
-
-  // Engine acknowledgements can also persist device-profile customizations.
-  // Retain those commits while applying this patch and the effective route.
-  nextSettings = normalizeAppSettings({
-    ...runtime.appSettings,
-    ...patch,
-    ...(acknowledgedAudioState
-      ? {
-          audioOutput: acknowledgedAudioState.output,
-          audioDevice: acknowledgedAudioState.device,
-          audioExclusiveMode: acknowledgedAudioState.exclusiveMode
-        }
-      : {})
-  })
-
-  // Rejected engine changes must never become the baseline of a later patch.
-  // Persist the acknowledged selection before publishing it to runtime consumers.
-  writeAppSettings(nextSettings)
   runtime.appSettings = nextSettings
   if (
     Object.prototype.hasOwnProperty.call(patch, 'autoMixStemMode') ||
@@ -125,6 +68,38 @@ async function applyAppSettingsPatch(patch: Partial<AppSettings>): Promise<Setti
       getWindowBackgroundColor(runtime.appSettings, nativeTheme.shouldUseDarkColors)
     )
   }
+
+  if (
+    runtime.audioEngineManager &&
+    (shouldUpdateAudioOutput || shouldUpdateAudioDevice || shouldUpdateExclusiveMode)
+  ) {
+    let audioState: AudioOutputState
+    if (shouldUpdateAudioOutput) {
+      audioState = await runtime.audioEngineManager.setAudioOutput(
+        runtime.appSettings.audioOutput,
+        runtime.appSettings.audioDevice
+      )
+    } else if (shouldUpdateAudioDevice) {
+      audioState = await runtime.audioEngineManager.setAudioDevice(runtime.appSettings.audioDevice)
+    } else {
+      audioState = await runtime.audioEngineManager.getAudioOutputState()
+    }
+
+    if (shouldUpdateExclusiveMode && audioState.exclusiveAvailable) {
+      audioState = await runtime.audioEngineManager.setExclusiveMode(
+        runtime.appSettings.audioExclusiveMode
+      )
+    }
+
+    runtime.appSettings = normalizeAppSettings({
+      ...runtime.appSettings,
+      audioOutput: audioState.output,
+      audioDevice: audioState.device,
+      audioExclusiveMode: audioState.exclusiveMode
+    })
+  }
+
+  writeAppSettings(runtime.appSettings)
 
   if (
     runtime.appSettings.musicCachePath &&
@@ -146,6 +121,10 @@ async function applyAppSettingsPatch(patch: Partial<AppSettings>): Promise<Setti
     } catch (err) {
       console.warn('应用合成 DSP 设置到音频引擎失败，已保留设置：', err)
     }
+  }
+
+  if (shouldUpdateAudioOutputConfig) {
+    await runtime.audioEngineManager?.setOutputConfig(runtime.appSettings.audioOutputConfig)
   }
 
   if (Object.prototype.hasOwnProperty.call(patch, 'discordRpcEnabled')) {

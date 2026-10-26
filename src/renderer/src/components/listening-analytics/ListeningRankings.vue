@@ -14,7 +14,7 @@ const props = defineProps<{
   tracks: Array<ListeningTrackStat & { id: string; resolvedTrack: Track | null }>
   artists: ListeningArtistStat[]
   sort: 'seconds' | 'plays'
-  currentTrack: Track | null
+  currentTrack: Pick<Track, 'id' | 'source'> | null
   navigableArtists: Set<string>
   canPlayList: boolean
 }>()
@@ -111,6 +111,7 @@ function isCurrent(track: Track | null): boolean {
               :cover="track.cover"
               :cover-source="track.coverSource"
               :identity="track.id"
+              :core-track-id="track.resolvedTrack?.id"
               fallback="./icon.png"
               alt="" /><span
               v-if="track.resolvedTrack"

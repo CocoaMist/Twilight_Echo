@@ -39,14 +39,14 @@ export function createLibraryCollectionPages(
   let disposed = false
   let desired: { generation: number; page: number } | null = null
 
-  function request(page: number): void {
+  function request(page: number, preservePage = false): void {
     if (disposed || !selection) return
     if (!Number.isSafeInteger(page) || page < 0) throw new Error('无效的分类页码')
     const generation = state.value.generation + 1
     desired = { generation, page }
     state.value = {
       ...state.value,
-      page: null,
+      page: preservePage ? state.value.page : null,
       requestedPage: page,
       loading: true,
       error: '',
@@ -98,6 +98,7 @@ export function createLibraryCollectionPages(
         if (!disposed && queryEpoch === epoch && demand.generation === state.value.generation)
           state.value = {
             ...state.value,
+            page: null,
             loading: false,
             error: error instanceof Error ? error.message : String(error)
           }
@@ -133,7 +134,10 @@ export function createLibraryCollectionPages(
       if (revision !== undefined) minimumRevision = revision
       epoch++
       cache.clear()
-      request(state.value.requestedPage)
+      // A committed revision refreshes this same page. Keep its presentation
+      // (not its cache) until the replacement arrives, so album headers do not
+      // unmount on every background metadata commit.
+      request(state.value.requestedPage, true)
     },
     get cacheState() {
       return {

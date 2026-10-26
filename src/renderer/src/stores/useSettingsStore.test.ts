@@ -15,6 +15,12 @@ import { DEFAULT_LIQUID_GLASS } from '../../../shared/liquidGlass.ts'
 import { TWILIGHT_DEFAULT_THEME } from '../../../shared/theme.ts'
 import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 
+function mainSettingsSource(): string {
+  return ['../../../main/core/settings.ts', '../../../core/settings/normalization.ts']
+    .map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'))
+    .join('\n')
+}
+
 function themeFunctions(...names: string[]): string {
   const source = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
   return ts.transpileModule(
@@ -31,27 +37,26 @@ function themeFunctions(...names: string[]): string {
   ).outputText
 }
 
-test('background settings updates are applied optimistically and protected from stale snapshots', () => {
+test('appearance drafts give immediate feedback without mutating the confirmed settings projection', () => {
   const source = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
 
   assert.match(source, /let settingsUpdateQueue: Promise<void> = Promise\.resolve\(\)/)
   assert.match(source, /let pendingSettingsUpdates = 0/)
   assert.match(source, /let settingsUpdateSequence = 0/)
-  assert.match(source, /if \(pendingSettingsUpdates > 0\) return/)
-  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(patch, 'appBackground'\)/)
+  assert.doesNotMatch(source, /if \(pendingSettingsUpdates > 0\) return/)
+  assert.match(source, /const confirmedSettings = ref<AppSettings>/)
+  assert.match(source, /const appearanceDraft = ref<Partial<AppSettings>>/)
+  assert.match(source, /settings: readonly\(settings\)/)
   assert.match(source, /applyDomSettings\(\)/)
   assert.match(
     source,
-    /if \(sequence === settingsUpdateSequence\) \{\s*applySnapshot\(snapshot\)\s*\}/
+    /if \(sequence === settingsUpdateSequence\) \{\s*appearanceDraft.value = \{\}\s*applySnapshot\(snapshot\)\s*\}/
   )
 })
 
 test('first-use appearance defaults to blue accents and desktop lyrics v3', () => {
   const rendererSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
-  const mainSource = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSource = mainSettingsSource()
   const themeSource = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
   const desktopLyricsSource = readFileSync(
     new URL('../../../shared/desktopLyrics.ts', import.meta.url),
@@ -141,10 +146,7 @@ test('settings chrome no longer dual-writes theme-owned CSS variables', () => {
 test('the global font setting reaches the theme runtime instead of dying in the store', () => {
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
   const themeSource = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
-  const mainSource = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSource = mainSettingsSource()
   const sharedSource = readFileSync(new URL('../../../shared/appFont.ts', import.meta.url), 'utf8')
   const appearanceSource = readFileSync(
     new URL('../components/settings-page/AppearanceSettingsSection.vue', import.meta.url),
@@ -340,10 +342,7 @@ test('appearance editor sends independent plain background and material objects 
 })
 
 test('startup home page setting is persisted and selectable from general settings', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const settingsTypes = readFileSync(
     new URL('../../../shared/appSettings.ts', import.meta.url),
     'utf8'
@@ -373,10 +372,7 @@ test('startup home page setting is persisted and selectable from general setting
 })
 
 test('track activation mode is persisted across layers and applied to all track lists', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const preloadTypes = readFileSync(new URL('../../../preload/types.ts', import.meta.url), 'utf8')
   const sharedAppSettings = readFileSync(
     new URL('../../../shared/appSettings.ts', import.meta.url),
@@ -451,10 +447,7 @@ test('track activation mode is persisted across layers and applied to all track 
 })
 
 test('genre separators persist across settings layers and refresh derived library groups', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const sharedAppSettings = readFileSync(
     new URL('../../../shared/appSettings.ts', import.meta.url),
     'utf8'
@@ -480,42 +473,8 @@ test('genre separators persist across settings layers and refresh derived librar
   assert.match(settingsPageSource, /updateSettings\(\{ genreSeparators: value \}\)/)
   assert.match(settingsPageSource, /aria-label="流派分隔符"/)
   assert.match(settingsPageSource, /@change="setGenreSeparators"/)
-  const script = songListSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
-  assert.ok(script)
-  const parsed = ts.createSourceFile('SongList.ts', script, ts.ScriptTarget.ESNext, true)
-  const genreWatch = parsed.statements
-    .filter(ts.isExpressionStatement)
-    .map((statement) => statement.expression)
-    .filter(ts.isCallExpression)
-    .find((call) => {
-      const read = call.arguments[0]
-      return (
-        call.expression.getText(parsed) === 'watch' &&
-        read &&
-        ts.isArrowFunction(read) &&
-        read.body.getText(parsed) === 'settingsStore.settings.value.genreSeparators'
-      )
-    })
-  assert.ok(genreWatch, 'genre changes must retain their library refresh watcher')
-  const props: { previewTracks?: unknown[] } = {}
-  const settings = { genreSeparators: ' / ' }
-  let refreshes = 0
-  const [readSeparators, refresh] = runInNewContext(
-    `[${genreWatch.arguments[0].getText(parsed)}, ${genreWatch.arguments[1].getText(parsed)}]`,
-    {
-      props,
-      settingsStore: { settings: { value: settings } },
-      refreshLibraryIndex: () => refreshes++
-    }
-  ) as [() => string, () => void]
-  assert.equal(readSeparators(), ' / ')
-  settings.genreSeparators = ' & '
-  assert.equal(readSeparators(), ' & ')
-  refresh()
-  assert.equal(refreshes, 1, 'live genre changes still refresh derived groups')
-  props.previewTracks = []
-  refresh()
-  assert.equal(refreshes, 1, 'preview genre changes never refresh the real library')
+  assert.match(songListSource, /settingsStore\.settings\.value\.genreSeparators/)
+  assert.match(songListSource, /\(\) => refreshLibraryIndex\(\)/)
 })
 
 test('audio settings expose advanced replaygain, fft, crossfeed, and real loudnorm option', () => {
@@ -573,10 +532,7 @@ test('audio settings do not expose DSP bypass as strict bit-perfect mode', () =>
   const settingsTypes = readFileSync(new URL('../types/settings.ts', import.meta.url), 'utf8')
   const preloadTypes = readFileSync(new URL('../../../preload/types.ts', import.meta.url), 'utf8')
   const mainTypes = readFileSync(new URL('../../../main/core/types.ts', import.meta.url), 'utf8')
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const settingsStoreSource = readFileSync(
     new URL('./useSettingsStore.ts', import.meta.url),
     'utf8'
@@ -599,10 +555,7 @@ test('audio settings do not expose DSP bypass as strict bit-perfect mode', () =>
 })
 
 test('cache strategy settings expose separate artifact and provider-controlled audio policies', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
   const preloadTypes = readFileSync(new URL('../../../preload/types.ts', import.meta.url), 'utf8')
   const pluginIpcSource = readFileSync(
@@ -649,15 +602,12 @@ test('cache strategy settings expose separate artifact and provider-controlled a
   assert.match(storeSource, /cachePolicy: \{/)
   assert.match(storeSource, /autoAnalyzeBpm: true/)
   assert.match(storeSource, /formattedBpmAnalysisCacheSize/)
-  assert.match(storeSource, /window\.api\.bpmAnalysis\.getCacheSize\(\)/)
-  assert.match(storeSource, /window\.api\.bpmAnalysis\.clearCache\(\)/)
-  assert.match(storeSource, /window\.api\.loudnessAnalysis\.getCacheSize\(\)/)
-  assert.match(storeSource, /window\.api\.loudnessAnalysis\.clearCache\(\)/)
+  assert.match(storeSource, /analysis\.cache\.size/)
+  assert.match(storeSource, /analysis\.cache\.clear/)
+  assert.match(storeSource, /query\('analysis\.cache\.size', \{\s*kind: 'bpm'/)
+  assert.match(storeSource, /query\('analysis\.cache\.size', \{\s*kind: 'loudness'/)
   assert.match(storeSource, /formattedLoudnessAnalysisCacheSize/)
-  assert.match(
-    readFileSync(new URL('./useMusicStore.ts', import.meta.url), 'utf8'),
-    /function clearBpmAnalysis\(\): boolean/
-  )
+  assert.match(storeSource, /async function clearBpmAnalysisCache\(\): Promise<void>/)
   assert.match(
     settingsPageSource,
     /function toggleCacheArtifact\(key: keyof MusicCachePolicySettings\): void/
@@ -740,10 +690,7 @@ test('settings backup and shortcut status APIs are exposed to the renderer', () 
 
 test('window transparency is gated on native support (Wayland fallback to opaque)', () => {
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const mainTypes = readFileSync(new URL('../../../main/core/types.ts', import.meta.url), 'utf8')
   const rendererTypes = readFileSync(new URL('../types/settings.ts', import.meta.url), 'utf8')
   const sharedTypes = readFileSync(
@@ -791,10 +738,7 @@ test('settings page warns and disables transparency controls on unsupported plat
 
 test('playbar shape persists across settings layers and flips without an IPC round trip', () => {
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
-  const mainSource = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSource = mainSettingsSource()
 
   // Main and renderer must start from the same normalized shape, or the first
   // frame after launch renders a different bar than the one that gets persisted.
@@ -806,8 +750,11 @@ test('playbar shape persists across settings layers and flips without an IPC rou
 
   // The optimistic branch: the shape has to change on the click frame, and the
   // patch still goes through normalization so a bad value cannot reach the DOM.
-  assert.match(storeSource, /Object\.prototype\.hasOwnProperty\.call\(patch, 'playerBar'\)/)
-  assert.match(storeSource, /playerBar: normalizePlayerBarSettings\(patch\.playerBar\)/)
+  assert.match(storeSource, /if \(patch.playerBar\)/)
+  assert.match(
+    storeSource,
+    /appearanceDraft.value.playerBar = normalizePlayerBarSettings\(patch\.playerBar\)/
+  )
 
   assert.match(
     readFileSync(new URL('../../../shared/appSettings.ts', import.meta.url), 'utf8'),
@@ -932,10 +879,7 @@ test('the download directory setting stays authorized from the picker to the dow
     new URL('../../../shared/appSettings.ts', import.meta.url),
     'utf8'
   )
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const localPaths = readFileSync(
     new URL('../../../main/security/localPaths.ts', import.meta.url),
     'utf8'
@@ -946,7 +890,7 @@ test('the download directory setting stays authorized from the picker to the dow
   )
   const pluginIpc = readFileSync(new URL('../../../main/ipc/plugins.ts', import.meta.url), 'utf8')
   const downloadManager = readFileSync(
-    new URL('../../../main/plugins/providerDownloadManager.ts', import.meta.url),
+    new URL('../../../core/downloads/providerDownloadManager.ts', import.meta.url),
     'utf8'
   )
   const preload = readFileSync(

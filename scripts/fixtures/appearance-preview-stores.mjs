@@ -18,6 +18,22 @@ const forbidden = (kind, name) => () => {
   console.error(error.stack)
   throw error
 }
+const core = {
+  state: ref({
+    epoch: 'preview',
+    phase: 'ready',
+    libraryRevision: 1,
+    playlistsRevision: 1,
+    versionsRevision: 1,
+    bookmarksRevision: 1,
+    pluginsRevision: 1
+  }),
+  query: forbidden('native', 'core.query'),
+  command: forbidden('native', 'core.command'),
+  attach: forbidden('native', 'core.attach'),
+  subscribe: forbidden('native', 'core.subscribe')
+}
+export const useCoreConnection = () => core
 // Missing sample artwork may emit diagnostic metadata, never media or library IPC.
 const api = (path) =>
   new Proxy(() => {}, {
@@ -92,6 +108,7 @@ const player = {
   audioProcessing,
   audioOutputConfig: ref({}),
   dspOutputStage: ref({}),
+  dspGraphStatus: ref(null),
   dspStereoImage: ref({}),
   playbackInfo,
   loudnormStatus: ref(null),
@@ -150,7 +167,10 @@ export const useThemeStore = () => ({
 })
 export const useAudioOutputDspStore = () => ({ audioProcessing, playbackInfo, outputInfo })
 export const storeToRefs = (store) => store
-export const useListeningStatsStore = () => ({ listeningStats: ref({ days: {}, tracks: {} }) })
+export const useListeningStatsStore = () => ({
+  overview: ref({ days: {} }),
+  listeningStats: ref({ days: {}, tracks: {} })
+})
 export const waitForListeningStatsReady = async () => {}
 export const libraryListeningProjection = {
   state: ref({ mode: 'json', ready: true, pending: false, error: '' }),

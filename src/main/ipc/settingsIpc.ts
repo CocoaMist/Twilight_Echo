@@ -28,6 +28,7 @@ import {
 } from '../security/localPaths'
 import { normalizeIpcString, stringifyJsonForIpcStorage } from '../security/ipcValidation.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
 
 const MAX_SETTINGS_PATCH_BYTES = 512 * 1024
 const MAX_SETTINGS_BACKUP_BYTES = 2 * 1024 * 1024
@@ -79,8 +80,11 @@ async function authorizeSettingsPathPatch(
 }
 
 export function registerSettingsIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('dialog:openFolder', async (event) => {
+  ipcMain.handle('dialog:openFolder', async (event, options?: { deferImport?: boolean }) => {
     assertTrustedIpcSender(event, 'dialog IPC')
+    if (options !== undefined && (!options || typeof options !== 'object' ||
+      Object.keys(options).some(key => key !== 'deferImport') || typeof options.deferImport !== 'boolean'))
+      throw new Error('Invalid folder picker options')
     const win = BrowserWindow.getFocusedWindow()
     if (!win) return null
     const lastLibraryFolder =
@@ -91,6 +95,10 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const folder = await grantUserSelectedLibraryRoot(result.filePaths[0])
+    if (options?.deferImport) {
+      await updateAppSettings({ lastLibraryFolder: folder })
+      return folder
+    }
     const libraryFolders = await resolveAuthorizedLibraryRootSettings([
       ...runtime.appSettings.libraryFolders,
       folder
@@ -133,6 +141,8 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('settings:get', async (event) => {
     assertTrustedIpcSender(event, 'settings IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return core.get()
     return createSettingsSnapshot(runtime.appSettings, runtime.launchSettings)
   })
 
@@ -142,11 +152,15 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
       throw new Error('Settings patch must be an object')
     }
     stringifyJsonForIpcStorage(patch, 'settings patch', MAX_SETTINGS_PATCH_BYTES)
+    const core = getCoreSettingsBridge()
+    if (core) return core.update(patch)
     return await updateAppSettings(await authorizeSettingsPathPatch(patch))
   })
 
   ipcMain.handle('settings:export', async (event) => {
     assertTrustedIpcSender(event, 'settings IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return core.request('settings.backup', {})
     return exportAppSettingsForBackup(runtime.appSettings, (await loadThemeLibrary()).data)
   })
 
@@ -158,6 +172,8 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
     if (Buffer.byteLength(json, 'utf-8') > MAX_SETTINGS_BACKUP_BYTES) {
       throw new Error('Settings backup is too large')
     }
+    const core = getCoreSettingsBridge()
+    if (core) return core.restore(json)
     const imported = importAppSettingsBackup(json, runtime.appSettings, normalizeAppSettings)
     const settingsSnapshot = await updateAppSettings(
       await authorizeSettingsPathPatch(imported.settings)
@@ -204,6 +220,8 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('settings:getCacheSize', async (event) => {
     assertTrustedIpcSender(event, 'settings IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return (await core.request('cache.info', {})).sizeBytes
     const cachePath = await resolveAuthorizedCacheRoot(
       runtime.appSettings.musicCachePath || getDefaultCachePath()
     )
@@ -212,6 +230,11 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('settings:clearCache', async (event) => {
     assertTrustedIpcSender(event, 'settings IPC')
+    const core = getCoreSettingsBridge()
+    if (core) {
+      await core.request('cache.clear', {})
+      return (await core.request('cache.info', {})).sizeBytes
+    }
     const cachePath = await resolveAuthorizedCacheRoot(
       runtime.appSettings.musicCachePath || getDefaultCachePath()
     )

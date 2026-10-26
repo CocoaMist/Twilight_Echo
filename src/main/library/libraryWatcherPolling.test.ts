@@ -76,8 +76,14 @@ test('a slow check cannot overlap and stopping does not rearm on completion', as
   assert.equal(calls, 1)
   assert.equal(f.delay(), undefined)
   f.poller.stop()
-  release(false)
+  let joined = false
+  const join = f.poller.join().then(() => {
+    joined = true
+  })
   await flush()
+  assert.equal(joined, false)
+  release(false)
+  await join
   assert.equal(f.delay(), undefined)
 })
 

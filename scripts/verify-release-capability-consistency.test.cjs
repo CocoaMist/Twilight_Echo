@@ -159,7 +159,11 @@ test('provenanced runtime observations pass and control SoXR, ebur128, and Nativ
   try {
     const { declaration } = writeFixture(directory, {
       runtime: {
-        outputStage: { resamplerEngine: 'soxr', resamplerFallback: false },
+        outputStage: {
+          effectiveResampler: 'soxr',
+          resampled: true,
+          effectiveResamplerFallback: false
+        },
         capabilities: {
           asio: { enabled: true },
           ebur128: { available: true },
@@ -306,7 +310,11 @@ test('unprovenanced and hash-mismatched runtime observations are rejected', () =
     const observed = createAudioCapabilityManifest({
       artifactDir: directory,
       runtimeStatus: {
-        outputStage: { resamplerEngine: 'soxr', resamplerFallback: false },
+        outputStage: {
+          effectiveResampler: 'soxr',
+          resampled: true,
+          effectiveResamplerFallback: false
+        },
         observation: {
           schemaVersion: 1,
           source: 'audio-engine-runtime-observation',

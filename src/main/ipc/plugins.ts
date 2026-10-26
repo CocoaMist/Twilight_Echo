@@ -7,6 +7,9 @@ import { join, resolve } from 'path'
 import { readFileSync, realpathSync } from 'fs'
 import { runtime } from '../core/runtime'
 import { TwilightPluginManager } from '../plugins/manager'
+import { updateAppSettings } from '../app/settingsRuntime'
+import { readCoverCacheFileBytes, getCoverCacheContentType } from '../library/coverCache'
+import type { AppSettings } from '../../shared/appSettings'
 import { PluginIndexService, resolvePluginIndexUrl } from '../plugins/indexService'
 import { buildPluginProxyEnv } from '../plugins/proxyBootstrap'
 import { ProviderDownloadManager } from '../plugins/providerDownloadManager.ts'
@@ -149,6 +152,72 @@ export function setupPluginIpc(): void {
       },
       previous: async () => {
         await runtime.audioEngineManager?.previous()
+      },
+      setVolume: async (volume) => {
+        await runtime.audioEngineManager?.setVolume(volume)
+      },
+      seek: async (position) => {
+        await runtime.audioEngineManager?.seek(position)
+      },
+      setPlayMode: async (mode) => {
+        await runtime.audioEngineManager?.setPlayMode(mode)
+      }
+    },
+    // Legacy main entry: expose what this process owns directly. Queue-based
+    // playback and playlist writes live with the renderer/Core process, so
+    // playTracks and playlist operations report "unavailable" here.
+    libraryApi: runtime.libraryDatabase?.api
+      ? {
+          queryTracks: (query) =>
+            runtime.libraryDatabase!.api.queryTracks(
+              query as Parameters<typeof runtime.libraryDatabase.api.queryTracks>[0]
+            ),
+          getTracksByIds: (ids) => runtime.libraryDatabase!.api.getTracksByIds(ids),
+          patchTracks: (patches) => runtime.libraryDatabase!.api.patchTracks(patches),
+          getCover: async (trackId) => {
+            const page = await runtime.libraryDatabase!.api.getTracksByIds([trackId])
+            const cover = (page.tracks?.[0] as { cover?: unknown } | undefined)?.cover
+            if (typeof cover !== 'string' || !cover) return null
+            if (cover.startsWith('data:')) {
+              return cover.length <= 8 * 1024 * 1024 ? cover : null
+            }
+            if (!cover.startsWith('cover://')) return null
+            const fileName = cover.slice('cover://'.length).split(/[?#]/, 1)[0]
+            if (!fileName || fileName.includes('/') || fileName.includes('\\')) return null
+            const bytes = await readCoverCacheFileBytes(fileName).catch(() => null)
+            if (!bytes || !bytes.byteLength) return null
+            return `data:${getCoverCacheContentType(fileName)};base64,${Buffer.from(bytes).toString('base64')}`
+          },
+          listPlaylists: async () => null,
+          createPlaylist: async () => {
+            throw new Error('当前宿主未提供歌单写入能力')
+          },
+          addTracksToPlaylist: async () => {
+            throw new Error('当前宿主未提供歌单写入能力')
+          },
+          removeTracksFromPlaylist: async () => {
+            throw new Error('当前宿主未提供歌单写入能力')
+          }
+        }
+      : undefined,
+    appSettingsApi: {
+      get: () => runtime.appSettings,
+      update: (patch) => updateAppSettings(patch as Partial<AppSettings>)
+    },
+    hostCaptureApi: {
+      captureScreenshot: async () => {
+        const window = runtime.mainWindow
+        if (!window || window.isDestroyed()) return null
+        const image = await window.webContents.capturePage()
+        if (image.isEmpty()) return null
+        const size = image.getSize()
+        const resized =
+          size.width > 1280
+            ? image.resize({ width: 1280 })
+            : size.height > 1600
+              ? image.resize({ height: 1600 })
+              : image
+        return `data:image/jpeg;base64,${resized.toJPEG(80).toString('base64')}`
       }
     },
     dynamicIsland: {

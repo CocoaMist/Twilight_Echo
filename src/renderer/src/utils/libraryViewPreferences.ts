@@ -84,7 +84,7 @@ export function libraryViewKey(category: string, filter: string | null): string 
 
 export function trackFolder(track: Track): string {
   if (track.dir) return track.dir
-  const normalized = track.filePath.replace(/[\\/]+$/, '')
+  const normalized = (track.filePath ?? '').replace(/[\\/]+$/, '')
   const separator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
   return separator >= 0 ? normalized.slice(0, separator) : ''
 }

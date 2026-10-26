@@ -2,9 +2,8 @@ import type { Ref } from 'vue'
 
 export const VISUALIZATION_UPDATE_INTERVAL_MS = 60 as const
 
-export type NativeVisualizationData = Awaited<
-  ReturnType<Window['api']['audioEngine']['getVisualizationData']>
->
+import type { VisualizationData, VisualizationOptions } from '../../../../shared/audioEngineTypes.ts'
+export type NativeVisualizationData = VisualizationData
 
 /**
  * Only the fields the player bar / equalizer actually render. The full
@@ -44,22 +43,16 @@ export interface VisualizationPollingOptions {
   enabled?: () => boolean
   setInterval?: (callback: () => void, delayMs: number) => number
   clearInterval?: (handle: number) => void
-  fetch?: (request: VisualizationConsumerOptions) => Promise<NativeVisualizationData>
+  fetch: (request: VisualizationConsumerOptions) => Promise<NativeVisualizationData>
 }
 
-export interface VisualizationConsumerOptions {
-  spectrumPoints?: number
-  waveformPoints?: number
-}
+export type VisualizationConsumerOptions = VisualizationOptions
 
 export function createVisualizationPolling(options: VisualizationPollingOptions) {
   const schedule =
     options.setInterval ?? ((callback, delayMs) => window.setInterval(callback, delayMs))
   const cancel = options.clearInterval ?? ((handle) => window.clearInterval(handle))
-  const fetchData =
-    options.fetch ??
-    ((request) =>
-      window.api.audioEngine.getVisualizationData({ ...visualizationOptions, ...request }))
+  const fetchData = options.fetch
   const requests = new Set<VisualizationConsumerOptions>()
   let timer: number | null = null
   let requestInFlight = false

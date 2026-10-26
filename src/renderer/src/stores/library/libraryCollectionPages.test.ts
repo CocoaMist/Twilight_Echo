@@ -124,6 +124,31 @@ test('scan revisions invalidate summaries; older in-flight reads and notificatio
   assert.match(pages.state.value.error, /发生变化/)
 })
 
+test('background commits retain the album header until its same-page replacement arrives', async (t) => {
+  const pending: { query: LibraryQuery; resolve(page: LibraryCollectionPage): void }[] = []
+  const pages = createLibraryCollectionPages({
+    queryCollections: (_kind, query) => new Promise(resolve => pending.push({ query: query!, resolve }))
+  }, 1)
+  t.after(pages.dispose)
+  pages.setQuery('albums', { albumId: 'album-a' })
+  pending[0].resolve(page(pending[0].query, 1, 1))
+  await settled(pages)
+  const header = pages.state.value.page
+  pages.invalidate(2)
+  assert.equal(pages.state.value.loading, true)
+  assert.equal(pages.state.value.page, header)
+  pages.invalidate(3)
+  assert.equal(pages.state.value.page, header)
+  pending[1].resolve(page(pending[1].query, 2, 1))
+  await tick()
+  assert.equal(pages.state.value.page, header, 'superseded data cannot repaint the header')
+  pending[2].resolve(page(pending[2].query, 3, 1))
+  await settled(pages)
+  assert.equal(pages.state.value.page?.revision, 3)
+  pages.setQuery('albums', { albumId: 'album-b' })
+  assert.equal(pages.state.value.page, null, 'navigation never shows another album header')
+})
+
 test('errors stay distinct from empty results and explicit retry recovers; disposal fences late failures', async () => {
   let fail = true
   const pages = createLibraryCollectionPages({

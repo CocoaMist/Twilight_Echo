@@ -180,6 +180,7 @@ export interface AudioEngineServiceBindingOptions {
   restartDelayMs?: number
   maxInFlightRequests?: number
   electron?: ElectronModule
+  launch?: () => UtilityProcessLike
 }
 
 export class AudioEngineServiceBinding extends EventEmitter implements NativeAudioBinding {
@@ -298,6 +299,12 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
 
   SetLoopRange(startSeconds: number, endSeconds: number): void {
     this.coalescedFireAndForget('SetLoopRange', [startSeconds, endSeconds])
+  }
+
+  async setLoopRangeConfirmed(start: number, end: number): Promise<boolean> {
+    if (!this.serviceCapabilities?.methods.includes('SetLoopRange')) return false
+    await this.call('SetLoopRange', [start, end])
+    return true
   }
 
   SetOutputDevice(device: string): void {
@@ -522,6 +529,10 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     )
   }
 
+  SetVisualizationDemand(enabled: boolean): void {
+    this.fireAndForget('SetVisualizationDemand', [enabled])
+  }
+
   AnalyzeBpm(source: string, optionsJson?: string): string | BpmAnalysisResult {
     void source
     void optionsJson
@@ -587,21 +598,23 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
 
   private start(): void {
     if (this.stopped || this.child || this.restarting || this.fatalReason) return
-    if (shouldUseNodeAudioService()) {
+    if (!this.options.launch && shouldUseNodeAudioService()) {
       this.startNodeChildProcess()
       return
     }
-    const electron = this.options.electron ?? resolveElectron()
-    if (!electron?.utilityProcess) {
+    const electron = this.options.launch ? undefined : (this.options.electron ?? resolveElectron())
+    if (!this.options.launch && !electron?.utilityProcess) {
       this.recordFailure('当前运行时不支持 Electron utilityProcess')
       return
     }
     try {
-      const child = electron.utilityProcess.fork(this.options.serviceEntry, [], {
-        serviceName: 'twilight-audio-engine',
-        stdio: 'pipe',
-        env: { ...audioServiceEnv(), TAE_SERVICE_GENERATION: String(this.generation) }
-      })
+      const child = this.options.launch
+        ? this.options.launch()
+        : electron!.utilityProcess!.fork(this.options.serviceEntry, [], {
+            serviceName: 'twilight-audio-engine',
+            stdio: 'pipe',
+            env: { ...audioServiceEnv(), TAE_SERVICE_GENERATION: String(this.generation) }
+          })
       this.child = child
       this.lastChildSpawnedAt = Date.now()
       this.processLogBudget.reset()
@@ -1420,7 +1433,7 @@ function systemFfmpegPreloadPaths(): string[] {
   }
 }
 
-function audioServiceEnv(): NodeJS.ProcessEnv {
+export function audioServiceEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   if (process.platform === 'linux') {
     const preload = systemFfmpegPreloadPaths()

@@ -600,6 +600,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'error.audio.queue_load_failed': 'Could not load the playback queue: {detail}',
   'error.audio.play_mode_sync_failed': 'Could not sync the play mode: {detail}',
   'error.audio.play_mode_switch_failed': 'Could not switch the play mode: {detail}',
+  'error.audio.decode_failed': 'Audio could not be read or decoded. Check the file integrity or source availability.',
 
   // ══ Network errors ═══════════════════════════════════════════════════════
   'error.network.timeout': 'The network request timed out',
@@ -616,6 +617,8 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'diagnostics.panel.perfect': 'The output chain is verified bit-exact',
   'diagnostics.panel.blockerCount': '{count} affecting passthrough',
   'diagnostics.panel.noBlockers': 'Nothing detected that affects passthrough',
+  'diagnostics.panel.underrunRateWarning':
+    'Buffer underrun rate is {rate}% — consider increasing the buffer size',
   'diagnostics.panel.showDetail': 'Show reasons',
   'diagnostics.panel.hideDetail': 'Hide reasons',
   'diagnostics.panel.fixLabel': 'What to do',

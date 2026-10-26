@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import {
   computed,
   defineAsyncComponent,
@@ -26,23 +26,24 @@ import { useProviderStore } from '../stores/useProviderStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import {
   usePlayerStore,
-  type PersonalizedStreamKey,
-  type PersonalizedStreamSession
+  type PersonalizedStreamKey
 } from '../stores/usePlayerStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import { createCoreCollectionSearch } from './streaming-page/coreCollectionSearch.ts'
 import { useMediaProviders } from '../providers'
 import {
   providerFavoriteChange,
   providerFavoriteTrackKey
 } from '../providers/providerFavoriteChanges'
-import { searchUnifiedCollections } from '@renderer/components/streaming-page/unifiedCollectionSearch.ts'
+
 import {
-  createAlbumSearch,
+
   supportsAlbumSearch,
   type AlbumSearchItem
 } from '@renderer/components/streaming-page/albumSearch.ts'
-import { createArtistSearch, type ArtistSearchItem } from './streaming-page/artistSearch.ts'
+import { type ArtistSearchItem } from './streaming-page/artistSearch.ts'
 import { BUILTIN_NAVIGATION_PAGES } from '@renderer/app/navigationPages.ts'
 import type {
   MediaProviderAlbumSummary,
@@ -61,6 +62,10 @@ import { useBilibiliFavorites } from './streaming-page/useBilibiliFavorites'
 import NcmCloudPanel from './NcmCloudPanel.vue'
 import StreamingSearch from './StreamingSearch.vue'
 import StreamingDetailStage from './streaming-page/StreamingDetailStage.vue'
+import {
+  collectionMetadataContext,
+  type EntityMetadataContext
+} from './music-metadata/entityMetadataView.ts'
 import NcmAlbumFilters from './streaming-page/NcmAlbumFilters.vue'
 import {
   filterNcmAlbums,
@@ -100,12 +105,8 @@ import {
   type StreamingArtistNavigationRequest,
   type StreamingMetadataNavigationRequest
 } from '../utils/streamingArtistResolution'
-import { getTopTracks } from '../stores/useListeningStatsStore'
-import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
+import { getTopTracks, waitForListeningStatsReady } from '../stores/useListeningStatsStore'
 import { shuffleArray } from '../utils/playerQueueUtils'
-import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
-import { readLibraryRecentHistoryTracks } from '../stores/library/libraryRecentHistory.ts'
-import { searchLocalStreamingPlaylists } from './streaming-page/localStreamingSearch'
 import {
   appendUniqueTracks,
   streamingFavoriteLabel,
@@ -335,6 +336,7 @@ const providerStore = useProviderStore()
 const settingsStore = useSettingsStore()
 const musicStore = useMusicStore()
 const mediaProviders = useMediaProviders()
+const core = useCoreConnection()
 const localSearchSource = useLibraryUnifiedSearch(() => {
   if (searchType.value !== 'playlists' && ['all', 'local'].includes(searchSource.value))
     refreshSearch()
@@ -407,6 +409,21 @@ const isExternalActive = computed(() => activeProvider.value !== NCM_PROVIDER_ID
 const detailProviderId = computed(() =>
   currentDetail.value?.type === 'album' ? currentDetail.value.providerId : activeProvider.value
 )
+const detailMetadataTarget = computed<EntityMetadataContext | null>(() => {
+  const detail = currentDetail.value
+  if (detail?.type !== 'artist' && detail?.type !== 'album') return null
+  const kind = detail.type === 'artist' ? 'artist' : 'release'
+  const id = String(detail.type === 'artist' ? detail.artist.id : detail.album.id)
+  if (detailProviderId.value === 'local')
+    return collectionMetadataContext(
+      detail.type === 'artist' ? 'artists' : 'albums', `${detail.type}:${id}`
+    )
+  return {
+    context: { type: 'native', provider: detailProviderId.value, id },
+    kind,
+    sourceProvider: detailProviderId.value
+  }
+})
 const activeExternalState = computed<ExternalProviderState | null>(() =>
   isExternalActive.value ? (externalStates[activeProvider.value] ?? null) : null
 )
@@ -470,6 +487,10 @@ function providerSupportsHome(providerId: string): boolean {
 
 function providerSupportsDiscovery(providerId: string): boolean {
   return discoveryProviderOptions.value.some((provider) => provider.id === providerId)
+}
+
+function providerSupportsLibrary(providerId: string): boolean {
+  return libraryProviders.value.some((provider) => provider.id === providerId)
 }
 
 function getHomeSectionDefinitions(providerId: string): HomeSectionDefinition[] {
@@ -582,13 +603,9 @@ async function openRecSection(section: RecSection): Promise<void> {
   detailError.value = ''
 }
 
-async function loadMorePersonalizedStream(
-  key: PersonalizedStreamKey,
-  session: PersonalizedStreamSession | null = null
-): Promise<void> {
+async function loadMorePersonalizedStream(key: PersonalizedStreamKey): Promise<void> {
   if (personalizedStreamLoading[key] || Date.now() < personalizedStreamRetryAfter[key]) return
-  const providerId =
-    session && currentTrack.value ? getTrackSource(currentTrack.value) : activeProvider.value
+  const providerId = activeProvider.value
   const providerInfo = providerStore.getProvider(providerId)
   const method = key === 'fm' ? 'fetchPersonalFm' : 'fetchPrivateContent'
   if (!providerInfo?.supportedMethods.includes(method)) return
@@ -597,7 +614,7 @@ async function loadMorePersonalizedStream(
   try {
     const current =
       providerId === activeProvider.value ? (recommendationTracks.value[key] ?? []) : []
-    const existing = session ? playbackStore.queue.value : current
+    const existing = current
     const incoming = await providerStore.callProvider<Track[]>(providerId, method)
     let additions = appendUniqueTracks(existing, incoming)
     if (
@@ -617,7 +634,6 @@ async function loadMorePersonalizedStream(
 
     const merged = [...current, ...appendUniqueTracks(current, additions)]
     if (providerId !== activeProvider.value || homeRequestId !== recommendationRequestId) {
-      if (session) appendPersonalizedStreamTracks(session, additions)
       return
     }
     recommendationTracks.value = { ...recommendationTracks.value, [key]: merged }
@@ -628,7 +644,6 @@ async function loadMorePersonalizedStream(
       detailTracks.value = merged
     }
 
-    if (session) appendPersonalizedStreamTracks(session, additions)
   } catch {
     personalizedStreamRetryAfter[key] = Date.now() + PERSONALIZED_STREAM_RETRY_COOLDOWN_MS
   } finally {
@@ -722,9 +737,7 @@ const {
 } = useNcmStore()
 
 const playbackStore = usePlayerStore()
-const { currentTrack, personalizedStreamSession, personalizedStreamRemaining } = playbackStore
-const { playTrack, startPersonalizedStream, appendPersonalizedStreamTracks, formatTime } =
-  playbackStore
+const { currentTrack, playTrack, startPersonalizedStream, formatTime } = playbackStore
 
 function playCloudSong(song: import('../stores/useNcmStore.ts').NcmCloudSong): void {
   playTrack(
@@ -776,10 +789,10 @@ async function cancelCloudTask(transferId: string): Promise<void> {
 function playHomeTrack(track: Track, trackQueue: Track[]): void {
   const section = recSections.value.find((candidate) => candidate.tracks === trackQueue)
   const streamKey = getPersonalizedStreamKey(section ?? null)
-  playTrack(track, trackQueue)
   if (streamKey) {
-    personalizedStreamRetryAfter[streamKey] = 0
-    startPersonalizedStream(streamKey)
+    void startPersonalizedStream(streamKey, getTrackSource(track), track.id)
+  } else {
+    void playTrack(track, trackQueue)
   }
 }
 
@@ -791,8 +804,6 @@ async function searchUnifiedSongs(
 ): Promise<{ tracks: Track[]; total: number }> {
   const result = await mediaProviders.searchAllSongs({
     query: keywords,
-    localTracks: [],
-    localSource: localSearchSource,
     limit,
     offset,
     signal: options?.signal
@@ -846,32 +857,26 @@ async function searchLocalSongs(
   }
 }
 
-async function searchLocalPlaylists(
-  keywords: string,
-  limit: number = 30,
-  offset: number = 0
-): Promise<{ playlists: MediaProviderPlaylistSummary[]; total: number }> {
-  return searchLocalStreamingPlaylists(musicStore.localPlaylists.value, keywords, limit, offset)
+const collectionSearch = createCoreCollectionSearch({
+  read: (query, signal) => core.query('search.collections', query, signal),
+  warning: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
+})
+const albumSearch = {
+  searchAlbums: (query: string, limit?: number, offset?: number, call?: { signal?: AbortSignal }) => collectionSearch.albums('all', query, limit, offset, call),
+  searchLocalAlbums: (query: string, limit?: number, offset?: number, call?: { signal?: AbortSignal }) => collectionSearch.albums('local', query, limit, offset, call),
+  searchProviderAlbums: collectionSearch.albums,
+  async loadAlbumTracks(album: { id: string | number; providerId: string }): Promise<Track[]> {
+    const provider = mediaProviders.get(album.providerId)
+    if (!provider?.fetchAlbumTracks) throw new Error('当前音源不支持专辑详情')
+    return provider.fetchAlbumTracks(album.id)
+  }
 }
-
-const albumSearch = createAlbumSearch({
-  localAlbums: () => musicStore.albums.value,
-  localSource: localSearchSource,
-  providers: () => providerStore.providers.value,
-  searchProvider: (id, query, limit, offset, options) =>
-    mediaProviders.searchAlbums(id, query, limit, offset, options),
-  getProvider: (id) => mediaProviders.get(id),
-  reportError: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
-})
-const artistSearch = createArtistSearch({
-  localArtists: () => musicStore.artists.value,
-  localSource: localSearchSource,
-  providers: () => providerStore.providers.value,
-  searchProvider: (id, query, limit, offset, options) =>
-    mediaProviders.searchArtists(id, query, limit, offset, options),
-  reportError: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
-})
-
+const artistSearch = {
+  searchArtists: (query: string, limit?: number, offset?: number, call?: { signal?: AbortSignal }) => collectionSearch.artists('all', query, limit, offset, call),
+  searchLocalArtists: (query: string, limit?: number, offset?: number, call?: { signal?: AbortSignal }) => collectionSearch.artists('local', query, limit, offset, call),
+  searchProviderArtists: collectionSearch.artists
+}
+const searchLocalPlaylists = (query: string, limit?: number, offset?: number, call?: {signal?: AbortSignal}) => collectionSearch.playlists('local', query, limit, offset, call)
 const searchSources = computed<SearchSourceOption[]>(() => {
   const sources: SearchSourceOption[] = [
     {
@@ -936,30 +941,7 @@ const {
   searchProviderAlbums: albumSearch.searchProviderAlbums,
   searchSongs,
   searchUnifiedSongs,
-  searchPlaylists: async (query, limit = 30, offset = 0, options) => {
-    const local = await searchLocalPlaylists(query, limit, 0)
-    const result = await searchUnifiedCollections({
-      local: { items: local.playlists, total: local.total },
-      searchLocal: async (pageLimit, pageOffset) => {
-        const result = await searchLocalPlaylists(query, pageLimit, pageOffset)
-        return { items: result.playlists, total: result.total }
-      },
-      limit,
-      offset,
-      providers: providerStore.providers.value.filter(
-        (provider) =>
-          provider.supportedMethods.includes('searchPlaylists') &&
-          provider.health?.available !== false
-      ),
-      search: (id, pageLimit, pageOffset) =>
-        mediaProviders.searchPlaylists(id, query, pageLimit, pageOffset, options),
-      reportError: (message) => {
-        if (!options?.signal?.aborted)
-          pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
-      }
-    })
-    return { playlists: result.items, total: result.total }
-  },
+  searchPlaylists: (query, limit, offset, options) => collectionSearch.playlists('all', query, limit, offset, options),
   searchArtists: artistSearch.searchArtists,
   searchProviderSongs,
   searchProviderPlaylists,
@@ -1079,8 +1061,13 @@ async function onLikeTrack(track: Track, event: MouseEvent): Promise<void> {
   }
   const songId = track.ncmSongId
   if (songId == null) {
-    if (musicStore.isFavoriteTrack(track)) musicStore.removeFavoriteTrack(track)
-    else musicStore.addFavoriteTrack(track)
+    try {
+      const [liked] = await musicStore.getFavoriteTrackStates([track])
+      await musicStore.setFavoriteTracks([track], !liked)
+      await musicStore.getFavoriteTrackStates([track])
+    } catch (error) {
+      pushNotice({ kind: 'error', message: friendlyStreamingError(error, '修改收藏失败') })
+    }
     return
   }
   if (likingTracks.value.has(songId)) return
@@ -1684,6 +1671,7 @@ async function refreshExternalProviderState(id: string): Promise<void> {
 }
 
 async function ensureExternalLibraryLoaded(id: string, force = false): Promise<void> {
+  if (!providerSupportsLibrary(id)) return
   const state = ensureExternalState(id)
   if (!isProviderAvailable(id) || !state.loggedIn) return
   if (state.libraryLoaded && !force) return
@@ -1923,7 +1911,7 @@ async function openTrackAlbum(track: Track): Promise<void> {
       id: track.albumId,
       name: track.album,
       artist: track.albumArtist || track.artist,
-      cover: track.cover,
+      cover: track.cover ?? null,
       coverSource: track.coverSource,
       trackCount: 0
     },
@@ -2293,37 +2281,8 @@ async function openRanking(): Promise<void> {
   const token = beginDetailLoad()
 
   try {
-    const topStats = getTopTracks()
-    const mode = await window.api.library.getStorageMode()
-    let tracks: Track[]
-    if (mode === 'json') {
-      tracks = resolveUnifiedRecentTracks({
-        recentStats: topStats,
-        localTracks: musicStore.tracks.value
-      })
-    } else if (mode === 'sqlite') {
-      const api = window.api.library.database
-      const revision = (await api.getTracksByIds([])).revision
-      const getPreferences = () => ({
-        revision: musicVersionRevision.value,
-        versions: getMusicVersions().tracks.versions
-      })
-      tracks = await readLibraryRecentHistoryTracks(
-        topStats,
-        revision,
-        {
-          getPreferences,
-          api: {
-            lookupPlaylistTracks: (request, expectedRevision) =>
-              api.lookupPlaylistTracks(request, expectedRevision),
-            getTracksByIds: (ids, expectedRevision) => api.getTracksByIds(ids, expectedRevision)
-          }
-        },
-        () => {
-          if (!isActiveDetailLoad(token)) throw new Error('排行榜请求已过期')
-        }
-      )
-    } else throw new Error('无法确认曲库存储，未读取听歌排行')
+    await waitForListeningStatsReady()
+    let tracks: Track[] = getTopTracks().flatMap((stat) => stat.displayTrack ? [stat.displayTrack] : [])
     if (tracks.length === 0) {
       tracks = await fetchPlayRecords(1)
     }
@@ -2454,6 +2413,15 @@ const multiSelect = useTrackMultiSelect({
 const { selectedIds, selectedCount, hasSelection, isSelected, clearSelection, getSelectedTracks } =
   multiSelect
 
+watch([streamingListTracks, musicStore.playlistsRevision], async ([tracks]) => {
+  try {
+    for (let offset = 0; offset < tracks.length; offset += 200)
+      await musicStore.getFavoriteTrackStates(tracks.slice(offset, offset + 200))
+  } catch (error) {
+    pushNotice({ kind: 'error', message: friendlyStreamingError(error, '读取收藏状态失败') })
+  }
+}, { immediate: true })
+
 function isStreamingTrackFavorited(track: Track): boolean {
   if (track.ncmSongId != null) return isTrackLiked(track.ncmSongId)
   return musicStore.isFavoriteTrack(track)
@@ -2512,18 +2480,22 @@ const aggregatePlaylistOptions = computed(() =>
   }))
 )
 
-function handleContextAddToAggregatePlaylist(playlistId: string): void {
+async function handleContextAddToAggregatePlaylist(playlistId: string): Promise<void> {
   const tracks = streamingContextActionTracks.value
   const playlistName =
     musicStore.aggregatePlaylists.value.find((playlist) => playlist.id === playlistId)?.name ?? ''
   closeStreamingContextMenu()
   if (tracks.length === 0) return
-  const added = musicStore.addTracksToPlaylistById(playlistId, tracks)
+  try {
+  const added = await musicStore.addTracksToPlaylistById(playlistId, tracks)
   pushNotice({
     kind: added > 0 ? 'success' : 'info',
     message:
       added > 0 ? `已加入「${playlistName}」${added} 首` : `「${playlistName}」里已经有这些歌了`
   })
+  } catch (error) {
+    pushNotice({ kind: 'error', message: friendlyStreamingError(error, '加入聚合歌单失败') })
+  }
 }
 
 function handleContextCreateAggregatePlaylist(): void {
@@ -2681,7 +2653,7 @@ async function handleContextDownload(quality: ProviderDownloadQuality): Promise<
   if (!providerId) return
   for (const track of tracks) {
     try {
-      await window.api.providerDownloads.create({
+      await core.command('downloads.create', {
         providerId,
         track: {
           id: track.id,
@@ -2705,7 +2677,7 @@ async function handleContextDownload(quality: ProviderDownloadQuality): Promise<
 
 async function handleCancelDownload(taskId: string): Promise<void> {
   try {
-    await window.api.providerDownloads.cancel(taskId)
+    await core.command('downloads.cancel', { id: taskId })
   } catch (error) {
     pushNotice({ kind: 'error', message: friendlyStreamingError(error, '取消下载失败') })
   }
@@ -2713,7 +2685,7 @@ async function handleCancelDownload(taskId: string): Promise<void> {
 
 async function handleRetryDownload(taskId: string): Promise<void> {
   try {
-    await window.api.providerDownloads.retry(taskId)
+    await core.command('downloads.retry', { id: taskId })
   } catch (error) {
     pushNotice({ kind: 'error', message: friendlyStreamingError(error, '重试下载失败') })
   }
@@ -2993,6 +2965,14 @@ function onSearchTrackClickWithSelect(track: Track, event: MouseEvent): void {
 
 async function favoriteStreamingTracks(tracks: Track[]): Promise<void> {
   if (tracks.length === 0) return
+  const appTracks = tracks.filter(track => track.ncmSongId == null)
+  try {
+    for (let offset = 0; offset < appTracks.length; offset += 200)
+      await musicStore.getFavoriteTrackStates(appTracks.slice(offset, offset + 200))
+  } catch (error) {
+    pushNotice({ kind: 'error', message: friendlyStreamingError(error, '读取收藏状态失败') })
+    return
+  }
   const allLiked = tracks.every(isStreamingTrackFavorited)
   const actionLabel = streamingFavoriteLabel(tracks, allLiked)
   let succeeded = 0
@@ -3015,12 +2995,12 @@ async function favoriteStreamingTracks(tracks: Track[]): Promise<void> {
         next.delete(track.ncmSongId)
         likingTracks.value = next
       }
-    } else if (allLiked) {
-      if (musicStore.removeFavoriteTrack(track)) succeeded++
-      else unchanged++
     } else {
-      if (musicStore.addFavoriteTrack(track)) succeeded++
-      else unchanged++
+      try {
+        if (await musicStore.setFavoriteTracks([track], !allLiked)) succeeded++
+        else unchanged++
+        await musicStore.getFavoriteTrackStates([track])
+      } catch { failed++ }
     }
   }
   if (failed > 0) {
@@ -3331,7 +3311,7 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
         removeStreamingProviderFavorite(track, {
           providers: mediaProviders,
           removeNcmFavorite: (songId) => likeTrack(songId, false),
-          removeSnapshotFavorite: musicStore.removeFavoriteTrack
+          removeSnapshotFavorite: async track => { await musicStore.setFavoriteTracks([track], false) }
         })
     })
     const removed = new Set(result.removedTrackIds)
@@ -3394,28 +3374,6 @@ function onStreamingContentScroll(event: Event): void {
   const key = getPersonalizedStreamKey(currentDetail.value.section)
   if (key) void loadMorePersonalizedStream(key)
 }
-
-watch(
-  [
-    personalizedStreamRemaining,
-    personalizedStreamSession,
-    () => currentTrack.value?.queueEntryId,
-    () => personalizedStreamLoading.fm,
-    () => personalizedStreamLoading.radar
-  ],
-  ([, session]) => {
-    if (
-      !session ||
-      personalizedStreamLoading[session.key] ||
-      playbackStore.queueIndex.value < 0 ||
-      playbackStore.queue.value.length - playbackStore.queueIndex.value > 3
-    ) {
-      return
-    }
-    void loadMorePersonalizedStream(session.key, session)
-  },
-  { flush: 'post' }
-)
 
 async function playLikedSongs(): Promise<void> {
   // For external providers the liked view is a playlist detail; detect it so we
@@ -3598,6 +3556,11 @@ watch(activeProvider, async (provider, oldProvider) => {
     if (fallback && fallback !== provider) fallbackProvider.value = fallback
     return
   }
+  if (activeTab.value === 'library' && !providerSupportsLibrary(provider)) {
+    const fallback = libraryProviders.value[0]?.id
+    if (fallback && fallback !== provider) fallbackProvider.value = fallback
+    return
+  }
   if (
     provider !== NCM_PROVIDER_ID &&
     activeProviderRequiresLogin.value &&
@@ -3642,6 +3605,11 @@ watch(activeTab, async (tab) => {
     await discovery.ensureLoaded()
   }
   if (tab === 'library') {
+    if (!providerSupportsLibrary(activeProvider.value)) {
+      const fallback = libraryProviders.value[0]?.id
+      if (fallback) fallbackProvider.value = fallback
+      return
+    }
     if (activeProvider.value === NCM_PROVIDER_ID) {
       if (isLoggedIn.value) await ensureLibraryLoaded()
     } else {
@@ -3868,7 +3836,19 @@ onMounted(async () => {
         </div>
         <div v-else :key="streamingViewKey" class="streaming-content-body stream-view-panel">
           <StreamingPlaceholder
-            v-if="(!hasOnlineNavigationEntries || !surfaceAvailable) && !currentDetail"
+            v-if="
+              hasOnlineNavigationEntries &&
+              activeTab === 'library' &&
+              !surfaceAvailable &&
+              !currentDetail
+            "
+            title="暂无可用的在线音乐库"
+            hint="已启用的音源暂不支持音乐库，可使用在线搜索，或启用支持音乐库的音源插件。"
+            icon="pi pi-folder-open"
+          />
+
+          <StreamingPlaceholder
+            v-else-if="(!hasOnlineNavigationEntries || !surfaceAvailable) && !currentDetail"
             title="未启用可用的在线音源"
             hint="请在设置的插件页启用网易云音乐或其它音源插件。"
             icon="pi pi-plug"
@@ -4010,6 +3990,7 @@ onMounted(async () => {
                 :cover-source="detailHeaderInfo.coverSource"
                 :description="detailHeaderInfo.desc"
                 :intro="detailHeaderInfo.intro"
+                :metadata-target="detailMetadataTarget"
                 :icon="detailHeaderInfo.icon"
                 :track-count-label="detailTrackCountLabel"
                 :tracks="visibleDetailTracks"
@@ -4062,6 +4043,7 @@ onMounted(async () => {
               :cover-source="detailHeaderInfo.coverSource"
               :description="detailHeaderInfo.desc"
               :intro="detailHeaderInfo.intro"
+              :metadata-target="detailMetadataTarget"
               :icon="detailHeaderInfo.icon"
               :loading="socialStageLoading"
               :error="detailError"

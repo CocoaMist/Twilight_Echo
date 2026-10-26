@@ -174,3 +174,9 @@ test('song search reuses normalized blobs across queries on 20k tracks', () => {
   assert.ok(elapsed < 50, `warm blob search took ${elapsed.toFixed(2)}ms, expected < 50ms`)
   assert.ok(result.total > 0)
 })
+
+test('playlist display search uses Core descriptor counts without materializing member ids', () => {
+  const result = searchLocalStreamingPlaylists([{ id: 'core:1', name: 'Core mix', count: 12345 }], 'core')
+  assert.equal(result.total, 1)
+  assert.deepEqual(result.playlists[0], { id: 'core:1', name: 'Core mix', cover: null, trackCount: 12345 })
+})

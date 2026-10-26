@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { searchUnifiedLocalPage, searchUnifiedNetworkPage } from './unifiedSearchSources.ts'
-import type { Track } from '@renderer/types/music'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
+import { createUnifiedSearchSources } from '../../../shared/musicSearchSources.ts'
+import type { TrackData as Track } from '../../../shared/track.ts'
+
+const { searchUnifiedLocalPage, searchUnifiedNetworkPage } = createUnifiedSearchSources(
+  createLogicalTrackModel(() => undefined),
+  () => 0
+)
 
 const track = (id: string, title = '月亮', format = 'flac'): Track => ({
   id,
@@ -55,4 +61,51 @@ test('network pagination retains stable profile identities and total counts', ()
   assert.equal(page.items.length, 20)
   assert.equal(page.items[0].track.networkSource?.entry.id, 'net:20')
   assert.equal(page.items[0].track.filePath, '')
+})
+
+test('local and network search support multi-token cross-field queries and SymSpell typo recovery', () => {
+  const tracks: Track[] = [
+    {
+      ...track('beethoven', 'Moonlight Sonata'),
+      artist: 'Ludwig van Beethoven',
+      album: 'Classical Masterpieces'
+    },
+    {
+      ...track('audrey', 'Moon River'),
+      artist: 'Audrey Hepburn',
+      album: 'Breakfast at Tiffanys'
+    }
+  ]
+
+  // Multi-token cross-field (Artist + Title)
+  const multi = searchUnifiedLocalPage(tracks, 'audrey moon', 10, 0)
+  assert.equal(multi.total, 1)
+  assert.equal(multi.items[0].track.id, 'audrey')
+
+  // SymSpell typo recovery (distance <= 2)
+  const typo = searchUnifiedLocalPage(tracks, 'beethovn', 10, 0)
+  assert.equal(typo.total, 1)
+  assert.equal(typo.items[0].track.id, 'beethoven')
+
+  // Network SymSpell typo recovery
+  const netTypo = searchUnifiedNetworkPage(
+    [
+      {
+        profileName: 'NAS',
+        entry: {
+          id: 'net:beethoven',
+          profileId: 'nas',
+          kind: 'audio',
+          name: 'Sonata.flac',
+          path: '/music/Sonata.flac',
+          metadata: { title: 'Moonlight Sonata', artist: 'Beethoven' }
+        }
+      }
+    ],
+    'beethovn',
+    10,
+    0
+  )
+  assert.equal(netTypo.total, 1)
+  assert.equal(netTypo.items[0].track.id, 'net:beethoven')
 })

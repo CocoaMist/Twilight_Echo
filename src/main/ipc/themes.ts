@@ -19,6 +19,7 @@ import {
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { stringifyJsonForIpcStorage } from '../security/ipcValidation.ts'
 import { updateAppSettings } from '../app/settingsRuntime.ts'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
 import { runtime } from '../core/runtime.ts'
 import { syncWindowFrameAppearance } from '../app/windowAppearance.ts'
 import {
@@ -66,6 +67,8 @@ export function setupThemeIpc(): void {
 
   ipcMain.handle('themes:getBootstrap', async (event) => {
     assertTrustedIpcSender(event, 'theme IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return core.request('themes.bootstrap', {})
     const library = await loadThemeLibrary()
     await synchronizeThemePlayerBarDefault(library)
     return { library, defaultTheme: TWILIGHT_DEFAULT_THEME }
@@ -73,6 +76,8 @@ export function setupThemeIpc(): void {
 
   ipcMain.handle('themes:list', async (event) => {
     assertTrustedIpcSender(event, 'theme IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return core.request('themes.list', {})
     return await loadThemeLibrary()
   })
 
@@ -81,6 +86,9 @@ export function setupThemeIpc(): void {
     async (event, profile: ThemeProfileV2, expectedRevision: number) => {
       assertTrustedIpcSender(event, 'theme IPC')
       stringifyJsonForIpcStorage(profile, 'theme profile', MAX_THEME_IPC_BYTES)
+      const core = getCoreSettingsBridge()
+      if (core)
+        return core.request('themes.edit', { kind: 'save', profile, revision: expectedRevision })
       const normalized = normalizeThemeProfile(profile)
       if (!normalized) throw new Error('主题档案无效')
       await assertThemeProfileAssetsAvailable(normalized)
@@ -90,6 +98,13 @@ export function setupThemeIpc(): void {
 
   ipcMain.handle('themes:delete', async (event, profileId: string, expectedRevision: number) => {
     assertTrustedIpcSender(event, 'theme IPC')
+    const core = getCoreSettingsBridge()
+    if (core)
+      return core.request('themes.edit', {
+        kind: 'remove',
+        id: normalizeShortText(profileId),
+        revision: expectedRevision
+      })
     const result = await runMutation(() =>
       deleteThemeProfile(normalizeShortText(profileId), expectedRevision)
     )
@@ -105,6 +120,13 @@ export function setupThemeIpc(): void {
     async (event, selection: ThemeSelection, expectedRevision: number) => {
       assertTrustedIpcSender(event, 'theme IPC')
       stringifyJsonForIpcStorage(selection, 'theme selection', 16 * 1024)
+      const core = getCoreSettingsBridge()
+      if (core)
+        return core.request('themes.edit', {
+          kind: 'active',
+          selection,
+          revision: expectedRevision
+        })
       const result = await runMutation(() => setActiveTheme(selection, expectedRevision))
       if ('data' in result) await synchronizeThemeSettings(result)
       return result
@@ -116,6 +138,13 @@ export function setupThemeIpc(): void {
     async (event, inheritance: ThemeWindowInheritance, expectedRevision: number) => {
       assertTrustedIpcSender(event, 'theme IPC')
       stringifyJsonForIpcStorage(inheritance, 'theme window inheritance', 16 * 1024)
+      const core = getCoreSettingsBridge()
+      if (core)
+        return core.request('themes.edit', {
+          kind: 'inheritance',
+          inheritance,
+          revision: expectedRevision
+        })
       const result = await runMutation(() =>
         setThemeWindowInheritance(inheritance, expectedRevision)
       )
@@ -126,6 +155,8 @@ export function setupThemeIpc(): void {
 
   ipcMain.handle('themes:export', async (event, profileId: string) => {
     assertTrustedIpcSender(event, 'theme IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return core.request('themes.export', { id: normalizeShortText(profileId) })
     const library = await loadThemeLibrary()
     const profile = library.data.profiles.find(
       (entry) => entry.id === normalizeShortText(profileId)
@@ -154,6 +185,8 @@ export function setupThemeIpc(): void {
 
   ipcMain.handle('themes:import', async (event, expectedRevision: number) => {
     assertTrustedIpcSender(event, 'theme IPC')
+    const core = getCoreSettingsBridge()
+    if (core) return core.request('themes.import', { revision: expectedRevision })
     const owner = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow()
     const result = owner
       ? await dialog.showOpenDialog(owner, {
@@ -186,6 +219,12 @@ export function setupThemeIpc(): void {
   ipcMain.handle('themes:importAsset', async (event, profileId: string, type: ThemeAssetType) => {
     assertTrustedIpcSender(event, 'theme IPC')
     const normalizedType = type === 'font' ? 'font' : 'image'
+    const core = getCoreSettingsBridge()
+    if (core)
+      return core.request('themes.importAsset', {
+        id: normalizeShortText(profileId),
+        type: normalizedType
+      })
     const owner = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow()
     const options: OpenDialogOptions = {
       title: normalizedType === 'font' ? '导入主题字体' : '导入主题图片',
@@ -211,6 +250,9 @@ export function setupThemeIpc(): void {
     async (event, profileId: string, assets: ThemeAssetReference[]) => {
       assertTrustedIpcSender(event, 'theme IPC')
       stringifyJsonForIpcStorage(assets, 'theme assets', 128 * 1024)
+      const core = getCoreSettingsBridge()
+      if (core)
+        return core.request('themes.validateAssets', { id: normalizeShortText(profileId), assets })
       return await validateThemeProfileAssets(normalizeShortText(profileId), assets)
     }
   )
@@ -219,6 +261,12 @@ export function setupThemeIpc(): void {
     'themes:copyAssets',
     async (event, sourceProfileId: string, targetProfileId: string) => {
       assertTrustedIpcSender(event, 'theme IPC')
+      const core = getCoreSettingsBridge()
+      if (core)
+        return core.request('themes.copyAssets', {
+          sourceId: normalizeShortText(sourceProfileId),
+          targetId: normalizeShortText(targetProfileId)
+        })
       await copyThemeAssets(
         normalizeShortText(sourceProfileId),
         normalizeShortText(targetProfileId)
@@ -246,6 +294,8 @@ export async function synchronizeThemePlayerBarDefault(
 }
 
 export async function reconcileThemeAfterPluginChange(): Promise<void> {
+  const core = getCoreSettingsBridge()
+  if (core) return core.request('themes.reconcile', {})
   let snapshot = await loadThemeLibrary()
   let activeThemeChanged = false
   const active = snapshot.data.activeTheme

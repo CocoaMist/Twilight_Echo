@@ -84,7 +84,7 @@ const rows = computed<Row[]>(() => {
       rows.push({
         id: `playlist:${playlist.id}`,
         title: playlist.name,
-        description: `${playlist.trackIds.length} 首 · ${playlist.kind === 'aggregate' ? '聚合歌单' : '本地歌单'}`,
+        description: `${playlist.count} 首 · ${playlist.kind === 'aggregate' ? '聚合歌单' : '本地歌单'}`,
         group: '歌单',
         run: () => props.openPlaylist(playlist)
       })

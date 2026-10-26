@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { corePlugins } from '../extensions/corePlugins.ts'
 import PuzzleIcon from './icons/PuzzleIcon.vue'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import {
@@ -13,9 +14,9 @@ import {
 } from '@renderer/utils/pluginTrustRefresh'
 import { createPluginMarketIndex, searchPluginMarket } from '@renderer/utils/pluginMarketSearch'
 
-type TwilightPluginDescriptor = Awaited<ReturnType<typeof window.api.plugins.list>>[number]
-type TwilightPluginIndexEntry = Awaited<ReturnType<typeof window.api.plugins.listIndex>>[number]
-type TwilightPluginIndexStatus = Awaited<ReturnType<typeof window.api.plugins.getIndexStatus>>
+type TwilightPluginDescriptor = Awaited<ReturnType<typeof corePlugins.list>>[number]
+type TwilightPluginIndexEntry = Awaited<ReturnType<typeof corePlugins.listIndex>>[number]
+type TwilightPluginIndexStatus = Awaited<ReturnType<typeof corePlugins.getIndexStatus>>
 
 const activeTab = ref('installed')
 const emit = defineEmits<{ openThemeWorkshop: [] }>()
@@ -131,7 +132,7 @@ function pluginTrust(entry: TwilightPluginIndexEntry) {
 
 async function refreshInstalled() {
   try {
-    installedPlugins.value = await window.api.plugins.list()
+    installedPlugins.value = await corePlugins.list()
   } catch (e) {
     errorMsg.value = `加载已安装插件失败：${e instanceof Error ? e.message : String(e)}`
   }
@@ -142,16 +143,16 @@ async function refreshIndex(force = false) {
   trustEvaluationTimeMs.value = Date.now()
   try {
     const entries = force
-      ? await window.api.plugins.refreshIndex()
-      : await window.api.plugins.listIndex()
-    const status = await window.api.plugins.getIndexStatus()
+      ? await corePlugins.refreshIndex()
+      : await corePlugins.listIndex()
+    const status = await corePlugins.getIndexStatus()
     if (generation !== indexRequestGeneration) return
     indexEntries.value = entries
     indexStatus.value = status
   } catch (e) {
     if (generation !== indexRequestGeneration) return
     errorMsg.value = `加载插件市场失败：${e instanceof Error ? e.message : String(e)}`
-    indexStatus.value = await window.api.plugins.getIndexStatus().catch(() => null)
+    indexStatus.value = await corePlugins.getIndexStatus().catch(() => null)
   } finally {
     if (generation === indexRequestGeneration) {
       trustEvaluationTimeMs.value = Date.now()
@@ -177,9 +178,9 @@ async function togglePlugin(plugin: TwilightPluginDescriptor) {
   busyIds.value.add(plugin.id)
   try {
     if (requestedEnabled) {
-      await window.api.plugins.disable(plugin.id)
+      await corePlugins.disable(plugin.id)
     } else {
-      await window.api.plugins.enable(plugin.id)
+      await corePlugins.enable(plugin.id)
     }
     await refreshInstalled()
   } catch (e) {
@@ -193,7 +194,7 @@ async function uninstallPlugin(plugin: TwilightPluginDescriptor) {
   if (busyIds.value.has(plugin.id)) return
   busyIds.value.add(plugin.id)
   try {
-    await window.api.plugins.uninstall(plugin.id)
+    await corePlugins.uninstall(plugin.id)
     await loadAll()
   } catch (e) {
     errorMsg.value = `卸载失败：${e instanceof Error ? e.message : String(e)}`
@@ -204,7 +205,7 @@ async function uninstallPlugin(plugin: TwilightPluginDescriptor) {
 
 async function openLog(plugin: TwilightPluginDescriptor) {
   try {
-    await window.api.plugins.openLog(plugin.id)
+    await corePlugins.openLog(plugin.id)
   } catch (e) {
     errorMsg.value = `打开日志失败：${e instanceof Error ? e.message : String(e)}`
   }
@@ -226,7 +227,7 @@ async function installFromLocal(kind: 'package' | 'directory' = 'package') {
   errorMsg.value = ''
   warningMsg.value = ''
   try {
-    const result = await window.api.plugins.chooseAndInstall(kind)
+    const result = await corePlugins.chooseAndInstall(kind)
     if (result) {
       await loadAll()
       if (result.warning) warningMsg.value = result.warning
@@ -251,7 +252,7 @@ async function installFromIndex(entry: TwilightPluginIndexEntry) {
   errorMsg.value = ''
   warningMsg.value = ''
   try {
-    const result = await window.api.plugins.installFromIndex(entry.id)
+    const result = await corePlugins.installFromIndex(entry.id)
     await loadAll()
     if (result?.warning) warningMsg.value = result.warning
   } catch (e) {
@@ -308,7 +309,7 @@ onMounted(() => {
   window.addEventListener('focus', refreshTrustOnResume)
   document.addEventListener('visibilitychange', handleTrustVisibilityChange)
   void loadAll()
-  unsubChanged = window.api.plugins.onChanged(() => {
+  unsubChanged = corePlugins.onChanged(() => {
     void refreshInstalled()
     refreshTrustOnResume()
   })

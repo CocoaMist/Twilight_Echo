@@ -1,4 +1,5 @@
-import { dialog, BrowserWindow, type IpcMain } from 'electron'
+import type { IpcMain } from 'electron'
+import { chooseLyricsImportFile, chooseLyricsExportFile } from '../lyrics/dialogs.ts'
 import { basename, dirname } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { importLyricsFromDialog } from '../lyrics/importLyrics.ts'
@@ -10,7 +11,6 @@ import {
   type OnlineLyricsSearchResult
 } from '../lyrics/onlineLyricsSearch.ts'
 import { decodeLyrics } from '../../shared/lyricsEncoding.ts'
-import { runtime } from '../core/runtime'
 import {
   resolveAuthorizedAudioFile,
   resolveAuthorizedLibraryDirectory
@@ -60,16 +60,8 @@ export function registerLyricsIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('lyrics:import', async (event): Promise<string | null> => {
     assertTrustedIpcSender(event, 'lyrics import IPC')
-    const win = BrowserWindow.getFocusedWindow() ?? runtime.mainWindow
-    const options: Electron.OpenDialogOptions = {
-      title: 'Import LRC lyrics',
-      properties: ['openFile'],
-      filters: [{ name: 'Lyrics', extensions: ['lrc', 'txt'] }]
-    }
-    const result =
-      win && !win.isDestroyed()
-        ? await dialog.showOpenDialog(win, options)
-        : await dialog.showOpenDialog(options)
+    const file = await chooseLyricsImportFile()
+    const result = { canceled: file == null, filePaths: file ? [file] : [] }
     return await importLyricsFromDialog(
       result,
       async (filePath) => decodeLyrics(await readFile(filePath)).text,
@@ -80,16 +72,8 @@ export function registerLyricsIpc(ipcMain: IpcMain): void {
   ipcMain.handle('lyrics:save', async (event, contents: string): Promise<string | null> => {
     assertTrustedIpcSender(event, 'lyrics save IPC')
     if (typeof contents !== 'string') throw new Error('Lyrics content must be text')
-    const win = BrowserWindow.getFocusedWindow() ?? runtime.mainWindow
-    const options: Electron.SaveDialogOptions = {
-      title: 'Save LRC lyrics',
-      defaultPath: 'lyrics.lrc',
-      filters: [{ name: 'LRC lyrics', extensions: ['lrc'] }]
-    }
-    const result =
-      win && !win.isDestroyed()
-        ? await dialog.showSaveDialog(win, options)
-        : await dialog.showSaveDialog(options)
+    const file = await chooseLyricsExportFile()
+    const result = { canceled: file == null, filePath: file ?? '' }
     const saved = await saveLyricsFromDialog(result, contents)
     return saved?.filePath ?? null
   })

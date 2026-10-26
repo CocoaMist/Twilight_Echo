@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
+import { clampProviderReliability, createPlaybackFallback } from '../../../shared/playbackFallback.ts'
 
-const { clampProviderReliability, findPlaybackFallbackTrack } = (await import(
-  new URL('./playbackFallback.ts', import.meta.url).href
-)) as typeof import('./playbackFallback')
+const { findPlaybackFallbackTrack } = createPlaybackFallback(createLogicalTrackModel(() => undefined))
 
 function track(overrides: Partial<Track> & Pick<Track, 'id' | 'title' | 'artist'>): Track {
   return {

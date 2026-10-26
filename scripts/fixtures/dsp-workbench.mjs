@@ -33,6 +33,7 @@ let assetReads = 0
 let polls = 0
 let pins = []
 let confirmAnswer = true
+let resamplerObservation = {}
 const assets = [
   {
     id: 'ir-one',
@@ -62,10 +63,12 @@ let catalog = {
 window.confirm = () => confirmAnswer
 window.api = {
   settings: {
-    get: async () => ({
-      audioProcessing: { ...defaultAudioProcessing, eqMode: 'parametric', eqEnabled: true },
-      audioEqPresets: [],
-      headphoneCompensation: { enabled: false, bands: [] }
+    // Frozen so Vue's deep ref never proxies these objects: EqualizerPage
+    // structuredClone()s them and rejects reactive proxies.
+    get: async () => Object.freeze({
+      audioProcessing: Object.freeze({ ...defaultAudioProcessing, dspEnabled: false, eqMode: 'parametric', eqEnabled: true }),
+      audioEqPresets: Object.freeze([]),
+      headphoneCompensation: Object.freeze({ enabled: false, bands: [] })
     }),
     set: async () => {}
   },
@@ -123,7 +126,8 @@ window.api = {
           actualSampleRate: 48000,
           resamplerQuality: 'native',
           dither: 'off',
-          active: true
+          active: true,
+          ...resamplerObservation
         }
       }
     },
@@ -160,7 +164,45 @@ const active = ref(true)
 const app = createApp({
   setup: () => () => h(Workspace, { ref: workspace, active: active.value, initialTab: 'monitor' })
 })
+// The migrated workbench speaks the Core DSP protocol; translate it onto the
+// engine stubs this fixture already maintains.
+window.auditCore = {
+  state: { value: { versionsRevision: 1 } },
+  status: { value: null },
+  queries: [],
+  query: async (name) => {
+    this?.queries?.push?.(name)
+    window.__coreQueries = window.__coreQueries || []
+    window.__coreQueries.push(name)
+    if (name === 'audio.dsp')
+      return {
+        revision,
+        processing: { ...defaultAudioProcessing, dspEnabled: false, eqMode: 'parametric', eqEnabled: true },
+        autoPreamp: null,
+        scenes: plain(state),
+        convolver: { loaded: false, active: false, bypassed: false, irResampled: false, path: '', sampleRate: 0 }
+      }
+    if (name === 'audio.dsp.status') return window.api.audioEngine.getDspGraphStatus()
+    if (name === 'audio.dsp.assets') { const items = window.api.audioEngine.getDspAssets(); return { revision, total: items.length, items } }
+    if (name === 'audio.vst3')
+      return { revision, enabled: false, searchPaths: [], total: 0, items: [] }
+    if (name === 'opra.status') return window.api.opra.getStatus()
+    if (name === 'opra.search') return { status: window.api.opra.getStatus(), items: [] }
+    throw new Error('unexpected workbench query ' + name)
+  },
+  command: async (name, payload) => {
+    if (name === 'audio.dsp.edit') {
+      const edit = payload.edit
+      if (edit.kind === 'scenes') await window.api.audioEngine.setDspScenes(edit.scenes, edit.pinnedSceneId)
+      else if (edit.kind === 'apply') await window.api.audioEngine.applyDspScene(edit.id, edit.confirmDsdPcmFallback)
+      else throw new Error('unexpected workbench edit ' + edit.kind)
+      return null
+    }
+    throw new Error('unexpected workbench command ' + name)
+  }
+}
 const pinia = createPinia()
+app.config.errorHandler = (error) => { console.error('WORKBENCH-VUE-ERROR', error && error.stack ? error.stack : error) }
 app.use(pinia).mount('#app')
 const output = useAudioOutputDspStore()
 const player = usePlayerStore()
@@ -180,7 +222,7 @@ const click = async (text, root) => {
   await tick()
 }
 const change = async (node, value) => {
-  check(node, 'missing input')
+  check(node, 'missing input for change to ' + String(value))
   node.value = value
   node.dispatchEvent(new Event('input', { bubbles: true }))
   node.dispatchEvent(new Event('change', { bubbles: true }))
@@ -190,17 +232,25 @@ window.runWorkbenchCases = async () => {
   await tick()
   check(writes === 0 && !output.audioProcessing.dspEnabled, 'opening enabled DSP or wrote a graph')
   check(
-    document.querySelector('.workspace-tabs button[aria-current]').textContent.trim() === '检测',
-    'DSP does not open on detection'
+    document.querySelector('.workspace-tabs button[aria-current]').textContent.trim() === '总览',
+    'DSP does not open on the overview'
   )
   check(
-    document.querySelector('.workspace-tabs button').textContent.trim() === '检测',
-    'detection is not first'
+    document.querySelector('.workspace-tabs button').textContent.trim() === '总览',
+    'overview is not first'
   )
   check(
-    document.querySelector('.signal-overview').textContent.includes('512'),
-    'actual buffer missing from overview'
+    !document.querySelector('.signal-dialog').open && document.querySelector('.signal-summary'),
+    'signal details should start collapsed, with a compact path summary'
   )
+  const beforeDisclosure = JSON.stringify(output.audioProcessing)
+  document.querySelector('.monitor-tuning-zone').open = true
+  document.querySelector('.diagnostic-details').open = true
+  await tick()
+  check(document.querySelector('.diagnostic-timing').textContent.includes('512'), 'actual buffer missing from diagnostics')
+  check(JSON.stringify(output.audioProcessing) === beforeDisclosure && writes === 0, 'disclosure changed audio settings')
+  document.querySelector('.monitor-tuning-zone').open = false
+  document.querySelector('.diagnostic-details').open = false
   check(
     !document.querySelector('.scope-grid path[stroke]').getAttribute('d'),
     'idle scope fabricates a spectrum'
@@ -220,6 +270,12 @@ window.runWorkbenchCases = async () => {
     'live source did not draw spectrum'
   )
   check(player.consumers.value === 1, 'scope did not acquire one shared consumer')
+  output.audioProcessing = { ...output.audioProcessing, fftEnabled: false }
+  await tick()
+  check(player.consumers.value === 0, 'FFT off retained spectrum demand')
+  check(document.querySelector('.scope-empty')?.textContent.includes('FFT 采集未开启'), 'FFT off state is missing')
+  output.audioProcessing = { ...output.audioProcessing, fftEnabled: true }
+  await tick()
   document.querySelector('[aria-label="冻结频谱"]').click()
   await tick()
   const frozenPath = document.querySelector('.scope-grid path[stroke]').getAttribute('d')
@@ -248,6 +304,7 @@ window.runWorkbenchCases = async () => {
   await tick()
   await click('效果链')
   await click('场景规则')
+  check(document.querySelector('.scene-settings'), 'scene rules missing: rack-error=' + (document.querySelector('.rack-message.error')?.textContent ?? 'none') + ' queries=' + (window.__coreQueries ?? []).join(','))
   await change(document.querySelector('.scene-settings input'), 'Headphones edited')
   check(
     document.querySelector('.draft-toolbar').textContent.includes('未保存'),
@@ -297,7 +354,11 @@ window.runWorkbenchCases = async () => {
   await click('恢复自动匹配')
   check(pins.at(-1)[0] === null, 'automatic scene matching not restored')
   await click('信号链')
-  await click('添加')
+  await click('添加处理器')
+  check(
+    document.querySelector('.node-picker[role=dialog]'),
+    'processor picker is not presented as a dialog'
+  )
   check(
     document.querySelectorAll('.node-picker-results button').length === 17,
     'missing processor types'
@@ -326,19 +387,25 @@ window.runWorkbenchCases = async () => {
   await click('还原')
   // Bind a managed IR into the selected room scene, then protect draft references.
   await change(document.querySelector('.compact-scene-select'), 'speakers')
+  check(
+    document.querySelector('.scene-row.selected')?.textContent.includes('Room Correction'),
+    'scene list did not follow the draft scene selector'
+  )
   const convolver = [...document.querySelectorAll('.node-select')].find((node) =>
     node.textContent.includes('卷积')
   )
   convolver.click()
   await tick()
-  await click('资料与插件')
+  await click('资料库')
   const firstAsset = document.querySelector('.asset-row')
+  check(!firstAsset.querySelector('button')?.disabled || firstAsset.textContent.includes('绑定'), 'x')
+  check(document.querySelector('.bind-target')?.classList.contains('ready'), 'bind target not ready: ' + (document.querySelector('.bind-target')?.textContent.slice(0,200) ?? 'NO BIND TARGET'))
   await click('绑定', firstAsset)
   check(
     firstAsset.querySelector('[title="请先解除保存场景和草稿中的引用"]').disabled,
     'draft resource deletion unprotected'
   )
-  await click('检测')
+  await click('总览')
   check(
     document.querySelector('.monitor-page').textContent.includes('-19.7'),
     'real meter fields not rendered'
@@ -353,10 +420,41 @@ window.runWorkbenchCases = async () => {
   check(polls === hiddenPolls, 'hidden workspace keeps polling')
   active.value = true
   await tick()
-  await click('输出与性能')
+  await click('输出')
+  document.querySelector('[aria-label="重采样质量"] input[value="soxrVhq"]').click()
+  await tick()
+  const resamplerNotice = () =>
+    document.querySelector('.output-stage-panel .notice')?.textContent ?? ''
+  check(
+    resamplerNotice().includes('实际 SRC 未验证'),
+    'a saved SoX choice claimed effective SRC without evidence'
+  )
+  resamplerObservation = {
+    effectiveResampler: 'swr',
+    effectiveResamplerQuality: 'ultra',
+    effectiveResamplerFallback: true,
+    resampled: true
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1800))
+  await tick()
+  check(
+    resamplerNotice().includes('实际 SWR Ultra'),
+    'observed SoX fallback is missing from the output panel'
+  )
+  resamplerObservation = { effectiveResampler: 'none', resampled: false }
+  await new Promise((resolve) => setTimeout(resolve, 1800))
+  await tick()
+  check(
+    resamplerNotice().includes('本引擎未重采样'),
+    'an equal-rate path claimed an active resampler'
+  )
+  resamplerObservation = {}
   const savedRate = state.scenes.find((scene) => scene.id === 'speakers').graph.outputStage
     .targetSampleRate
-  await change(document.querySelector('[aria-label="输出采样率"]'), '96000')
+  const rateChoice = document.querySelector('[aria-label="输出采样率"] input[value="96000"]')
+  check(rateChoice, 'output sample rate choices missing')
+  rateChoice.click()
+  await tick()
   check(
     state.scenes.find((scene) => scene.id === 'speakers').graph.outputStage.targetSampleRate ===
       savedRate,
@@ -401,9 +499,9 @@ window.runWorkbenchCases = async () => {
   )
   await click('效果链')
   await click('均衡器')
-  check(document.querySelector('.eq-embedded'), 'real-time EQ not mounted')
+  check(document.querySelector('.eq-embedded'), 'real-time EQ not mounted: tab=' + (document.querySelector('.workspace-tabs button[aria-current]')?.textContent.trim() ?? '?'))
   check(!output.audioProcessing.dspEnabled, 'opening real-time EQ enabled master DSP')
-  check(document.querySelector('.eq-band-table'), 'real-time frequency table missing')
+  check(document.querySelector('.eq-band-table'), 'real-time frequency table missing: eq=' + (document.querySelector('.eq-page')?.textContent.slice(0, 260) ?? 'NO EQ PAGE'))
   check(document.querySelector('.workbench-opra'), 'OPRA not accessible from parameter EQ')
   await click('效果链')
   return { writes, sceneReads, assetReads, polls, pins: pins.length }
@@ -414,10 +512,10 @@ window.renderWorkbench = async (tab, tone = 'pureWhite', large = false) => {
   await click(
     {
       chain: '效果链',
-      monitor: '检测',
-      library: '资料与插件',
+      monitor: '总览',
+      library: '资料库',
       equalizer: '均衡器',
-      output: '输出与性能'
+      output: '输出'
     }[tab]
   )
   if (tab === 'chain') document.querySelector('.node-select')?.click()
@@ -425,6 +523,8 @@ window.renderWorkbench = async (tab, tone = 'pureWhite', large = false) => {
   const surface = document.querySelector('.audio-workspace')
   check(surface.scrollWidth <= surface.clientWidth, 'workspace horizontal overflow')
   check(document.documentElement.scrollWidth <= innerWidth, 'document horizontal overflow')
+  const page = document.querySelector('.workspace-content')
+  check(page.scrollWidth <= page.clientWidth, `${tab} content horizontal overflow`)
   return {
     width: surface.clientWidth,
     content: document.querySelector('.workspace-content').clientWidth
@@ -482,3 +582,19 @@ window.runPopoutCases = async () => {
 }
 window.workspaceForTest = workspace
 window.appForTest = app
+window.openDrawerForTest = async () => {
+  const button = document.querySelector('.workspace-signal-button')
+  button.focus()
+  button.click()
+  await tick()
+  const drawer = document.querySelector('.signal-dialog')
+  check(drawer.open, 'signal drawer did not open')
+  check(drawer.contains(document.activeElement), 'signal drawer did not receive focus')
+  check(drawer.textContent.includes('512'), 'actual buffer missing from signal details')
+  check(!output.audioProcessing.dspEnabled, 'opening the signal path enabled DSP')
+}
+window.checkDrawerClosed = async () => {
+  await tick()
+  check(!document.querySelector('.signal-dialog').open, 'Escape did not close the signal drawer')
+  check(document.activeElement === document.querySelector('.workspace-signal-button'), 'signal drawer did not restore focus')
+}

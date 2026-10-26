@@ -1,6 +1,6 @@
 import { onBeforeUnmount, onMounted } from 'vue'
-import { useMusicStore } from '../stores/useMusicStore.ts'
 import { usePlayerStore } from '../stores/usePlayerStore.ts'
+import { useCoreConnection } from '../stores/coreConnection.ts'
 import { getRecentTracks, waitForListeningStatsReady } from '../stores/useListeningStatsStore.ts'
 import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
 import {
@@ -10,26 +10,24 @@ import {
 } from '../stores/library/libraryThemeDashboard.ts'
 
 export function useLibraryThemeDashboard(theme: LibraryDashboardTheme) {
-  const music = useMusicStore(),
-    player = usePlayerStore()
+  const player = usePlayerStore(),
+    core = useCoreConnection()
   const dashboard = createLibraryThemeDashboard({
     theme,
-    getStorageMode: () => window.api.library.getStorageMode(),
-    getTracks: () => music.tracks.value,
-    getAlbums: () => music.albums.value,
-    getArtistCount: () => music.artists.value.length,
+    getStorageMode: async () => 'sqlite',
     getHistory: () => getRecentTracks(THEME_DASHBOARD_SHELVES[theme].history),
     getPreferences: () => {
       const document = getMusicVersions()
       return { revision: musicVersionRevision.value, versions: document.tracks.versions }
     },
     api: {
-      queryTracks: (query) => window.api.library.database.queryTracks(query),
-      queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query),
-      lookupPlaylistTracks: (request, revision) =>
-        window.api.library.database.lookupPlaylistTracks(request, revision),
-      getTracksByIds: (ids, revision) => window.api.library.database.getTracksByIds(ids, revision),
-      getMetadata: () => window.api.library.database.getMetadata()
+      queryTracks: (query) => core.query('library.tracks', query ?? {}),
+      queryCollections: (kind, query) => core.query('library.collections', { kind, query }),
+      resolveRecentTracks: (entries, revision, versionsRevision) =>
+        core.query('library.recent.resolve', { entries, revision, versionsRevision }),
+      getTracksByIds: (ids, revision) => core.query('library.byIds', { ids, revision }),
+      getArtwork: (ids, revision) => core.query('library.artwork', { ids, revision }),
+      getMetadata: () => core.query('library.metadata', {})
     },
     player: {
       getCurrentTrack: () => player.currentTrack.value,
@@ -53,10 +51,12 @@ export function useLibraryThemeDashboard(theme: LibraryDashboardTheme) {
   }
   onMounted(() => {
     mounted = true
-    unsubscribe = window.api.library.onChanged((change) => {
-      dashboard.invalidate(
-        change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
-      )
+    unsubscribe = core.subscribe((message) => {
+      if (message.kind !== 'state') return
+      const snapshot = message.snapshot
+      const current = core.state.value
+      if (current?.phase === 'ready' && current.epoch === snapshot.epoch)
+        dashboard.invalidate(snapshot.libraryRevision ?? undefined)
     })
     dashboard.start()
     readHistory()

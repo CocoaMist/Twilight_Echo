@@ -9,6 +9,10 @@ import {
   useLibraryQueueViewport
 } from './useLibraryQueueViewport.ts'
 
+Object.assign(globalThis, {
+  getComputedStyle: () => ({ paddingTop: '0px', paddingBottom: '0px' })
+})
+
 function queue(total = 300_000): LibraryQueueSnapshot {
   return {
     id: 'queue',

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
+import { LEGACY_QUEUE_SCHEMA_SQL } from '../../../../main/library/legacyQueueSchema.fixture.ts'
 import type {
   LibraryPlaylistViewSync,
   LibraryTrackRecord
@@ -17,8 +18,18 @@ import {
   type LibrarySortKey
 } from '../../utils/libraryViewPreferences.ts'
 import { getTrackSearchBlob, normalizeSearchText } from '../../utils/localLibrarySearch.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import { versionSourceKey } from '../../../../shared/trackSourceIdentity.ts'
+
+// The track resolver warms the Core-backed version store on every resolve.
+// Unit tests have no window, so install a benign bridge before any import
+// chain reaches it; a failed background load is swallowed by the store.
+if (typeof globalThis.window === 'undefined') {
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { api: { core: { onMessage: () => () => {}, onStatus: () => () => {} } } }
+  })
+}
 
 function track(id: string, patch: Record<string, unknown> = {}): LibraryTrackRecord {
   return {
@@ -492,12 +503,18 @@ test('v6 upgrade takes a WAL-consistent snapshot and preserves every old queue o
   })
   const queue = old.createLibraryQueue({ ids: ['one', 'one'], sort: 'playlist' })
   const before = old.readLibraryQueue(queue.id)
+  // Downgrade through the shared legacy fixture so the schema really looks
+  // pre-v11 (catalog/metadata tables included); a bare user_version pragma
+  // would collide with the v12 catalog DDL during the re-upgrade.
   old.sql.exec(
-    'DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=6;'
+    LEGACY_QUEUE_SCHEMA_SQL +
+      // A real v6 file predates queue snapshots and the v8 queue/scan columns;
+      // dropping them lets the v7/v8 upgrade steps recreate them.
+      'DROP TABLE queue_snapshots; DROP INDEX IF EXISTS queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=6;'
   )
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 29)
     assert.deepEqual(upgraded.readLibraryQueue(queue.id), before)
     const snapshot = new DatabaseSync(
       join(root, readdirSync(root).find((name) => name.includes('.v6-backup-'))!),

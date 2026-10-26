@@ -21,6 +21,9 @@ import {
   type MiniPlayerStateSnapshot
 } from '../../shared/miniPlayer'
 import { runtime } from '../core/runtime'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
+import { getCoreApplication } from '../app/coreApplication.ts'
+import { CORE_WINDOW_POLICIES } from '../coreProcess/windowBridge.ts'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { createMiniPlayerWindowShape } from './miniPlayerWindow'
 
@@ -231,6 +234,7 @@ function createDynamicIslandWindow(): BrowserWindow {
     windowReady = false
   })
 
+  getCoreApplication()?.register(win, CORE_WINDOW_POLICIES.playback)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   win.webContents.on('did-finish-load', () => {
@@ -384,6 +388,11 @@ export function setupDynamicIslandIpc(): void {
     }
     const command = normalizeMiniPlayerCommand(rawCommand)
     if (!command) return
+    const core = getCoreSystemPlayer()
+    if (core) {
+      core.dispatch(command)
+      return
+    }
     const mainWindow = runtime.mainWindow
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
     mainWindow.webContents.send('miniPlayer:command', command)

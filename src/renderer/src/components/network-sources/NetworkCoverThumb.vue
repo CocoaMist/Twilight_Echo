@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
 
 const props = defineProps<{
   profileId: string
@@ -7,10 +8,14 @@ const props = defineProps<{
 }>()
 
 const src = ref('')
+const core = useCoreConnection()
 
 onMounted(async () => {
-  const url = await window.api?.networkSources?.coverDataUrl(props.profileId, props.entryId)
-  if (url) src.value = url
+  const result = await core.query('network.cover', {
+    profileId: props.profileId,
+    entryId: props.entryId
+  })
+  if (result) src.value = result
 })
 </script>
 

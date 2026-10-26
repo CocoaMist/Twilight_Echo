@@ -48,6 +48,9 @@ import {
   METADATA_CACHE_TTL_MS,
   MAX_METADATA_CACHE_ENTRIES,
   clampNumber,
+  normalizeVisualizationData,
+  normalizeVisualizationOptions,
+  withPrecomputedVisualizerBars,
   createDefaultPlaybackInfo,
   nativePlayMode,
   parseNativeJson
@@ -179,6 +182,7 @@ export class AudioEngineManager extends EventEmitter {
   private nativeUnavailableReason = '未加载 twilight_audio_node.node'
   private pendingNativeSource: string | null = null
   private directModePlaybackRateRestore: number | null = null
+  private visualizationDemand: boolean | null = null
 
   constructor(
     config: AudioEngineConfig = { exclusiveMode: false },
@@ -633,6 +637,16 @@ export class AudioEngineManager extends EventEmitter {
 
   private async restoreAudioServicePlaybackState(): Promise<{ synced: boolean; errors: string[] }> {
     const results: Array<{ ok: boolean; error: string }> = []
+    if (this.visualizationDemand !== null) {
+      results.push(
+        await this.restoreAudioServiceOutputRouteStep(
+          'visualization-demand',
+          '恢复可视化采样需求',
+          'SetVisualizationDemand',
+          this.visualizationDemand
+        )
+      )
+    }
     if (this.nativeDspPluginChainJson) {
       results.push(
         await this.restoreAudioServiceOutputRouteStep(
@@ -1024,6 +1038,14 @@ export class AudioEngineManager extends EventEmitter {
     })
   }
 
+  configureDsp<T>(
+    operation: (
+      configuration: import('../core/audio/dspService.ts').CoreDspConfiguration
+    ) => Promise<T>
+  ): Promise<T> {
+    return this.changeAudioConfiguration(() => operation(this.dsp))
+  }
+
   async setDspScenes(
     scenes: DspScene[],
     pinnedSceneId: string | null = this.dsp.dspPinnedSceneId
@@ -1211,6 +1233,13 @@ export class AudioEngineManager extends EventEmitter {
     return this.deviceProfiles.snapshot()
   }
 
+  /** Core quit barrier: join automatic route/profile transactions before the final playback save. */
+  async quiesceAudioConfiguration(): Promise<void> {
+    this.playback.clearTimer()
+    this.deviceProfiles.quiesce()
+    await this.outputRouter.quiesce()
+  }
+
   saveDeviceProfile(profile: AudioDeviceProfile): Promise<AudioDeviceProfilesSnapshot> {
     this.deviceProfiles.invalidatePending()
     return this.outputRouter.serializeConfiguration(async () => this.deviceProfiles.save(profile))
@@ -1313,6 +1342,14 @@ export class AudioEngineManager extends EventEmitter {
   async setLoopRange(startSeconds: number, endSeconds: number): Promise<boolean> {
     this.autoMixCoordinator?.invalidate('loop_changed')
     return this.playback.setLoopRange(startSeconds, endSeconds)
+  }
+  async setLoopRangeConfirmed(start: number, end: number): Promise<boolean> {
+    this.autoMixCoordinator?.invalidate('loop_changed')
+    return this.playback.setLoopRangeConfirmed(start, end)
+  }
+  seekConfirmed(position: number): Promise<void> {
+    this.autoMixCoordinator?.invalidate('seek')
+    return this.playback.seekConfirmed(position)
   }
   async setAutoMixMode(mode: import('../shared/twilightAutoMix.ts').AutoMixMode): Promise<boolean> {
     const ok = await this.callNativeMaybeAsync('Twilight AutoMix mode', 'SetAutoMixMode', mode)
@@ -1512,11 +1549,12 @@ export class AudioEngineManager extends EventEmitter {
     }
   }
 
-  setAutoMixCoordinator(coordinator: TwilightAutoMixCoordinator): void {
+  setAutoMixCoordinator(coordinator: TwilightAutoMixCoordinator | null): void {
     this.autoMixCoordinator?.destroy()
     this.off('playback-info', this.observeAutoMix)
     this.off('audio-service-crash', this.invalidateAutoMixService)
     this.autoMixCoordinator = coordinator
+    if (!coordinator) return
     coordinator.setMode(this.autoMixMode)
     this.on('playback-info', this.observeAutoMix)
     this.on('audio-service-crash', this.invalidateAutoMixService)
@@ -1597,6 +1635,30 @@ export class AudioEngineManager extends EventEmitter {
 
   getVisualizationData(options: VisualizationOptions = {}): VisualizationData {
     return this.playback.getVisualizationData(options)
+  }
+
+  /** Core-only runtime gate; no DSP revision or persisted user preference is changed. */
+  async setVisualizationDemand(enabled: boolean): Promise<void> {
+    this.visualizationDemand = enabled
+    const native = this.native
+    if (!native) throw new Error(this.nativeUnavailableReason)
+    if (native.callAsync) await native.callAsync('SetVisualizationDemand', [enabled])
+    else if (native.SetVisualizationDemand) native.SetVisualizationDemand(enabled)
+    else throw new Error('Native audio binding does not support SetVisualizationDemand')
+  }
+
+  /** Read off the transport lane. Core owns subscription cadence and stale-frame rejection. */
+  async readVisualizationDataAsync(options: VisualizationOptions = {}): Promise<VisualizationData> {
+    const native = this.native
+    if (!native) throw new Error(this.nativeUnavailableReason)
+    const normalized = normalizeVisualizationOptions(options)
+    const json = JSON.stringify(normalized)
+    const raw = native.callAsync
+      ? await native.callAsync('GetVisualizationData', [json])
+      : native.GetVisualizationData?.(json)
+    if (!raw) throw new Error('Native audio binding does not support GetVisualizationData')
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return withPrecomputedVisualizerBars(normalizeVisualizationData(value, normalized), normalized)
   }
 
   /**

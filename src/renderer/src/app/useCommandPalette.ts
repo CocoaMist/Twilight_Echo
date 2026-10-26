@@ -29,7 +29,7 @@ export function useCommandPalette(
       lyricsVisible: settings.settings.value.desktopLyrics.enabled,
       togglePlay: player.togglePlay,
       queue: {
-        length: player.queue.value.length,
+        length: player.libraryQueueSnapshot.value?.total ?? player.queue.value.length,
         canUndo: player.canUndoQueue.value,
         undoLabel: player.queueUndoLabel.value,
         undo: player.undoQueue,

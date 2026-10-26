@@ -7,6 +7,8 @@ export type RemoteMediaKind = 'audio' | 'image'
 export interface RemoteMediaGrant {
   source: string
   kind: RemoteMediaKind
+  /** Expiring metadata images bypass durable/browser caches. */
+  expiresAt?: number
 }
 
 export interface RemoteMediaGrantServiceOptions {
@@ -18,8 +20,9 @@ export interface RemoteMediaGrantServiceOptions {
 
 export interface RemoteMediaRequestHandlerOptions {
   imageCache?: {
+    generation?: () => number
     read: (source: string) => Promise<Response | null>
-    write: (source: string, type: string, bytes: Uint8Array) => Promise<void>
+    write: (source: string, type: string, bytes: Uint8Array, generation?: number) => Promise<void>
   }
   grants?: RemoteMediaGrantService
   fetch: (source: string, init: RequestInit) => Promise<Response>
@@ -52,15 +55,17 @@ export class RemoteMediaGrantService {
       options.deterministicImageTokens ?? options.createToken === undefined
   }
 
-  grant(source: string, kind: RemoteMediaKind): string {
+  grant(source: string, kind: RemoteMediaKind, expiresAt?: number): string {
     const normalized = normalizeRemoteMediaSource(source)
+    if (expiresAt !== undefined && (kind !== 'image' || !Number.isSafeInteger(expiresAt) || expiresAt <= this.now()))
+      throw new Error('Remote image permission has expired')
     this.pruneExpired(this.now())
     const token =
       kind === 'image' && this.deterministicImageTokens
-        ? deterministicImageToken(normalized)
+        ? deterministicImageToken(expiresAt === undefined ? normalized : JSON.stringify([normalized, expiresAt]))
         : this.createToken()
     if (!token || /[/?#]/.test(token)) throw new Error('Remote media grant token is invalid')
-    this.grants.set(token, { source: normalized, kind, lastAccessAt: this.now() })
+    this.grants.set(token, { source: normalized, kind, lastAccessAt: this.now(), ...(expiresAt === undefined ? {} : { expiresAt }) })
     const handle = `twilight-media://${kind}/${token}`
     writeDiagnostic(
       'media.remote',
@@ -79,12 +84,12 @@ export class RemoteMediaGrantService {
     if (expectedKind && grant.kind !== expectedKind) {
       throw new Error('Remote media grant kind is not authorized')
     }
-    if (this.now() - grant.lastAccessAt > ttlFor(grant.kind)) {
+    if (this.now() - grant.lastAccessAt > ttlFor(grant.kind) || (grant.expiresAt !== undefined && this.now() >= grant.expiresAt)) {
       this.grants.delete(token)
       throw new Error('Remote media grant has expired')
     }
     grant.lastAccessAt = this.now()
-    return { source: grant.source, kind: grant.kind }
+    return { source: grant.source, kind: grant.kind, ...(grant.expiresAt === undefined ? {} : { expiresAt: grant.expiresAt }) }
   }
 
   revokeAll(): void {
@@ -103,7 +108,7 @@ export class RemoteMediaGrantService {
         return
       }
       const [token, grant] = next.value
-      if (now - grant.lastAccessAt > ttlFor(grant.kind)) this.grants.delete(token)
+      if (now - grant.lastAccessAt > ttlFor(grant.kind) || (grant.expiresAt !== undefined && now >= grant.expiresAt)) this.grants.delete(token)
     }
   }
 }
@@ -162,7 +167,8 @@ export function createRemoteMediaRequestHandler(
         return fail(416, 'range', 'Requested range is not supported')
       }
 
-      const cacheable = grant.kind === 'image' && request.method === 'GET' && !range
+      const cacheable = grant.kind === 'image' && request.method === 'GET' && !range && grant.expiresAt === undefined
+      const cacheGeneration = options.imageCache?.generation?.()
       if (cacheable && options.imageCache) {
         try {
           const cached = await options.imageCache.read(grant.source)
@@ -202,6 +208,12 @@ export function createRemoteMediaRequestHandler(
         await cancelRemoteMediaBody(upstream)
         return fail(502, 'upstream-status', 'Remote media request failed')
       }
+      if (grant.expiresAt !== undefined) {
+        try { grants.resolve(request.url, 'image') } catch {
+          await cancelRemoteMediaBody(upstream)
+          return fail(403, 'authorization-expired', 'Remote image permission has expired')
+        }
+      }
       if (!isExpectedMediaType(upstream.headers.get('content-type'), grant.kind)) {
         await cancelRemoteMediaBody(upstream)
         return fail(415, 'content-type', 'Remote media type is not authorized')
@@ -222,6 +234,7 @@ export function createRemoteMediaRequestHandler(
           headers: filteredResponseHeaders(upstream.headers)
         }
       )
+      if (grant.expiresAt !== undefined) response.headers.set('Cache-Control', 'no-store')
       if (
         cacheable &&
         options.imageCache &&
@@ -236,7 +249,8 @@ export function createRemoteMediaRequestHandler(
           await options.imageCache.write(
             grant.source,
             upstream.headers.get('content-type') ?? '',
-            bytes
+            bytes,
+            cacheGeneration
           )
           record('response.ready', {
             status: response.status,

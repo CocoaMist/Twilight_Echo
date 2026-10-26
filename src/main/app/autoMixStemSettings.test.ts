@@ -30,11 +30,11 @@ test('stem enable and device changes publish new preferences before cancelling o
     '../integrations/miniPlayer': {},
     '../integrations/desktopLyrics': {},
     '../integrations/shortcutsTray': { applyRuntimeSettings() {} },
-    './AfterglowModeService.ts': { reassertAfterglowShortcuts() {} },
     '../audio/state.ts': {},
     './windowAppearance.ts': {},
     '../cache/ncmCache': {},
     '../integrations/discord': {},
+    './AfterglowModeService.ts': { reassertAfterglowShortcuts() {} },
     '../library/watcher': {}
   }
   const exports: { updateAppSettings?: (patch: Record<string, unknown>) => Promise<unknown> } = {}

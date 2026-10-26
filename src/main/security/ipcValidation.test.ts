@@ -16,7 +16,7 @@ function readDataIpcSources(): string {
     '../ipc/lyricsIpc.ts',
     '../ipc/persistenceIpc.ts',
     '../ipc/persistenceReporting.ts',
-    '../persistence/playbackSessionStore.ts'
+    '../persistence/playbackSessionRepository.ts'
   ]
     .map((rel) => readFileSync(new URL(rel, import.meta.url), 'utf8'))
     .join('\n')
@@ -145,7 +145,7 @@ test('data IPC applies path and storage limits before touching local files', () 
     'utf8'
   )
   const versionedStoreSource = readFileSync(
-    new URL('../persistence/versionedDataStore.ts', import.meta.url),
+    new URL('../../core/persistence/versionedDataStore.ts', import.meta.url),
     'utf8'
   )
 
@@ -181,7 +181,6 @@ test('data IPC applies path and storage limits before touching local files', () 
   assert.match(source, /filterAuthorizedLibraryRoots\(snapshot\.folders\)/)
   assert.match(repositorySource, /loadJsonFileWithBackup\(filePath, MUSIC_LIBRARY_JSON_OPTIONS\)/)
   assert.match(source, /new VersionedDataStore<PlaybackSession \| null>/)
-  assert.match(source, /getPlaybackSessionStoreBundle\(\)/)
   assert.match(
     source,
     /return await saveVersionedData\(playbackSessionStorage, session, expectedRevision\)/
@@ -221,9 +220,9 @@ test('data IPC applies path and storage limits before touching local files', () 
 
 test('plugin and NCM IPC validate renderer-controlled IDs, methods, paths, and payload sizes', () => {
   const pluginsSource = readFileSync(new URL('../ipc/plugins.ts', import.meta.url), 'utf8')
-  const ncmSource = readFileSync(new URL('../ncm/api.ts', import.meta.url), 'utf8')
+  const ncmSource = readFileSync(new URL('../../core/providers/ncmApi.ts', import.meta.url), 'utf8')
   const providerRoutingSource = readFileSync(
-    new URL('../plugins/providerRouting.ts', import.meta.url),
+    new URL('../../shared/mediaProviderMethods.ts', import.meta.url),
     'utf8'
   )
 

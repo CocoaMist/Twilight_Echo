@@ -11,13 +11,15 @@ import type { LibraryQueueEdit, LibraryQueueInsertItem } from '../../shared/libr
 import { stringifyJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { isAbsolute } from 'node:path'
 import { getTrackSource } from '../../shared/trackSourceIdentity.ts'
+import { MAX_QUEUE_OCCURRENCE_ID_LENGTH } from '../../shared/nativeQueue.ts'
 import {
   LIBRARY_QUEUE_BUILD_MAX_ENTRIES,
   type LibraryQueueBuildCommand
 } from '../../shared/libraryQueueBuild.ts'
 
 export function validateLibraryQueueBuild(
-  input: unknown
+  input: unknown,
+  preserveOccurrenceIds = false
 ): asserts input is LibraryQueueBuildCommand {
   if (!record(input)) throw new Error('Invalid library queue stream')
   if (typeof input.id !== 'string' || !/^[\w-]{1,128}$/.test(input.id))
@@ -47,6 +49,8 @@ export function validateLibraryQueueBuild(
     throw new Error('Invalid or oversized library queue stream batch')
   for (const item of input.items) {
     if (!record(item)) throw new Error('Invalid library queue stream occurrence')
+    if (preserveOccurrenceIds ? !queueEntryId(item.occurrenceId) : item.occurrenceId !== undefined)
+      throw new Error('Occurrence identities are reserved for private Core queue capabilities')
     if (item.localSnapshot !== undefined) {
       if (
         item.snapshot !== undefined ||
@@ -59,7 +63,7 @@ export function validateLibraryQueueBuild(
       )
         throw new Error('Invalid local library queue seed')
       validateLibraryQueueInsertItem({ id: item.id, snapshot: item.localSnapshot }, true)
-    } else validateLibraryQueueInsertItem(item)
+    } else validateLibraryQueueInsertItem(item, false, true)
     if (
       (item.originalPosition !== undefined &&
         (!Number.isSafeInteger(item.originalPosition) ||
@@ -139,7 +143,10 @@ const sorts = new Set([
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 const queueEntryId = (value: unknown): value is string =>
-  typeof value === 'string' && !!value && value.length <= 128
+  typeof value === 'string' &&
+  !!value &&
+  value.length <= MAX_QUEUE_OCCURRENCE_ID_LENGTH &&
+  !value.includes('\0')
 
 export function libraryPageBounds(
   offset = 0,
@@ -326,7 +333,7 @@ export function validateLibraryQueueReadOptions(
   if (value === undefined) return
   if (
     !record(value) ||
-    Object.keys(value).some((key) => !['expectedRevision', 'search'].includes(key))
+    Object.keys(value).some((key) => !['expectedRevision', 'search', 'occurrenceId'].includes(key))
   )
     throw new Error('Invalid library queue read options')
   if (
@@ -339,6 +346,8 @@ export function validateLibraryQueueReadOptions(
     (typeof value.search !== 'string' || value.search.length > 32768)
   )
     throw new Error('Invalid library queue search')
+  if (value.occurrenceId !== undefined && !queueEntryId(value.occurrenceId))
+    throw new Error('Invalid library queue occurrence')
 }
 
 export function validateLibraryHistorySync(
@@ -409,7 +418,8 @@ const queueSnapshotStringFields = [
 
 function validateLibraryQueueInsertItem(
   value: unknown,
-  allowLocal = false
+  allowLocal = false,
+  allowDeferred = false
 ): asserts value is LibraryQueueInsertItem {
   if (!record(value) || typeof value.id !== 'string' || !value.id || value.id.length > 32768)
     throw new Error('Invalid library queue insertion item')
@@ -419,7 +429,7 @@ function validateLibraryQueueInsertItem(
     !record(snapshot) ||
     snapshot.id !== value.id ||
     typeof snapshot.filePath !== 'string' ||
-    !snapshot.filePath ||
+    (!snapshot.filePath && !allowDeferred) ||
     snapshot.filePath.includes('\0') ||
     snapshot.filePath.length > 32768 ||
     (!allowLocal &&
@@ -452,7 +462,11 @@ function validateLibraryQueueInsertItem(
     throw new Error('Remote library queue snapshot is too large')
 }
 
-export function validateLibraryQueueEdit(value: unknown): asserts value is LibraryQueueEdit {
+export function validateLibraryQueueEdit(
+  value: unknown,
+  allowDeferred = false,
+  allowLocal = false
+): asserts value is LibraryQueueEdit {
   if (!record(value) || typeof value.kind !== 'string') throw new Error('Invalid queue edit')
   if (value.kind === 'undo') {
     if (Object.keys(value).some((key) => key !== 'kind')) throw new Error('Invalid queue undo')
@@ -475,7 +489,7 @@ export function validateLibraryQueueEdit(value: unknown): asserts value is Libra
   else {
     if (!Array.isArray(value.items) || value.items.length > LIBRARY_MAX_PAGE_SIZE)
       throw new Error('Invalid or oversized library queue insertion')
-    for (const item of value.items) validateLibraryQueueInsertItem(item)
+    for (const item of value.items) validateLibraryQueueInsertItem(item, allowLocal, allowDeferred)
     if (
       Buffer.byteLength(stringifyJsonWithNestingLimit(value.items, 'library queue insertion')) >
       8 * 1024 * 1024

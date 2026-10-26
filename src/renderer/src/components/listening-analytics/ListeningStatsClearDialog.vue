@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useNativeDialog } from '@renderer/composables/useNativeDialog'
-import type { ListeningStats } from '@renderer/stores/useListeningStatsStore'
+import type { CoreStatisticsClearPreview } from '../../../../shared/coreStatistics.ts'
 import {
   isListeningStatsClearRange,
-  previewListeningStatsClear,
   type ListeningStatsClearRange
 } from '@renderer/stores/listeningStatsHistory'
 import {
@@ -12,8 +11,8 @@ import {
   utcDayKey
 } from '@renderer/components/listening-analytics/listeningAnalyticsData'
 
-const props = defineProps<{ stats: ListeningStats; now: Date; busy?: boolean }>()
-const emit = defineEmits<{ close: []; clear: [range: ListeningStatsClearRange] }>()
+const props = defineProps<{ readPreview(range: ListeningStatsClearRange, signal: AbortSignal): Promise<CoreStatisticsClearPreview>; revision: number | null; now: Date; busy?: boolean }>()
+const emit = defineEmits<{ close: []; clear: [range: ListeningStatsClearRange, revision: number] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
 const cancel = ref<HTMLButtonElement | null>(null)
 const preset = ref('7')
@@ -34,9 +33,21 @@ const error = computed(() => {
   if (range.value && range.value.endDay > today.value) return '结束日期不能晚于今天。'
   return ''
 })
-const preview = computed(() =>
-  error.value ? null : previewListeningStatsClear(props.stats, range.value)
-)
+const preview = shallowRef<CoreStatisticsClearPreview | null>(null)
+const previewError = ref('')
+watch([range, error, () => props.revision], async ([value, invalid], _previous, onCleanup) => {
+  preview.value = null
+  previewError.value = ''
+  if (invalid || props.revision === null) return
+  const request = new AbortController()
+  onCleanup(() => request.abort())
+  try {
+    const result = await props.readPreview(value, request.signal)
+    if (!request.signal.aborted) preview.value = result
+  } catch (error) {
+    if (!request.signal.aborted) previewError.value = error instanceof Error ? error.message : '统计预览不可用'
+  }
+}, { immediate: true })
 const canClear = computed(() =>
   Boolean(preview.value && (preview.value.dayCount > 0 || preview.value.trackCount > 0))
 )
@@ -61,7 +72,7 @@ function onBackdropClick(event: MouseEvent): void {
 }
 
 function confirm(): void {
-  if (canClear.value) emit('clear', range.value)
+  if (canClear.value && preview.value) emit('clear', range.value, preview.value.revision)
 }
 </script>
 
@@ -113,7 +124,7 @@ function confirm(): void {
         }}
         <span>日期与仪表盘一致，按 UTC 日划分。</span>
       </p>
-      <p v-if="error" class="stats-clear-error" role="alert">{{ error }}</p>
+      <p v-if="error || previewError" class="stats-clear-error" role="alert">{{ error || previewError }}</p>
       <div v-else-if="preview" class="stats-clear-preview" role="status" aria-live="polite">
         <span
           >将清除 <strong>{{ preview.dayCount }}</strong> 个日期的时长记录</span

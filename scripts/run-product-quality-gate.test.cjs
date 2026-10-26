@@ -23,6 +23,7 @@ test('product gate owns every product suite once without invoking application or
     )
   }
   for (const script of [
+    'test:core',
     'test:network-sources',
     'test:playlist-lifecycle',
     'test:lyrics-management',

@@ -104,6 +104,7 @@ function fixture() {
     playEntry: async (...args) => {
       calls.push(['play', ...args])
     },
+    duplicateEntry: async (...args) => { calls.push(['duplicate', ...args]) },
     editQueue: async (...args) => {
       calls.push(['edit', ...args])
     },
@@ -200,9 +201,9 @@ test('drawer next/tail insertion and removal use IDs rather than rendered positi
   await settle()
   f.context.remove({ ...f.row(1), state: 'missing' })
   await settle()
-  assert.equal(f.calls[0][1].afterEntryId, 'entry:0')
-  assert.equal(f.calls[0][1].trackIds[0], 'track:0')
-  assert.equal(f.calls[1][1].afterEntryId, undefined)
+  assert.deepEqual(f.calls[0].slice(0, 3), ['duplicate', 'entry:1', true])
+  assert.deepEqual(f.calls[1].slice(0, 3), ['duplicate', 'entry:1', false])
+  assert.equal(f.calls[0][3].revision, 2)
   assert.equal(f.calls[2][1].entryIds[0], 'entry:1')
   f.context.play({ ...f.row(0), state: 'missing' })
   await settle()
@@ -240,6 +241,8 @@ test('single-track playlist add revalidates the page, queue and content after aw
   assert.equal(f.added[0][0], 'addToPlaylist')
   assert.equal(f.added[0][1].id, 'track:0')
   assert.equal(f.added[0][1].queueEntryId, 'entry:1')
+  assert.equal(f.added[0][1].queue.id, 'queue')
+  assert.equal(f.added[0][1].queue.revision, 2)
   let release
   const read = f.props.readPage
   f.props.readPage = async (page) => {

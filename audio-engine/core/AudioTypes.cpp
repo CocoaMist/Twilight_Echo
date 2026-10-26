@@ -244,6 +244,8 @@ std::string pcmToDsdModeToString(PcmToDsdMode mode) {
       return "dsd128";
     case PcmToDsdMode::Dsd256:
       return "dsd256";
+    case PcmToDsdMode::Dsd512:
+      return "dsd512";
     case PcmToDsdMode::Off:
     default:
       return "off";
@@ -258,6 +260,7 @@ PcmToDsdMode parsePcmToDsdMode(const std::string& mode) {
   if (normalized == "dsd64") return PcmToDsdMode::Dsd64;
   if (normalized == "dsd128") return PcmToDsdMode::Dsd128;
   if (normalized == "dsd256") return PcmToDsdMode::Dsd256;
+  if (normalized == "dsd512") return PcmToDsdMode::Dsd512;
   return PcmToDsdMode::Off;
 }
 
@@ -269,6 +272,8 @@ int pcmToDsdModeRateMultiplier(PcmToDsdMode mode) {
       return 128;
     case PcmToDsdMode::Dsd256:
       return 256;
+    case PcmToDsdMode::Dsd512:
+      return 512;
     case PcmToDsdMode::Off:
     default:
       return 0;

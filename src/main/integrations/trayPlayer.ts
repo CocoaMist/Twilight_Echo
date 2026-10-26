@@ -19,6 +19,9 @@ import {
   type TrayPlayerBootstrap
 } from '../../shared/trayPlayer.ts'
 import { runtime } from '../core/runtime'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
+import { getCoreApplication } from '../app/coreApplication.ts'
+import { CORE_WINDOW_POLICIES } from '../coreProcess/windowBridge.ts'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { getAppIconPath } from '../app/window'
 import { hideMiniPlayerWindow, restoreMainWindowFromMiniPlayer } from './miniPlayer'
@@ -46,11 +49,17 @@ function sendTrayPlayerExperienceTheme(): void {
 }
 
 export function publishTrayPlayerState(state: MiniPlayerStateSnapshot): void {
+  if (getCoreSystemPlayer()) return
   runtime.latestMiniPlayerState = state
   sendTrayPlayerState(state)
 }
 
 function forwardPlayerCommand(command: MiniPlayerCommand): void {
+  const core = getCoreSystemPlayer()
+  if (core) {
+    core.dispatch(command)
+    return
+  }
   const mainWindow = runtime.mainWindow
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
   mainWindow.webContents.send('miniPlayer:command', command)
@@ -131,6 +140,7 @@ function createTrayPlayerWindow(): BrowserWindow {
   win.on('closed', () => {
     if (runtime.trayPlayerWindow === win) runtime.trayPlayerWindow = null
   })
+  getCoreApplication()?.register(win, CORE_WINDOW_POLICIES.playback)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   win.webContents.on('did-finish-load', () => {

@@ -272,6 +272,7 @@ void testRateFamilyMapping() {
       {44100, 64, 2822400, 64},
       {44100, 128, 5644800, 128},
       {44100, 256, 11289600, 256},
+      {44100, 512, 22579200, 512},
       {88200, 64, 2822400, 32},
       {176400, 128, 5644800, 32},
       {48000, 64, 3072000, 64},
@@ -288,12 +289,15 @@ void testRateFamilyMapping() {
     if (!modulator.configure(config, &error)) failTest(error.c_str());
     assert(modulator.dsdSampleRate() == c.expectedDsdSampleRate);
     assert(modulator.upsampleRatio() == c.expectedRatio);
+    if (c.expectedRatio >= 64) {
+      assert(modulator.halfbandStageCount() == 6);
+    }
   }
 
   // Rejections: off-family rates, unsupported multipliers, ratios below x8.
   const Case rejected[] = {
       {32000, 64, 0, 0},
-      {44100, 512, 0, 0},
+      {44100, 1024, 0, 0},
       {44100, 32, 0, 0},
       {705600, 64, 0, 0},
       {0, 64, 0, 0}};

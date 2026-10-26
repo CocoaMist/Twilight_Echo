@@ -6,10 +6,14 @@ import { useAppNavigation } from '../app/useAppNavigation.ts'
 import { appearanceEditorOpen } from '../composables/appearanceEditorState.ts'
 import { LEGACY_SETTINGS_TARGETS, SETTINGS_SEARCH_INDEX } from './settings-page/types.ts'
 import { DEFAULT_LYRICS_APPEARANCE } from '../../../shared/lyricsAppearance.ts'
+import {
+  DEFAULT_DSP_OUTPUT_STAGE,
+  DEFAULT_DSP_STEREO_IMAGE
+} from '../../../shared/dspGraph.ts'
 import '../assets/base.css'
 
 const actual = realSettingsStore()
-export const settings = actual.settings
+export const settings = ref(JSON.parse(JSON.stringify(actual.settings.value)))
 settings.value.libraryFolders = ['D:\\Music\\收藏与长路径示例\\Twilight Echo']
 settings.value.miniPlayer.showInTaskbar = false
 const patches = []
@@ -24,6 +28,7 @@ const updateSettings = async (patch) => {
 export function useSettingsStore() {
   return {
     ...actual,
+    settings,
     updateSettings,
     loadSettings: noop,
     appVersion: ref('1.3.0'),
@@ -40,6 +45,23 @@ export function useSettingsStore() {
     windowTransparencySupported: ref(false)
   }
 }
+// The migrated settings tree queries Core through useCoreConnection; the
+// fixture has no bridge attached, so answer benign defaults instead.
+export function useCoreConnection() {
+  return {
+    state: { value: null },
+    status: { value: null },
+    query: async () => null,
+    command: async (name, payload) => {
+      // Route the migrated Core backup commands onto the window.api.data
+      // stubs this fixture assigns during the personal-restore scenario.
+      if (name === 'backup.preview') return window.api.data?.previewPersonalBackup?.()
+      if (name === 'backup.stage') return window.api.data?.stagePersonalRestore?.(payload?.options)
+      return null
+    }
+  }
+}
+
 export function useMusicStore() {
   return new Proxy(
     {
@@ -82,6 +104,9 @@ const audioStore = defineStore('settings-organization-dsp', () => ({
   audioDeviceOptions: ref([]),
   audioOutputDeviceOptions: ref([]),
   audioOutputConfigApplyStatus: ref({ state: 'idle' }),
+  dspOutputStage: ref(structuredClone(DEFAULT_DSP_OUTPUT_STAGE)),
+  dspGraphStatus: ref(null),
+  dspStereoImage: ref(structuredClone(DEFAULT_DSP_STEREO_IMAGE)),
   playbackInfo: ref(null),
   outputInfo: ref(null),
   loudnormStatus: ref(null),
@@ -148,7 +173,7 @@ app.use(createPinia())
 window.organizationRendererErrors = []
 app.config.errorHandler = (error) => {
   window.organizationRendererErrors.push(String(error))
-  console.error(error)
+  console.error(error && error.stack ? error.stack : error)
 }
 app.mount('#app')
 

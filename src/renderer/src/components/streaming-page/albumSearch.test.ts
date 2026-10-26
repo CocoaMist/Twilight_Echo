@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { LibraryItem } from '@renderer/stores/library/musicStoreTypes.ts'
 import type { MediaProvider } from '@renderer/providers/mediaProvider.ts'
 import type { Track } from '@renderer/types/music'
-import { albumSearchKey, createAlbumSearch } from './albumSearch.ts'
+import { albumSearchKey, createAlbumSearch, type LocalAlbumSearchView } from './albumSearch.ts'
 
 const track: Track = {
   id: 'local:1',
@@ -18,7 +17,7 @@ const track: Track = {
   lyrics: null,
   source: 'local'
 }
-const localAlbums: LibraryItem[] = [
+const localAlbums: LocalAlbumSearchView[] = [
   {
     id: '1',
     name: 'Album',

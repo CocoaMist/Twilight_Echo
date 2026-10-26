@@ -32,12 +32,12 @@ const visualizationOptions = {
   oscilloscopePoints: 0,
   visualizerBarCount: VISUALIZER_BAR_COUNT
 } as const
-const VISUALIZER_POLL_INTERVAL_MS = 50
 const CONTROL_VISUALIZATION_PAUSE_MS = 220
-let visualizationTimer: number | null = null
-let visualizationRequestInFlight = false
+let releaseVisualization: (() => void) | null = null
 let visualizerUnmounted = false
 let visualizationPausedUntil = 0
+const smoothedVisualizerBars = new Float32Array(VISUALIZER_BAR_COUNT)
+let hasSmoothedVisualizerFrame = false
 const tempoEstimator = new AudioTempoEstimator()
 let lastPostedTempo: TempoEstimate = { source: 'analyzing', confidence: 0 }
 let lastPlaybackPosition: number | null = null
@@ -101,14 +101,61 @@ function postTempo(tempo: TempoEstimate): void {
 function resetTempoEstimator(): void {
   tempoEstimator.reset()
   lastPostedTempo = { source: 'analyzing', confidence: 0 }
+  smoothedVisualizerBars.fill(0)
+  hasSmoothedVisualizerFrame = false
 }
 
-async function pollVisualizationFrame(): Promise<void> {
-  if (visualizerUnmounted || !shouldPollVisualization.value || visualizationRequestInFlight) return
+function stabilizeVisualizerBars(bars: Float32Array, active: boolean): void {
+  const count = bars.length
+  if (!active || count === 0) {
+    smoothedVisualizerBars.fill(0)
+    hasSmoothedVisualizerFrame = false
+    return
+  }
+  const bridged = new Float32Array(count)
+  for (let i = 0; i < count; i += 1) {
+    const current = Math.max(0, Math.min(1, Number.isFinite(bars[i]) ? bars[i] : 0))
+    if (i < 16) {
+      bridged[i] = current
+      continue
+    }
+    const left1 = Math.max(0, Math.min(1, bars[Math.max(0, i - 1)] || 0))
+    const right1 = Math.max(0, Math.min(1, bars[Math.min(count - 1, i + 1)] || 0))
+    const left2 = Math.max(0, Math.min(1, bars[Math.max(0, i - 2)] || 0))
+    const right2 = Math.max(0, Math.min(1, bars[Math.min(count - 1, i + 2)] || 0))
+    const pairBridge = Math.max(
+      Math.min(left1, right1) * 0.9,
+      (left1 + right1) * 0.44,
+      Math.min(left2, right2) * 0.76
+    )
+    const blend = Math.min(1, (i - 16) / 24)
+    const valleyFilled = current + Math.max(0, pairBridge - current) * (0.72 * blend)
+    bridged[i] = Math.max(0, Math.min(1, valleyFilled))
+  }
+  for (let i = 0; i < count; i += 1) {
+    const prev = bridged[Math.max(0, i - 1)]
+    const curr = bridged[i]
+    const next = bridged[Math.min(count - 1, i + 1)]
+    const spatial = i < 20 ? curr : prev * 0.2 + curr * 0.6 + next * 0.2
+    if (!hasSmoothedVisualizerFrame || i >= smoothedVisualizerBars.length) {
+      bars[i] = spatial
+      if (i < smoothedVisualizerBars.length) smoothedVisualizerBars[i] = spatial
+    } else {
+      const prior = smoothedVisualizerBars[i]
+      const alpha = spatial >= prior ? 0.52 : 0.24
+      const nextVal = prior + (spatial - prior) * alpha
+      smoothedVisualizerBars[i] = nextVal
+      bars[i] = nextVal
+    }
+  }
+  hasSmoothedVisualizerFrame = true
+}
+
+function publishVisualizationFrame(): void {
+  if (visualizerUnmounted || !shouldPollVisualization.value) return
   if (performance.now() < visualizationPausedUntil) return
-  visualizationRequestInFlight = true
   try {
-    const v = await window.api.audioEngine.getVisualizationData(visualizationOptions)
+    const v = playbackStore.visualizationData.value
     if (visualizerUnmounted || !shouldPollVisualization.value) return
     // Synthetic fallback data is deterministic UI scaffolding, not a real FFT.
     // Never present it as if it described the current audio signal.
@@ -117,6 +164,7 @@ async function pollVisualizationFrame(): Promise<void> {
       return
     }
     const bars = Float32Array.from(v.visualizerBars ?? [])
+    stabilizeVisualizerBars(bars, v.active)
     const waveform = Float32Array.from(v.waveform)
     const tempo = tempoEstimator.pushFrame({
       timestamp: performance.now(),
@@ -143,8 +191,6 @@ async function pollVisualizationFrame(): Promise<void> {
     )
   } catch {
     // The playback controls remain usable if visualization sampling is unavailable.
-  } finally {
-    visualizationRequestInFlight = false
   }
 }
 
@@ -169,36 +215,22 @@ function postInactiveVisualizationFrame(): void {
   )
 }
 
-function scheduleVisualizationFrame(delayMs = 0): void {
-  if (!shouldPollVisualization.value || visualizationTimer !== null) return
-  visualizationTimer = window.setTimeout(async () => {
-    visualizationTimer = null
-    await pollVisualizationFrame()
-    if (!visualizerUnmounted && shouldPollVisualization.value) {
-      scheduleVisualizationFrame(VISUALIZER_POLL_INTERVAL_MS)
-    }
-  }, delayMs)
-}
-
-function startVisualizationPolling(): void {
-  scheduleVisualizationFrame()
-}
-
 function stopVisualizationPolling(): void {
-  if (visualizationTimer === null) return
-  window.clearTimeout(visualizationTimer)
-  visualizationTimer = null
+  releaseVisualization?.()
+  releaseVisualization = null
 }
 
 function syncVisualizationPolling(): void {
   if (shouldPollVisualization.value) {
-    startVisualizationPolling()
+    releaseVisualization ??= playbackStore.acquireVisualizationConsumer(visualizationOptions)
     return
   }
-  const wasPolling = visualizationTimer !== null
+  const wasPolling = releaseVisualization !== null
   stopVisualizationPolling()
   if (wasPolling) postInactiveVisualizationFrame()
 }
+
+watch(playbackStore.visualizationData, publishVisualizationFrame)
 
 function pauseVisualizationForControl(): void {
   visualizationPausedUntil = performance.now() + CONTROL_VISUALIZATION_PAUSE_MS
@@ -342,7 +374,7 @@ watch(
 
 watch(
   [
-    () => playbackInfo.value?.source,
+    () => currentTrack.value?.queueEntryId,
     () => playbackInfo.value?.codec,
     () => playbackInfo.value?.sourceSampleRate,
     () => playbackInfo.value?.sourceChannels,

@@ -76,7 +76,7 @@ ${probe}`,
 })
 
 const probe = String.raw`
-const directory = process.argv[2];
+const directory = process.argv.at(-1);
 app.setPath('userData', join(directory, 'user-data'));
 app.whenReady().then(async () => {
   let networkRequests = 0;

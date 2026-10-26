@@ -1532,6 +1532,31 @@ constexpr const char* kUnityGainProcessingConfigJson =
     "{\"dspEnabled\":true,\"volumeNormalization\":\"track\","
     "\"replayGainPreamp\":0,\"replayGainFallback\":0}";
 
+void testResamplerStatusUsesTheCurrentDecodeStream() {
+  for (const int targetRate : {0, 96000}) {
+    g_backendRegistry.reset();
+    AudioPipeline pipeline;
+    std::string error;
+    const std::string processing = std::string("{\"dspEnabled\":true,\"resamplerQuality\":\"soxrVhq\",\"outputStage\":{\"resamplerQuality\":\"soxrVhq\",\"targetSampleRate\":") +
+        std::to_string(targetRate) + "}}";
+    const std::string state = std::string("{\"revision\":1,\"processing\":") + processing +
+        ",\"graph\":{\"version\":2,\"nodes\":[],\"outputStage\":{\"resamplerQuality\":\"soxrVhq\",\"targetSampleRate\":" +
+        std::to_string(targetRate) + "}}}";
+    assert(pipeline.applyDspState(1, state, &error));
+    assert(pipeline.play("resampler-observation.flac", 0.0, "wasapi-exclusive", "auto", 1.0,
+        processing, &error) == TAE_RESULT_OK);
+    const auto backend = waitForLatestStartedBackendState();
+    assert(backend);
+    renderBackendFrames(backend, 128);
+    const std::string json = pipeline.dspGraphStatusJson();
+    assert(json.find(targetRate ? "\"effectiveResampler\":\"swr\"" : "\"effectiveResampler\":\"none\"") != std::string::npos);
+    assert(json.find(targetRate ? "\"resampled\":true" : "\"resampled\":false") != std::string::npos);
+    assert(json.find("\"effectiveResamplerQuality\":\"ultra\"") != std::string::npos);
+    assert(json.find("\"effectiveResamplerFallback\":true") != std::string::npos);
+    pipeline.stop();
+  }
+}
+
 void testVolumeCommandAppliesAtRenderBoundary() {
   g_backendRegistry.reset();
   AudioPipeline pipeline;
@@ -2361,6 +2386,107 @@ void testDsd64StartsOnDop() {
   assertLatestPlaybackContains(engine, "\"isDsd\":true");
   assertLatestPlaybackContains(engine, "\"dsdMode\":\"dop\"");
   assertLatestPlaybackContains(engine, "\"outputPerfect\":true");
+}
+
+void testVisualizationDemandDisablesCaptureWithoutChangingDspPreference() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  engine.setVisualizationDemand(false);
+  assert(engine.play("typed-passthrough.flac", 0.0) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  const auto read = [&] { return engine.getVisualizationDataJson("{\"spectrumPoints\":64}"); };
+  pumpBackend(backend, 2, 128);
+  assert(read().find("\"tapStatus\":\"disabled\"") != std::string::npos);
+  engine.setVisualizationDemand(true);
+  pumpBackend(backend, 2, 128);
+  assert(read().find("\"active\":true") != std::string::npos);
+  engine.setVisualizationDemand(false);
+  engine.setDspConfig("{\"fftEnabled\":true}");
+  pumpBackend(backend, 2, 128);
+  assert(read().find("\"tapStatus\":\"disabled\"") != std::string::npos);
+  engine.setDspConfig("{\"fftEnabled\":false}");
+  engine.setVisualizationDemand(true);
+  pumpBackend(backend, 2, 128);
+  assert(read().find("\"tapStatus\":\"disabled\"") != std::string::npos);
+  engine.setDspConfig("{\"fftEnabled\":true}");
+  pumpBackend(backend, 2, 128);
+  assert(read().find("\"active\":true") != std::string::npos);
+  assert(g_backendRegistry.snapshots().size() == 1);
+  assertLatestPlaybackContains(engine, "\"pcmPassthrough\":true");
+}
+
+void testLoopRangeKeepsSameOccurrenceButClearsDuplicateAndCue() {
+  EngineHarness harness;
+  AudioPipeline pipeline;
+  QueueItem first;
+  first.id = "duplicate";
+  first.queueEntryId = "first";
+  first.source = "single-file-cue.flac";
+  std::string error;
+  const auto play = [&](const QueueItem& item) {
+    assert(pipeline.play(item, std::nullopt, 0.02, "wasapi-exclusive", "auto", 0.5,
+        "{\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+  };
+  play(first);
+  pipeline.setLoopRange(0.001, 0.01);
+  play(first);
+  assert(pipeline.enforceLoopRange(&error));
+  assert(std::abs(pipeline.status().positionSeconds - 0.001) < 0.001);
+  pipeline.setLoopRange(0.001, 0.01);
+  QueueItem second = first;
+  second.queueEntryId = "second";
+  play(second);
+  assert(!pipeline.enforceLoopRange(&error));
+  pipeline.setLoopRange(0.001, 0.01);
+  second.cueStartSeconds = 0.04;
+  second.cueEndSeconds = 0.11;
+  play(second);
+  assert(!pipeline.enforceLoopRange(&error));
+  pipeline.setLoopRange(0.001, 0.01);
+  assert(pipeline.togglePause() == TAE_RESULT_OK);
+  assert(!pipeline.enforceLoopRange(&error));
+  pipeline.stop();
+}
+
+void testLoopRangeClearsBeforePromotedDuplicateCanSeek(bool typed, bool manual) {
+  EngineHarness harness;
+  AudioPipeline pipeline;
+  QueueItem first;
+  first.id = "duplicate";
+  first.queueEntryId = "first";
+  first.source = typed ? "typed-gapless-current.flac" : "auto-promote-current.flac";
+  QueueItem next = first;
+  next.queueEntryId = "second";
+  std::string error;
+  assert(pipeline.play(first, next, 0, "wasapi-exclusive", "auto", typed ? 1.0 : 0.5,
+      "{\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(waitUntil([&] { return pipeline.status().preloadReady; }));
+  pipeline.setLoopRange(0.0, 0.001);
+  if (manual) {
+    assert(pipeline.skipToPreloaded(next, &error));
+    pumpBackend(backend, 1, 128);
+  } else {
+    pumpBackend(backend, 20);
+  }
+  assert(!pipeline.enforceLoopRange(&error));
+  assert(pipeline.status().currentItem.queueEntryId == "second");
+  pipeline.stop();
+}
+
+void testExternalStopClearsLoopRangeAndRetainsOccurrenceJson() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.loadQueue("[{\"id\":\"track\",\"queueEntryId\":\"row-1\",\"source\":\"typed-passthrough.flac\"}]", 0) == TAE_RESULT_OK);
+  assert(engine.getQueueJson().find("\"queueEntryId\":\"row-1\"") != std::string::npos);
+  assert(engine.play("typed-passthrough.flac", 0) == TAE_RESULT_OK);
+  assert(engine.setLoopRange(0.001, 0.01) == TAE_RESULT_OK);
+  assert(engine.stop() == TAE_RESULT_OK);
+  assert(engine.play("typed-passthrough.flac", 0.02) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  pumpBackend(backend, 4, 128);
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") >= 0.02);
 }
 
 void testPcmTypedPassthroughIsOutputPerfect() {
@@ -5034,6 +5160,8 @@ struct FFmpegDecoder::Impl {
   int (*interrupt)(void*) = nullptr;
   void* interruptContext = nullptr;
   bool opened = false;
+  FFmpegDecoder::ResamplerQuality quality = FFmpegDecoder::ResamplerQuality::Native;
+  FFmpegDecoder::ResamplerPhase phase = FFmpegDecoder::ResamplerPhase::Linear;
 
   bool injectedReadFailure(std::string* error) {
     if (positionFrames < 4096 || profile.stream.source.find("read-failure") == std::string::npos) return false;
@@ -5110,7 +5238,26 @@ bool FFmpegDecoder::setOutputFormat(const AudioFormat& format, std::string* erro
 }
 
 void FFmpegDecoder::setResamplerQuality(ResamplerQuality quality) {
-  (void)quality;
+  impl_->quality = quality;
+}
+
+void FFmpegDecoder::setResamplerPhase(ResamplerPhase phase) {
+  impl_->phase = phase;
+}
+
+FFmpegDecoder::ResamplerPhase FFmpegDecoder::resamplerPhase() const {
+  return impl_->phase;
+}
+
+FFmpegDecoder::ResamplerEngine FFmpegDecoder::resamplerEngine() const {
+  if (!impl_->opened) return ResamplerEngine::Unknown;
+  return impl_->outputFormat.sampleRate == impl_->profile.stream.sourceFormat.sampleRate
+      ? ResamplerEngine::None : ResamplerEngine::Swr;
+}
+
+FFmpegDecoder::ResamplerQuality FFmpegDecoder::effectiveResamplerQuality() const {
+  return impl_->quality == ResamplerQuality::SoxrHq || impl_->quality == ResamplerQuality::SoxrVhq
+      ? ResamplerQuality::Ultra : impl_->quality;
 }
 
 size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* error) {
@@ -5230,6 +5377,19 @@ void FFmpegDecoder::pollStreamMetadata() {}
   } while (false)
 
 int main() {
+  if (std::getenv("TAE_RUNTIME_AB_LOOP_ONLY")) {
+    RUN_RUNTIME_CASE(testLoopRangeKeepsSameOccurrenceButClearsDuplicateAndCue());
+    RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(false, false));
+    RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(true, false));
+    RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(false, true));
+    RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(true, true));
+    RUN_RUNTIME_CASE(testExternalStopClearsLoopRangeAndRetainsOccurrenceJson());
+    return 0;
+  }
+  if (std::getenv("TAE_RUNTIME_VISUALIZATION_ONLY")) {
+    RUN_RUNTIME_CASE(testVisualizationDemandDisablesCaptureWithoutChangingDspPreference());
+    return 0;
+  }
   if (std::getenv("TAE_RUNTIME_SLEEP_BOUNDARY_ONLY")) {
     RUN_RUNTIME_CASE(testNaturalBoundariesCountIdenticalOccurrencesAndLogicalCycles());
     RUN_RUNTIME_CASE(testNaturalSameIndexRepeatBoundaries(false));
@@ -5303,6 +5463,14 @@ int main() {
   RUN_RUNTIME_CASE(testDsd64StartsOnDop());
   RUN_RUNTIME_CASE(testPcmTypedPassthroughKeepsTypedPathDuringTransientDecoderLag());
   RUN_RUNTIME_CASE(testPcmTypedPassthroughIsOutputPerfect());
+  RUN_RUNTIME_CASE(testVisualizationDemandDisablesCaptureWithoutChangingDspPreference());
+  RUN_RUNTIME_CASE(testLoopRangeKeepsSameOccurrenceButClearsDuplicateAndCue());
+  RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(false, false));
+  RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(true, false));
+  RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(false, true));
+  RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(true, true));
+  RUN_RUNTIME_CASE(testExternalStopClearsLoopRangeAndRetainsOccurrenceJson());
+  RUN_RUNTIME_CASE(testResamplerStatusUsesTheCurrentDecodeStream());
   RUN_RUNTIME_CASE(testPcm192kTypedPassthroughIsOutputPerfect());
   RUN_RUNTIME_CASE(testPcmTypedGaplessPreservesBytesWithoutReopen());
   RUN_RUNTIME_CASE(testPcmTypedGaplessRejectsIncompatiblePreloads());

@@ -1,5 +1,32 @@
+import type { MusicExplorationDatabaseApi } from '../../shared/musicExploration.ts'
+import { LibraryDatabaseExploration, EXPLORATION_SCHEMA_SQL, EXPLORATION_SCHEMA_OBJECTS } from './libraryDatabaseExploration.ts'
+import { LibraryDatabaseIdentificationSchedule, IDENTIFICATION_SCHEDULE_SCHEMA_SQL } from './libraryDatabaseIdentificationSchedule.ts'
+import type { LibraryPlaybackQueueReference } from '../../shared/playbackSession.ts'
+import { LibraryDatabaseEntityMetadata, ENTITY_METADATA_SCHEMA_SQL, ENTITY_METADATA_DETAILS_SCHEMA_SQL, ENTITY_METADATA_PERSONAL_SCHEMA_SQL } from './libraryDatabaseEntityMetadata.ts'
+import { LibraryDatabaseLegacyMusic, LEGACY_MUSIC_METADATA_SCHEMA_SQL } from './libraryDatabaseLegacyMusic.ts'
+import { LEGACY_MUSIC_TASK_SCHEMA_SQL } from './libraryDatabaseLegacyTasks.ts'
+import type { LegacyMusicTaskDatabaseApi } from '../../shared/legacyMusicTasks.ts'
+import type { LegacyMusicMetadataDatabaseApi } from '../../shared/legacyMusicMetadata.ts'
+import type { EntityMetadataDatabaseApi } from '../../shared/entityMetadata.ts'
+import { metadataTasks, metadataTaskDemands } from './libraryDatabaseMetadataTasks.ts'
+import type { IdentificationDatabaseApi } from '../../shared/musicIdentification.ts'
+import type { CatalogUnifiedPlaybackDatabaseApi } from '../../shared/musicUnifiedPlayback.ts'
+import { readCatalogPlaybackSources } from './libraryDatabasePlaybackSources.ts'
+import type { AlbumBrowseDatabaseApi } from '../../shared/musicAlbumBrowse.ts'
+import { LibraryDatabaseAlbumBrowse } from './libraryDatabaseAlbumBrowse.ts'
+import type { MusicRatingsDatabaseApi } from '../../shared/musicRatings.ts'
+import { LibraryDatabaseRatings, RATING_SCHEMA_SQL, RATING_SCHEMA_OBJECTS } from './libraryDatabaseRatings.ts'
+import type { MusicPreferencesDatabaseApi } from '../../shared/musicPreferences.ts'
+import { LibraryDatabasePreferences, PREFERENCE_SCHEMA_SQL, PREFERENCE_SCHEMA_OBJECTS, PREFERENCE_WORK_MIGRATION_SQL } from './libraryDatabasePreferences.ts'
+import type { MusicTagsDatabaseApi } from '../../shared/musicTags.ts'
+import type { MusicFocusDatabaseApi } from '../../shared/musicFocus.ts'
+import { LibraryDatabaseFocus, FOCUS_SCHEMA_SQL, FOCUS_SCHEMA_OBJECTS } from './libraryDatabaseFocus.ts'
+import { LibraryDatabaseTags, TAG_SCHEMA_SQL, TAG_SCHEMA_OBJECTS } from './libraryDatabaseTags.ts'
+import { IDENTIFICATION_SCHEMA_SQL, IDENTIFICATION_INPUT_FENCE_SCHEMA_SQL, IDENTIFICATION_SOURCE_FENCE_SCHEMA_SQL, IDENTIFICATION_ALBUM_FENCE_SCHEMA_SQL } from './libraryDatabaseIdentification.ts'
 import { DatabaseSync, backup, type SQLInputValue } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
+import { LibraryDatabasePersonalMusic } from './libraryDatabasePersonalMusic.ts'
+import { validateMusicPersonalBackup, validMusicPersonalBackupRevision, type MusicPersonalBackupDatabaseApi } from '../../shared/musicPersonalBackup.ts'
 import { existsSync, mkdirSync, renameSync, unlinkSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
@@ -9,6 +36,7 @@ import type {
 } from '../../shared/localLibrary.ts'
 import type { LocalLibraryFileIdentity } from '../../shared/localLibraryScan.ts'
 import { LOCAL_LIBRARY_METADATA_VERSION } from '../../shared/localLibraryScan.ts'
+import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 import {
   LIBRARY_MAX_PAGE_SIZE,
   LIBRARY_PAGE_SIZE,
@@ -22,6 +50,7 @@ import {
   type LibraryQueueSnapshot,
   type LibraryQueuePage,
   type LibraryQueueEdit,
+  type LibraryQueueInsertItem,
   type LibraryScanCommit,
   type LibraryScanJob,
   type LibraryScanStartRequest,
@@ -44,7 +73,8 @@ import {
   albumOrderIndex,
   normalizeLibraryPath
 } from '../../shared/libraryIdentity.ts'
-import { getCollectionDirectory, isLibraryArtistMember } from '../../shared/libraryCollections.ts'
+import { getCollectionDirectory, isLibraryArtistMember, libraryArtistNames } from '../../shared/libraryCollections.ts'
+import { normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
 import {
   LibraryDatabaseCollections,
   normalizeCollectionSearch
@@ -74,6 +104,17 @@ import {
 import type { LibrarySelectionRequest } from '../../shared/librarySelection.ts'
 import { validateLibrarySelection } from './libraryDatabaseSelections.ts'
 import { LibraryDatabaseHistory, LIBRARY_HISTORY_SCHEMA_SQL } from './libraryDatabaseHistory.ts'
+import { LibraryDatabaseCatalog, CATALOG_SCHEMA_SQL, CATALOG_PROJECT_SCHEMA_SQL } from './libraryDatabaseCatalog.ts'
+import { LibraryDatabaseCatalogReferences } from './libraryDatabaseCatalogReferences.ts'
+import { LibraryDatabaseGenres, GENRE_SCHEMA_SQL } from './libraryDatabaseGenres.ts'
+import { LibraryDatabaseGenreLegacy, GENRE_LEGACY_SCHEMA_SQL } from './libraryDatabaseGenreLegacy.ts'
+import type { GenreDatabaseApi } from '../../shared/musicGenres.ts'
+import type { GenreBrowseDatabaseApi } from '../../shared/musicGenreBrowse.ts'
+import { LibraryDatabaseGenreBrowse, GENRE_PLATFORM_ALBUM_TARGET_SQL } from './libraryDatabaseGenreBrowse.ts'
+import { BROWSE_REVISION_OBJECTS, BROWSE_REVISION_SCHEMA_SQL, PERSONAL_METADATA_TABLES, PERSONAL_METADATA_REVISION_OBJECTS, PERSONAL_METADATA_REVISION_SCHEMA_SQL } from './libraryDatabaseBrowseRevision.ts'
+import { LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL } from './legacyMusicProvenance.ts'
+import type { CatalogQuery, CatalogSourceQuery, CatalogSync } from '../../shared/musicCatalog.ts'
+import type { MusicVersionsDocument } from '../../shared/musicVersions.ts'
 import {
   LIBRARY_RECORDING_INDEX_EXPRESSION,
   lookupPlaylistTrackIds,
@@ -81,6 +122,7 @@ import {
 } from './libraryDatabasePlaylist.ts'
 import type { LibraryPlaylistLookupRequest } from '../../shared/libraryDatabase.ts'
 import { unifiedLibraryOrder } from './libraryDatabaseSearch.ts'
+import { SymSpellIndex, prepareSearchQuery, getMaxSymSpellTolerance } from '../../shared/searchRelevance.ts'
 import type { LibraryHistorySyncRequest } from '../../shared/libraryDatabase.ts'
 import {
   libraryPageBounds,
@@ -90,6 +132,11 @@ import {
 } from './libraryDatabaseValidation.ts'
 
 type Row = Record<string, string | number | null>
+/** One small row per legacy physical file. No date becomes library content until finishScan. */
+const SCAN_RELEASE_DATE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS scan_release_dates(
+  job_id TEXT NOT NULL,file_key TEXT NOT NULL,epoch INTEGER NOT NULL,release_date TEXT,
+  dependencies TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(job_id,file_key),
+  FOREIGN KEY(job_id,file_key) REFERENCES scan_items(job_id,file_key) ON DELETE CASCADE);`
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const normalizeSearch = (value: string): string =>
   value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
@@ -156,6 +203,7 @@ export class LibraryDatabase {
   private readonly ordered = new Map<string, string[]>()
   private readonly totals = new Map<string, { total: number; totalDuration: number }>()
   private albumAliases: Map<string, string[]> | null = null
+  private symSpellIndex: SymSpellIndex | null = null
   private readonly collections = new LibraryDatabaseCollections()
   private readonly statements = new Map<string, ReturnType<DatabaseSync['prepare']>>()
   readonly filePath: string
@@ -165,12 +213,40 @@ export class LibraryDatabase {
   private readonly history: LibraryDatabaseHistory
   private readonly playlistViews: LibraryDatabasePlaylistViews
   private readonly selections: LibraryDatabaseSelections
+  private readonly catalog: LibraryDatabaseCatalog
+  private readonly catalogReferences: LibraryDatabaseCatalogReferences
+  private readonly entityMetadata: LibraryDatabaseEntityMetadata
+  private readonly genres: LibraryDatabaseGenres
+  private readonly genreLegacy: LibraryDatabaseGenreLegacy
+  private readonly genreBrowse: LibraryDatabaseGenreBrowse
+  private albumBrowseInstance: LibraryDatabaseAlbumBrowse | null = null
+  private focusInstance: LibraryDatabaseFocus | null = null
 
   constructor(filePath: string) {
     this.filePath = filePath
     const existing = filePath !== ':memory:' && existsSync(filePath)
     mkdirSync(dirname(filePath), { recursive: true })
     this.sql = new DatabaseSync(filePath)
+    this.genres = new LibraryDatabaseGenres({ sql: this.sql, transaction: action => this.transaction(action),
+      collectionExists: id => this.getAlbumAliases().has(id) || !!this.sql.prepare(`
+        SELECT 1 FROM catalog_sources s WHERE s.provider<>'local' AND s.album_key=?
+        AND ${GENRE_PLATFORM_ALBUM_TARGET_SQL}
+        AND EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id) LIMIT 1`).get(id) })
+    this.genreLegacy = new LibraryDatabaseGenreLegacy({ sql: this.sql,
+      transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+      albumCollections: () => [...this.getAlbumAliases().keys()].map(id => ({ id })), genres: this.genres })
+    this.genreBrowse = new LibraryDatabaseGenreBrowse({ sql: this.sql,
+      albumAliases: () => this.getAlbumAliases(), contentRevision: () => this.getContentRevision(),
+      metadataRevision: () => this.getClassificationMetadataRevision() })
+    this.catalogReferences = new LibraryDatabaseCatalogReferences(this.sql)
+    this.entityMetadata = new LibraryDatabaseEntityMetadata({ sql: this.sql, transaction: action => this.transaction(action),
+      contentRevision: () => this.getContentRevision(), albumAliases: id => this.getAlbumAliases().get(id) ?? [id], music: () => this.legacyMusic(),
+      exploration: () => this.exploration() })
+    this.catalog = new LibraryDatabaseCatalog({
+      sql: this.sql,
+      transaction: (action) => this.transaction(action),
+      collectionSelection: (collection, id) => this.where(collection === 'artists' ? { artist: id } : { albumId: id })
+    })
     this.repair = new LibraryDatabaseRepair(this.sql, (action) => this.transaction(action, false))
     registerLibraryRecordingFunctions(this.sql)
     this.removal = new LibraryDatabaseRemoval({
@@ -211,18 +287,25 @@ export class LibraryDatabase {
     })
     try {
       const version = Number((this.sql.prepare('PRAGMA user_version').get() as Row).user_version)
-      if (version > 10) throw new Error(`Unsupported music library database version: ${version}`)
+      if (version > 29) throw new Error(`Unsupported music library database version: ${version}`)
+      let legacyV14InputFence = false
       if (existing) {
         const identity = Number(
           (this.sql.prepare('PRAGMA application_id').get() as Row).application_id
         )
         const tables = new Set(
           (
-            this.sql.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Row[]
+            this.sql.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view','trigger','index')").all() as Row[]
           ).map((row) => text(row.name))
         )
+        // Early v14 profiles predate the additive input fence. Both objects
+        // were absent there; a partial fence or a newer incomplete schema is
+        // still rejected. Install it only inside the backed-up upgrade below.
+        legacyV14InputFence = version === 14 &&
+          !tables.has('metadata_identification_inputs') &&
+          !tables.has('metadata_identification_input_changed')
         if (
-          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(version) ||
+          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29].includes(version) ||
           identity !== 0x54574c42 ||
           [
             'meta',
@@ -232,7 +315,34 @@ export class LibraryDatabase {
             'queue_entries',
             'track_search',
             ...(version >= 4 ? ['library_history'] : []),
-            ...(version >= 7 ? ['queue_snapshots'] : [])
+            ...(version >= 7 ? ['queue_snapshots'] : []),
+            ...(version >= 13 ? ['metadata_entities', 'metadata_subjects', 'metadata_link_history', 'metadata_facts', 'metadata_overrides', 'metadata_jobs', 'metadata_demands'] : []),
+            ...(version >= 14 && !legacyV14InputFence ? ['metadata_identification_inputs', 'metadata_identification_input_changed'] : []),
+            ...(version >= 14 ? ['metadata_identity_refs', 'metadata_identity_links', 'metadata_identity_candidates', 'metadata_identity_suppressions', 'metadata_identity_history', 'catalog_release_projects'] : []),
+            ...(version >= 15 ? ['metadata_identification_source_before', 'metadata_identification_source_after', 'metadata_identification_source_insert', 'metadata_identification_credit_insert', 'metadata_identification_credit_delete'] : []),
+            ...(version >= 16 ? ['metadata_identification_album_cohort'] : []),
+            ...(version >= 17 ? ['metadata_identification_schedule','metadata_identification_schedule_state','metadata_schedule_input_insert','metadata_schedule_input_update','metadata_schedule_member_insert','metadata_schedule_member_delete'] : []),
+            ...(version >= 18 ? ['metadata_credits', 'metadata_credit_sets'] : []),
+            ...(version >= 19 ? ['metadata_legacy_documents', 'metadata_legacy_albums', 'metadata_legacy_bindings', 'metadata_legacy_history'] : []),
+            ...(version >= 20 ? ['metadata_legacy_inputs', 'metadata_legacy_batches'] : []),
+            ...(version >= 21 ? ['music_genre_state', 'music_genres', 'music_genre_aliases',
+              'music_genre_evidence', 'music_genre_overrides', 'music_genre_import_overrides',
+              'music_genre_import_nodes', 'music_genre_alias_bridges', 'music_genre_pending', 'music_genre_sources_ai',
+              'music_genre_sources_au', 'music_genre_members_ai', 'music_genre_members_ad',
+              'music_genre_legacy_documents', 'music_genre_legacy_albums', 'music_genre_legacy_targets'] : []),
+            ...(version >= 22 ? BROWSE_REVISION_OBJECTS : []),
+            ...(version >= 23 ? RATING_SCHEMA_OBJECTS : []),
+            ...(version >= 24 ? PREFERENCE_SCHEMA_OBJECTS : []),
+            ...(version >= 25 ? TAG_SCHEMA_OBJECTS : []),
+            ...(version >= 26 ? FOCUS_SCHEMA_OBJECTS : []),
+            ...(version >= 27 ? EXPLORATION_SCHEMA_OBJECTS : []),
+            ...(version >= 28 ? [...PERSONAL_METADATA_TABLES, ...PERSONAL_METADATA_REVISION_OBJECTS] : []),
+            ...(version >= 29 ? ['scan_release_dates'] : []),
+            ...(version >= 12 ? ['catalog_state', 'catalog_entities', 'catalog_aliases',
+              'catalog_sources', 'catalog_memberships', 'catalog_source_artists', 'catalog_facts',
+              'catalog_pending', 'catalog_imports', 'catalog_import_members', 'catalog_versions',
+              'catalog_version_sources', 'catalog_bindings', 'catalog_entity_sources',
+              'catalog_tracks_ai', 'catalog_tracks_au', 'catalog_tracks_ad'] : [])
           ].some((name) => !tables.has(name))
         )
           throw new Error(
@@ -243,7 +353,7 @@ export class LibraryDatabase {
       if (health.quick_check !== 'ok')
         throw new Error(`Music library database integrity check failed: ${health.quick_check}`)
       this.sql.exec(
-        'PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-8192;'
+        'PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA cache_size=-65536; PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-32768;'
       )
       this.sql.function(
         'library_has_genre',
@@ -287,7 +397,7 @@ export class LibraryDatabase {
             ? 1
             : 0
       )
-      this.sql.function('library_has_artist', { deterministic: true }, (artist, credits, name) => {
+      this.sql.function('library_has_artist', { deterministic: true }, (artist, credits, tags, name) => {
         const values: unknown =
           typeof credits === 'string' && credits.startsWith('[') ? JSON.parse(credits) : undefined
         const artists = Array.isArray(values)
@@ -296,7 +406,18 @@ export class LibraryDatabase {
                 isRecord(value) && typeof value.name === 'string'
             )
           : undefined
-        return isLibraryArtistMember({ artist: text(artist), artists }, text(name)) ? 1 : 0
+        const identityTags = normalizeTrackIdentityTags(typeof tags === 'string' ? JSON.parse(tags) : undefined)
+        return isLibraryArtistMember({ artist: text(artist), artists, identityTags }, text(name)) ? 1 : 0
+      })
+      this.sql.function('library_artist_names', { deterministic: true }, (artist, credits, tags) => {
+        const values: unknown = typeof credits === 'string' && credits.startsWith('[')
+          ? JSON.parse(credits) : undefined
+        const artists = Array.isArray(values)
+          ? values.filter((value): value is { name: string } =>
+              isRecord(value) && typeof value.name === 'string')
+          : undefined
+        const identityTags = normalizeTrackIdentityTags(typeof tags === 'string' ? JSON.parse(tags) : undefined)
+        return JSON.stringify(libraryArtistNames({ artist: text(artist), artists, identityTags }))
       })
       let previousRoots = '',
         roots: string[] = []
@@ -338,6 +459,7 @@ export class LibraryDatabase {
         CREATE INDEX scan_checkpoint_cleanup ON scan_jobs(updated_at) WHERE state='completed' AND checkpoints_reclaimed=0;
         CREATE TABLE IF NOT EXISTS scan_directories(job_id TEXT NOT NULL REFERENCES scan_jobs(id), path TEXT NOT NULL, state TEXT NOT NULL, error TEXT, PRIMARY KEY(job_id,path));
         CREATE TABLE IF NOT EXISTS scan_items(job_id TEXT NOT NULL REFERENCES scan_jobs(id), file_key TEXT NOT NULL, identity TEXT NOT NULL, state TEXT NOT NULL, error TEXT, expected_version INTEGER NOT NULL, epoch INTEGER NOT NULL, PRIMARY KEY(job_id,file_key));
+        ${SCAN_RELEASE_DATE_SCHEMA_SQL}
         CREATE INDEX IF NOT EXISTS scan_pending_files ON scan_items(job_id,epoch,state,file_key);
         CREATE INDEX IF NOT EXISTS scan_pending_directories ON scan_directories(job_id,state,path);
         CREATE TABLE IF NOT EXISTS cue_definitions(cue_key TEXT PRIMARY KEY, identity TEXT NOT NULL, audio_key TEXT NOT NULL, definition TEXT NOT NULL);
@@ -346,9 +468,9 @@ export class LibraryDatabase {
           state TEXT NOT NULL DEFAULT 'ready' CHECK(state IN ('building','ready','abandoned')),
           play_mode TEXT CHECK(play_mode IN ('sequential','listLoop','repeat','shuffle')));
         CREATE INDEX queues_state ON queues(state,id);
-        CREATE TABLE IF NOT EXISTS queue_entries(queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE, position INTEGER NOT NULL, entry_id TEXT NOT NULL UNIQUE, track_id TEXT NOT NULL, original_position INTEGER NOT NULL, PRIMARY KEY(queue_id,position));
+        CREATE TABLE IF NOT EXISTS queue_entries(queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE, position INTEGER NOT NULL, entry_id TEXT NOT NULL, track_id TEXT NOT NULL, original_position INTEGER NOT NULL, PRIMARY KEY(queue_id,position), UNIQUE(queue_id,entry_id));
         CREATE INDEX IF NOT EXISTS queue_entries_original ON queue_entries(queue_id,original_position);
-        CREATE TABLE queue_snapshots(entry_id TEXT PRIMARY KEY REFERENCES queue_entries(entry_id) ON DELETE CASCADE,payload TEXT NOT NULL);
+        CREATE TABLE queue_snapshots(queue_id TEXT NOT NULL,entry_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(queue_id,entry_id),FOREIGN KEY(queue_id,entry_id) REFERENCES queue_entries(queue_id,entry_id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS queue_history(id INTEGER PRIMARY KEY AUTOINCREMENT,queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE,revision INTEGER NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS queue_history_queue ON queue_history(queue_id,id);
         CREATE TABLE IF NOT EXISTS queue_history_entries(history_id INTEGER NOT NULL REFERENCES queue_history(id) ON DELETE CASCADE,position INTEGER NOT NULL,original_position INTEGER NOT NULL,entry_id TEXT NOT NULL,track_id TEXT NOT NULL,snapshot TEXT,PRIMARY KEY(history_id,entry_id));
@@ -357,10 +479,31 @@ export class LibraryDatabase {
         PRAGMA application_id=1415007298;
         ${LIBRARY_HISTORY_SCHEMA_SQL}
         CREATE INDEX tracks_recording ON tracks(${LIBRARY_RECORDING_INDEX_EXPRESSION},seq);
-        PRAGMA user_version=10;
+        ${CATALOG_SCHEMA_SQL}
+        ${ENTITY_METADATA_SCHEMA_SQL}
+        ${CATALOG_PROJECT_SCHEMA_SQL}
+        ${IDENTIFICATION_SCHEMA_SQL}
+        ${IDENTIFICATION_SOURCE_FENCE_SCHEMA_SQL}
+        ${IDENTIFICATION_ALBUM_FENCE_SCHEMA_SQL}
+        ${IDENTIFICATION_SCHEDULE_SCHEMA_SQL}
+        ${ENTITY_METADATA_DETAILS_SCHEMA_SQL}
+        ${LEGACY_MUSIC_METADATA_SCHEMA_SQL}
+        ${LEGACY_MUSIC_TASK_SCHEMA_SQL}
+        ${GENRE_SCHEMA_SQL}
+        ${GENRE_LEGACY_SCHEMA_SQL}
+        ${BROWSE_REVISION_SCHEMA_SQL}
+        ${RATING_SCHEMA_SQL}
+        ${PREFERENCE_SCHEMA_SQL}
+        ${TAG_SCHEMA_SQL}
+        ${FOCUS_SCHEMA_SQL}
+        ${EXPLORATION_SCHEMA_SQL}
+        ${ENTITY_METADATA_PERSONAL_SCHEMA_SQL}
+        ${LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL}
+        ${PERSONAL_METADATA_REVISION_SCHEMA_SQL}
+        PRAGMA user_version=29;
         COMMIT;
       `)
-      if (existing && version < 10) {
+      if (existing && version < 29) {
         // VACUUM INTO is a consistent SQLite snapshot, including committed WAL
         // pages. A backup failure must prevent the schema change.
         const destination = `${filePath}.v${version}-backup-${randomUUID()}.sqlite`
@@ -408,10 +551,53 @@ export class LibraryDatabase {
             )
           // Snapshot legacy completion counts lazily, one job at a time, before
           // retiring its rows. Opening must not scan all historical checkpoints.
-          this.sql.exec(`ALTER TABLE scan_jobs ADD COLUMN checked_files INTEGER;
+          if (version < 10)
+            this.sql.exec(`ALTER TABLE scan_jobs ADD COLUMN checked_files INTEGER;
             ALTER TABLE scan_jobs ADD COLUMN checkpoints_reclaimed INTEGER NOT NULL DEFAULT 0 CHECK(checkpoints_reclaimed IN (0,1));
-            CREATE INDEX scan_checkpoint_cleanup ON scan_jobs(updated_at) WHERE state='completed' AND checkpoints_reclaimed=0;
-            PRAGMA user_version=10; COMMIT;`)
+            CREATE INDEX scan_checkpoint_cleanup ON scan_jobs(updated_at) WHERE state='completed' AND checkpoints_reclaimed=0;`)
+          // Named array sessions may overlap the live queue or each other.
+          // Keep their occurrence IDs; identity is scoped by the durable queue.
+          if (version < 11) this.sql
+            .exec(`CREATE TABLE queue_entries_v11(queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE,position INTEGER NOT NULL,entry_id TEXT NOT NULL,track_id TEXT NOT NULL,original_position INTEGER NOT NULL,PRIMARY KEY(queue_id,position),UNIQUE(queue_id,entry_id));
+            INSERT INTO queue_entries_v11 SELECT queue_id,position,entry_id,track_id,original_position FROM queue_entries;
+            CREATE TABLE queue_snapshots_v11(queue_id TEXT NOT NULL,entry_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(queue_id,entry_id),FOREIGN KEY(queue_id,entry_id) REFERENCES queue_entries_v11(queue_id,entry_id) ON DELETE CASCADE);
+            INSERT INTO queue_snapshots_v11 SELECT q.queue_id,s.entry_id,s.payload FROM queue_snapshots s JOIN queue_entries q ON q.entry_id=s.entry_id;
+            DROP TABLE queue_snapshots;
+            DROP TABLE queue_entries;
+            ALTER TABLE queue_entries_v11 RENAME TO queue_entries;
+            ALTER TABLE queue_snapshots_v11 RENAME TO queue_snapshots;
+            CREATE INDEX queue_entries_original ON queue_entries(queue_id,original_position);
+            `)
+          if (version < 12) this.sql.exec(CATALOG_SCHEMA_SQL)
+          if (version < 13) this.sql.exec(ENTITY_METADATA_SCHEMA_SQL)
+          if (version < 14) {
+            this.sql.exec(`${CATALOG_PROJECT_SCHEMA_SQL}\n${IDENTIFICATION_SCHEMA_SQL}`)
+            this.entityMetadata.identification.migrateLegacyCandidates()
+          }
+          if (legacyV14InputFence) {
+            this.sql.exec(`${IDENTIFICATION_INPUT_FENCE_SCHEMA_SQL}
+              INSERT INTO metadata_identification_inputs SELECT id,1 FROM catalog_entities;
+              CREATE INDEX IF NOT EXISTS metadata_link_history_identity ON metadata_link_history(entity_id,lower(mbid),seq);`)
+          }
+          if (version < 15) this.sql.exec(IDENTIFICATION_SOURCE_FENCE_SCHEMA_SQL)
+          if (version < 16) this.sql.exec(IDENTIFICATION_ALBUM_FENCE_SCHEMA_SQL)
+          if (version < 17) this.sql.exec(IDENTIFICATION_SCHEDULE_SCHEMA_SQL)
+          if (version < 18) this.sql.exec(ENTITY_METADATA_DETAILS_SCHEMA_SQL)
+          if (version < 19) this.sql.exec(LEGACY_MUSIC_METADATA_SCHEMA_SQL)
+          if (version < 20) this.sql.exec(LEGACY_MUSIC_TASK_SCHEMA_SQL)
+          if (version < 21) this.sql.exec(`${GENRE_SCHEMA_SQL}\n${GENRE_LEGACY_SCHEMA_SQL}`)
+          if (version < 22) this.sql.exec(BROWSE_REVISION_SCHEMA_SQL)
+          if (version < 23) this.sql.exec(RATING_SCHEMA_SQL)
+          if (version < 24) this.sql.exec(PREFERENCE_SCHEMA_SQL)
+          if (version < 25) this.sql.exec(TAG_SCHEMA_SQL)
+          if (version < 26) this.sql.exec(FOCUS_SCHEMA_SQL)
+          if (version < 27) {
+            this.sql.exec(EXPLORATION_SCHEMA_SQL)
+            if (version >= 24) this.sql.exec(PREFERENCE_WORK_MIGRATION_SQL)
+          }
+          if (version < 28) this.sql.exec(`${ENTITY_METADATA_PERSONAL_SCHEMA_SQL}\n${LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL}\n${PERSONAL_METADATA_REVISION_SCHEMA_SQL}`)
+          if (version < 29) this.sql.exec(SCAN_RELEASE_DATE_SCHEMA_SQL)
+          this.sql.exec('PRAGMA user_version=29; COMMIT;')
         } catch (error) {
           this.sql.exec('ROLLBACK')
           throw error
@@ -429,7 +615,13 @@ export class LibraryDatabase {
       // Additive indexes keep records and revision unchanged. The constant
       // file index lets COUNT(*) skip wide path keys without caching stale counts.
       this.sql.exec(`CREATE INDEX IF NOT EXISTS tracks_insertion ON tracks(seq);
-        CREATE INDEX IF NOT EXISTS files_count ON files(1);`)
+        CREATE INDEX IF NOT EXISTS files_count ON files(1);
+        CREATE INDEX IF NOT EXISTS metadata_fact_expiry ON metadata_facts(json_extract(payload,'$.usage.expiresAt'))
+          WHERE json_extract(payload,'$.usage.expiresAt') IS NOT NULL;`)
+      // Re-project saved file credits in bounded catalog maintenance, not a re-scan
+      // or a synchronous whole-library payload migration during database open.
+      this.sql.exec(`INSERT OR IGNORE INTO catalog_state VALUES('file_artist_cursor_v1','0');
+        INSERT OR IGNORE INTO catalog_state SELECT 'file_artist_horizon_v1',CAST(coalesce(max(seq),0) AS TEXT) FROM tracks;`)
       // A previous owner's unacknowledged construction is never playable.
       // Recovery only marks it; bounded background maintenance releases rows.
       this.queues.recoverBuilds()
@@ -442,6 +634,182 @@ export class LibraryDatabase {
   close(): void {
     if (this.sql.isOpen) this.sql.close()
   }
+  identificationSchedule(...args: Parameters<import('../../shared/musicIdentificationSchedule.ts').IdentificationScheduleDatabaseApi['identificationSchedule']>) {
+    return new LibraryDatabaseIdentificationSchedule(this.sql, this.entityMetadata, action => this.transaction(action)).advance(...args)
+  }
+  identificationScheduleStatus() {
+    return new LibraryDatabaseIdentificationSchedule(this.sql, this.entityMetadata, action => this.transaction(action)).status()
+  }
+  identificationEnqueue(...args: Parameters<IdentificationDatabaseApi['identificationEnqueue']>) { return this.entityMetadata.enqueueIdentification(...args) }
+  identificationInput(...args: Parameters<IdentificationDatabaseApi['identificationInput']>) { return this.entityMetadata.identification.input(...args) }
+  identificationPublish(...args: Parameters<IdentificationDatabaseApi['identificationPublish']>) { return this.entityMetadata.identification.publish(...args) }
+  identificationDetail(...args: Parameters<IdentificationDatabaseApi['identificationDetail']>) { return this.entityMetadata.identification.detail(...args) }
+  identificationCandidates(...args: Parameters<IdentificationDatabaseApi['identificationCandidates']>) { return this.entityMetadata.identification.candidates(...args) }
+  identificationInbox(...args: Parameters<IdentificationDatabaseApi['identificationInbox']>) { return this.entityMetadata.identification.inbox(...args) }
+  identificationHistory(...args: Parameters<IdentificationDatabaseApi['identificationHistory']>) { return this.entityMetadata.identification.history(...args) }
+  identificationRestorePreview(...args: Parameters<IdentificationDatabaseApi['identificationRestorePreview']>) { return this.entityMetadata.identification.restorePreview(...args) }
+  identificationRestore(...args: Parameters<IdentificationDatabaseApi['identificationRestore']>) { return this.entityMetadata.identification.restore(...args) }
+  identificationPreview(...args: Parameters<IdentificationDatabaseApi['identificationPreview']>) { return this.entityMetadata.identification.preview(...args) }
+  identificationDecide(...args: Parameters<IdentificationDatabaseApi['identificationDecide']>) { return this.entityMetadata.identification.decide(...args) }
+  identificationDetach(...args: Parameters<IdentificationDatabaseApi['identificationDetach']>) { return this.entityMetadata.identification.detach(...args) }
+  metadataDetail(...args: Parameters<EntityMetadataDatabaseApi['metadataDetail']>) { return this.entityMetadata.detail(...args) }
+  metadataCredits(...args: Parameters<EntityMetadataDatabaseApi['metadataCredits']>) { return this.entityMetadata.credits(...args) }
+  metadataArtwork(...args: Parameters<EntityMetadataDatabaseApi['metadataArtwork']>) { return this.entityMetadata.artwork(...args) }
+  metadataEnqueue(...args: Parameters<EntityMetadataDatabaseApi['metadataEnqueue']>) { return this.entityMetadata.enqueue(...args) }
+  metadataDecide(...args: Parameters<EntityMetadataDatabaseApi['metadataDecide']>) { return this.entityMetadata.decide(...args) }
+  metadataDetach(...args: Parameters<EntityMetadataDatabaseApi['metadataDetach']>) { return this.entityMetadata.detach(...args) }
+  metadataOverride(...args: Parameters<EntityMetadataDatabaseApi['metadataOverride']>) { return this.entityMetadata.override(...args) }
+  metadataSourcePreference(...args: Parameters<EntityMetadataDatabaseApi['metadataSourcePreference']>) { return this.entityMetadata.sourcePreference(...args) }
+  metadataArtworkOverride(...args: Parameters<EntityMetadataDatabaseApi['metadataArtworkOverride']>) { return this.entityMetadata.artworkOverride(...args) }
+  metadataJobs(...args: Parameters<EntityMetadataDatabaseApi['metadataJobs']>) { return this.entityMetadata.jobs(...args) }
+  metadataTasks(...args: Parameters<EntityMetadataDatabaseApi['metadataTasks']>) { return metadataTasks(this.sql, ...args) }
+  metadataTaskDemands(...args: Parameters<EntityMetadataDatabaseApi['metadataTaskDemands']>) { return metadataTaskDemands(this.sql, ...args) }
+  metadataTaskSources(...args: Parameters<EntityMetadataDatabaseApi['metadataTaskSources']>) { return this.entityMetadata.taskSources(...args) }
+  metadataRequery(...args: Parameters<EntityMetadataDatabaseApi['metadataRequery']>) { return this.entityMetadata.requery(...args) }
+  metadataCancel(...args: Parameters<EntityMetadataDatabaseApi['metadataCancel']>) { return this.entityMetadata.cancel(...args) }
+  metadataRecover(...args: Parameters<EntityMetadataDatabaseApi['metadataRecover']>) { return this.entityMetadata.recover(...args) }
+  metadataClaim(...args: Parameters<EntityMetadataDatabaseApi['metadataClaim']>) { return this.entityMetadata.claim(...args) }
+  metadataNextAttempt() { return this.entityMetadata.nextAttempt() }
+  metadataFinish(...args: Parameters<EntityMetadataDatabaseApi['metadataFinish']>) { return this.entityMetadata.finish(...args) }
+  legacyMusicBatchBegin(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchBegin']>) { return this.entityMetadata.legacy.begin(...args) }
+  legacyMusicBatchStage(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchStage']>) { return this.entityMetadata.legacy.stage(...args) }
+  legacyMusicBatchPublish(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchPublish']>) { return this.entityMetadata.legacy.publish(...args) }
+  legacyMusicTaskStatus(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicTaskStatus']>) { return this.entityMetadata.legacy.status(...args) }
+  legacyMusicBatchCancel(...args: Parameters<LegacyMusicTaskDatabaseApi['legacyMusicBatchCancel']>) { return this.entityMetadata.legacy.cancel(...args) }
+  private legacyMusic() { return new LibraryDatabaseLegacyMusic({ sql: this.sql,
+    transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+    albumAliases: id => this.getAlbumAliases().get(id) ?? [id], genres: this.genreLegacy }) }
+  genresTree(...args: Parameters<GenreDatabaseApi['genresTree']>) { return this.genres.tree(...args) }
+  genresBrowse(...args: Parameters<GenreBrowseDatabaseApi['genresBrowse']>) { return this.genreBrowse.browse(...args) }
+  genresMembers(...args: Parameters<GenreBrowseDatabaseApi['genresMembers']>) { return this.genreBrowse.members(...args) }
+  genresContainsSources(...args: Parameters<GenreBrowseDatabaseApi['genresContainsSources']>) { return this.genreBrowse.containsSources(...args) }
+  genresFacets(...args: Parameters<GenreBrowseDatabaseApi['genresFacets']>) { return this.genreBrowse.facets(...args) }
+  getGenresRevision() { return this.genres.revision() }
+  getClassificationMetadataRevision() {
+    return Number(this.sql.prepare('SELECT metadata_revision FROM music_browse_state WHERE id=1').get()!.metadata_revision)
+  }
+  genresUnmapped(...args: Parameters<GenreDatabaseApi['genresUnmapped']>) { return this.genres.unmapped(...args) }
+  genresEvidence(...args: Parameters<GenreDatabaseApi['genresEvidence']>) { return this.genres.evidence(...args) }
+  genresEdit(...args: Parameters<GenreDatabaseApi['genresEdit']>) { return this.genres.edit(...args) }
+  genresMap(...args: Parameters<GenreDatabaseApi['genresMap']>) { return this.genres.map(...args) }
+  genresOverride(...args: Parameters<GenreDatabaseApi['genresOverride']>) { return this.genres.override(...args) }
+  genresAdvance(limit = 200, separators?: string) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error('Invalid genre maintenance batch')
+    const legacy = this.genreLegacy.advance(limit)
+    if (legacy.processed === limit)
+      return { revision: this.genres.revision(), processed: limit, pending: true }
+    const result = this.genres.advance(limit - legacy.processed, separators)
+    return { ...result, processed: legacy.processed + result.processed, pending: legacy.pending || result.pending }
+  }
+  legacyMusicStatus(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicStatus']>) { return this.legacyMusic().status(...args) }
+  legacyMusicBegin(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicBegin']>) { return this.legacyMusic().begin(...args) }
+  legacyMusicStage(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicStage']>) { return this.legacyMusic().stage(...args) }
+  legacyMusicPublish(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicPublish']>) { return this.legacyMusic().publish(...args) }
+  legacyMusicRead(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicRead']>) { return this.legacyMusic().read(...args) }
+  legacyMusicEdit(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicEdit']>) { return this.legacyMusic().edit(...args) }
+  legacyMusicHistory(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicHistory']>) { return this.legacyMusic().history(...args) }
+  legacyMusicHistoryRead(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicHistoryRead']>) { return this.legacyMusic().historyRead(...args) }
+  legacyMusicRestore(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicRestore']>) { return this.legacyMusic().restore(...args) }
+  legacyMusicInventory(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicInventory']>) { return this.legacyMusic().inventory(...args) }
+  legacyMusicProvenanceList(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicProvenanceList']>) { return this.legacyMusic().provenanceList(...args) }
+  legacyMusicProvenanceRead(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicProvenanceRead']>) { return this.legacyMusic().provenanceRead(...args) }
+  legacyMusicProvenanceReview(...args: Parameters<LegacyMusicMetadataDatabaseApi['legacyMusicProvenanceReview']>) { return this.legacyMusic().provenanceReview(...args) }
+  catalogStatus() { return this.catalog.status() }
+  catalogAdvance(limit?: number) { return this.catalog.advance(limit) }
+  catalogQuery(query: CatalogQuery) { return this.catalog.query(query) }
+  catalogDetail(id: string, revision?: number) { return this.catalog.detail(id, revision) }
+  catalogSources(query: CatalogSourceQuery) { return this.catalog.sources(query) }
+  catalogSync(request: CatalogSync) { return this.catalog.sync(request) }
+  catalogProjectVersions(document: MusicVersionsDocument, revision: number) {
+    return this.catalog.projectVersions(document, revision)
+  }
+  catalogResolve(sourceId: string, revision: number) { return this.catalog.resolve(sourceId, revision) }
+  catalogPlaybackSources(...args: Parameters<CatalogUnifiedPlaybackDatabaseApi['catalogPlaybackSources']>) {
+    return readCatalogPlaybackSources(this.sql, (id, revision) => this.catalog.resolve(id, revision), ...args)
+  }
+  private albumBrowse() { return (this.albumBrowseInstance ??= new LibraryDatabaseAlbumBrowse({ sql: this.sql,
+    contentRevision: () => this.getContentRevision(),
+    metadataRevision: () => this.getClassificationMetadataRevision() })) }
+  albumsBrowse(...args: Parameters<AlbumBrowseDatabaseApi['albumsBrowse']>) { return this.albumBrowse().browse(...args) }
+  albumsSources(...args: Parameters<AlbumBrowseDatabaseApi['albumsSources']>) { return this.albumBrowse().sources(...args) }
+  albumsContainsSource(...args: Parameters<AlbumBrowseDatabaseApi['albumsContainsSource']>) { return this.albumBrowse().containsSource(...args) }
+  private ratings() { return new LibraryDatabaseRatings({ sql: this.sql,
+    transaction: action => this.transaction(action) }) }
+  ratingsDetail(...args: Parameters<MusicRatingsDatabaseApi['ratingsDetail']>) { return this.ratings().detail(...args) }
+  ratingsSet(...args: Parameters<MusicRatingsDatabaseApi['ratingsSet']>) { return this.ratings().set(...args) }
+  ratingsHistory(...args: Parameters<MusicRatingsDatabaseApi['ratingsHistory']>) { return this.ratings().history(...args) }
+  ratingsTargets(...args: Parameters<MusicRatingsDatabaseApi['ratingsTargets']>) { return this.ratings().targets(...args) }
+  getRatingsRevision() { return this.ratings().revision() }
+  private preferences() { return new LibraryDatabasePreferences({ sql: this.sql,
+    transaction: action => this.transaction(action) }) }
+  preferencesTargets(...args: Parameters<MusicPreferencesDatabaseApi['preferencesTargets']>) { return this.preferences().targets(...args) }
+  preferencesDetail(...args: Parameters<MusicPreferencesDatabaseApi['preferencesDetail']>) { return this.preferences().detail(...args) }
+  preferencesSet(...args: Parameters<MusicPreferencesDatabaseApi['preferencesSet']>) { return this.preferences().set(...args) }
+  preferencesHistory(...args: Parameters<MusicPreferencesDatabaseApi['preferencesHistory']>) { return this.preferences().history(...args) }
+  preferencesAutomaticEligibility(...args: Parameters<MusicPreferencesDatabaseApi['preferencesAutomaticEligibility']>) { return this.preferences().automaticEligibility(...args) }
+  preferencesTrackStates(...args: Parameters<MusicPreferencesDatabaseApi['preferencesTrackStates']>) { return this.preferences().trackStates(...args) }
+  preferencesPlaylistsLoad(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsLoad']>) { return this.preferences().playlistsLoad(...args) }
+  preferencesPlaylistsMigrate(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsMigrate']>) { return this.preferences().playlistsMigrate(...args) }
+  preferencesPlaylistsMigrationReceipt() { return this.preferences().playlistsMigrationReceipt() }
+  preferencesPlaylistsSave(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsSave']>) { return this.preferences().playlistsSave(...args) }
+  preferencesPlaylistsRestore(...args: Parameters<MusicPreferencesDatabaseApi['preferencesPlaylistsRestore']>) { return this.preferences().playlistsRestore(...args) }
+  getPreferencesRevision() { return this.preferences().revision() }
+  private personalMusic() { return new LibraryDatabasePersonalMusic({ sql: this.sql, metadata: () => this.getMetadata() }) }
+  musicBackupRevision() { return this.personalMusic().revision() }
+  musicBackupExport(...args: Parameters<MusicPersonalBackupDatabaseApi['musicBackupExport']>) { return this.personalMusic().export(...args) }
+  musicBackupPreview(...args: Parameters<MusicPersonalBackupDatabaseApi['musicBackupPreview']>) { return this.personalMusic().preview(...args) }
+  async musicBackupRestore(bundle: Parameters<MusicPersonalBackupDatabaseApi['musicBackupRestore']>[0]) {
+    const music = this.personalMusic()
+    if (!bundle || !/^[a-zA-Z0-9-]{1,128}$/.test(bundle.restoreId) || !validMusicPersonalBackupRevision(bundle.expectedRevision) ||
+      !['keep-local', 'use-backup'].includes(bundle.conflict) || (bundle.music !== undefined && !validateMusicPersonalBackup(bundle.music)) ||
+      (bundle.library !== undefined && !validatePersonalDomain('library', bundle.library)) ||
+      (bundle.playlists !== undefined && !validatePersonalDomain('playlists', bundle.playlists))) throw new Error('Invalid personal music restore bundle')
+    if (music.restored(bundle.restoreId)) return music.result()
+    music.assertRevision(bundle.expectedRevision)
+    return this.restoreWithSnapshot(bundle.restoreId, bundle.expectedRevision.library,
+      () => music.apply(bundle, () => { if (bundle.library) this.restorePersonalLibraryRecords(bundle.library, bundle.conflict) }),
+      () => music.result(), snapshot => new LibraryDatabasePersonalMusic({ sql: snapshot, metadata: () => this.getMetadata() }).assertRevision(bundle.expectedRevision))
+  }
+  private exploration() { return new LibraryDatabaseExploration({ sql: this.sql,
+    transaction: action => this.sql.isTransaction ? action() : this.transaction(action),
+    contentRevision: () => this.getContentRevision(), metadataRevision: () => this.getClassificationMetadataRevision() }) }
+  explorationLookup(...args: Parameters<MusicExplorationDatabaseApi['explorationLookup']>) { return this.exploration().lookupReference(...args) }
+  explorationBackfillCredits(...args: Parameters<MusicExplorationDatabaseApi['explorationBackfillCredits']>) { return this.exploration().backfillCredits(...args) }
+  explorationState(...args: Parameters<MusicExplorationDatabaseApi['explorationState']>) { return this.exploration().state(...args) }
+  explorationQuery(...args: Parameters<MusicExplorationDatabaseApi['explorationQuery']>) { return this.exploration().query(...args) }
+  explorationDetail(...args: Parameters<MusicExplorationDatabaseApi['explorationDetail']>) { return this.exploration().detail(...args) }
+  explorationRelations(...args: Parameters<MusicExplorationDatabaseApi['explorationRelations']>) { return this.exploration().relations(...args) }
+  explorationParticipation(...args: Parameters<MusicExplorationDatabaseApi['explorationParticipation']>) { return this.exploration().participation(...args) }
+  explorationPerformanceSave(...args: Parameters<MusicExplorationDatabaseApi['explorationPerformanceSave']>) { return this.exploration().performanceSave(...args) }
+  explorationPerformanceDelete(...args: Parameters<MusicExplorationDatabaseApi['explorationPerformanceDelete']>) { return this.exploration().performanceDelete(...args) }
+  explorationIngest(...args: Parameters<MusicExplorationDatabaseApi['explorationIngest']>) { return this.exploration().ingest(...args) }
+  explorationSyncCredits(...args: Parameters<MusicExplorationDatabaseApi['explorationSyncCredits']>) { return this.exploration().syncCredits(...args) }
+  private focus() { return (this.focusInstance ??= new LibraryDatabaseFocus({ sql: this.sql,
+    transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+    metadataRevision: () => this.getClassificationMetadataRevision(), albumAliases: () => this.getAlbumAliases(),
+    resolve: (sourceId, revision) => this.catalogResolve(sourceId, revision) })) }
+  focusState() { return this.focus().state() }
+  focusQuery(...args: Parameters<MusicFocusDatabaseApi['focusQuery']>) { return this.focus().query(...args) }
+  focusFacets(...args: Parameters<MusicFocusDatabaseApi['focusFacets']>) { return this.focus().facets(...args) }
+  focusPlaybackPage(...args: Parameters<MusicFocusDatabaseApi['focusPlaybackPage']>) { return this.focus().playbackPage(...args) }
+  focusSavedList(...args: Parameters<MusicFocusDatabaseApi['focusSavedList']>) { return this.focus().savedList(...args) }
+  focusSavedCreate(...args: Parameters<MusicFocusDatabaseApi['focusSavedCreate']>) { return this.focus().savedCreate(...args) }
+  focusSavedRename(...args: Parameters<MusicFocusDatabaseApi['focusSavedRename']>) { return this.focus().savedRename(...args) }
+  focusSavedUpdate(...args: Parameters<MusicFocusDatabaseApi['focusSavedUpdate']>) { return this.focus().savedUpdate(...args) }
+  focusSavedDelete(...args: Parameters<MusicFocusDatabaseApi['focusSavedDelete']>) { return this.focus().savedDelete(...args) }
+  private tags() { return new LibraryDatabaseTags({ sql: this.sql,
+    transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
+    resolve: (sourceId, revision) => this.catalog.resolve(sourceId, revision) }) }
+  tagsState() { return this.tags().state() }
+  tagsList(...args: Parameters<MusicTagsDatabaseApi['tagsList']>) { return this.tags().list(...args) }
+  tagsEntity(...args: Parameters<MusicTagsDatabaseApi['tagsEntity']>) { return this.tags().entity(...args) }
+  tagsMembers(...args: Parameters<MusicTagsDatabaseApi['tagsMembers']>) { return this.tags().members(...args) }
+  tagsRecordings(...args: Parameters<MusicTagsDatabaseApi['tagsRecordings']>) { return this.tags().recordings(...args) }
+  tagsCreate(...args: Parameters<MusicTagsDatabaseApi['tagsCreate']>) { return this.tags().create(...args) }
+  tagsRename(...args: Parameters<MusicTagsDatabaseApi['tagsRename']>) { return this.tags().rename(...args) }
+  tagsDelete(...args: Parameters<MusicTagsDatabaseApi['tagsDelete']>) { return this.tags().delete(...args) }
+  tagsMemberSet(...args: Parameters<MusicTagsDatabaseApi['tagsMemberSet']>) { return this.tags().memberSet(...args) }
+  tagsPlaybackPage(...args: Parameters<MusicTagsDatabaseApi['tagsPlaybackPage']>) { return this.tags().playbackPage(...args) }
   repairCandidates(
     command: import('../../shared/playlistRepair.ts').LibraryRepairCandidateCommand
   ) {
@@ -545,14 +913,20 @@ export class LibraryDatabase {
   abandonTrackSelectionBuild(preparation: LibrarySelectionPreparation): void {
     this.selections.close(preparation.build.id)
   }
-  readTrackSelection(id: string, cursor = 0, projection: 'tracks' | 'files' = 'tracks') {
-    return this.selections.read(id, cursor, projection)
+  readTrackSelection(
+    id: string,
+    cursor = 0,
+    projection: 'tracks' | 'files' = 'tracks',
+    requireCurrent = false
+  ) {
+    return this.selections.read(id, cursor, projection, requireCurrent)
   }
   closeTrackSelection(id: string): void {
     this.selections.close(id)
   }
-  resetLibrary() {
+  resetLibrary(expectedRevision?: number) {
     return this.transaction(() => {
+      this.assertContentRevision(expectedRevision)
       this.removal.assertIdle()
       const rows = this.statement(
         'SELECT tracks.id,files.file_path FROM tracks JOIN files USING(file_key) ORDER BY tracks.seq'
@@ -560,7 +934,7 @@ export class LibraryDatabase {
       // Invalidate even previously claimed, still in-flight results. A reset
       // cannot be undone by a late metadata reply with a recycled file version.
       this.sql.exec(
-        "UPDATE scan_jobs SET state='cancelled',epoch=epoch+1 WHERE state IN ('running','paused','interrupted'); DELETE FROM tracks; DELETE FROM files;"
+        "UPDATE scan_jobs SET state='cancelled',epoch=epoch+1 WHERE state IN ('running','paused','interrupted'); DELETE FROM scan_release_dates; DELETE FROM tracks; DELETE FROM files;"
       )
       this.bump()
       return {
@@ -591,7 +965,7 @@ export class LibraryDatabase {
   recoverRemovalJournal(id: string, items: LocalLibraryTrackSelection[]) {
     return this.removal.recoverLegacyJournal(id, items)
   }
-  clearFileExclusions(filePaths: string[]) {
+  clearFileExclusions(filePaths: string[], expectedRevision?: number) {
     if (
       !Array.isArray(filePaths) ||
       filePaths.length > 256 ||
@@ -599,6 +973,7 @@ export class LibraryDatabase {
     )
       throw new Error('Invalid exclusion batch; at most 256 files are allowed')
     return this.transaction(() => {
+      this.assertContentRevision(expectedRevision)
       const keys = new Set(filePaths.map(normalizeLibraryFilePath)),
         clearedFilePaths: string[] = []
       const exclusions = this.getMetadata().exclusions.filter((entry) => {
@@ -633,18 +1008,20 @@ export class LibraryDatabase {
       this.replaceDocumentRecords(document, expectedRevision)
     )
   }
-  private async restoreWithSnapshot(
+  private async restoreWithSnapshot<T = LibraryMetadata>(
     restoreId: string,
     expectedRevision: number,
-    restore: () => LibraryMetadata
-  ): Promise<LibraryMetadata> {
+    restore: () => T,
+    replay: () => T = () => this.getMetadata() as T,
+    validateSnapshot?: (snapshot: DatabaseSync) => void
+  ): Promise<T> {
     if (
       !/^[a-zA-Z0-9-]{1,128}$/.test(restoreId) ||
       !Number.isSafeInteger(expectedRevision) ||
       expectedRevision < 0
     )
       throw new Error('Invalid library restore identity or revision')
-    if (this.meta('last_personal_restore') === JSON.stringify(restoreId)) return this.getMetadata()
+    if (this.meta('last_personal_restore') === JSON.stringify(restoreId)) return replay()
     this.removal.assertIdle()
     if (Number(this.meta('revision')) !== expectedRevision)
       throw new Error('Music library changed concurrently; restore was not applied')
@@ -670,13 +1047,14 @@ export class LibraryDatabase {
             expectedRevision
         )
           throw new Error('The existing pre-restore snapshot is not valid for this restore')
+        validateSnapshot?.(snapshot)
       } finally {
         snapshot.close()
       }
     }
     return this.transaction(() => {
       if (this.meta('last_personal_restore') === JSON.stringify(restoreId))
-        return this.getMetadata()
+        return replay()
       if (Number(this.meta('revision')) !== expectedRevision)
         throw new Error('Music library changed concurrently')
       this.removal.assertIdle()
@@ -736,7 +1114,10 @@ export class LibraryDatabase {
       !['keep-local', 'use-backup'].includes(conflict)
     )
       throw new Error('Invalid personal library snapshot or conflict policy')
-    return this.restoreWithSnapshot(restoreId, expectedRevision, () => {
+    return this.restoreWithSnapshot(restoreId, expectedRevision, () => this.restorePersonalLibraryRecords(document, conflict))
+  }
+  /** Used by v1 alone and v2's same-connection bundle, never starts a nested transaction. */
+  private restorePersonalLibraryRecords(document: LocalMusicLibraryDocument, conflict: 'keep-local' | 'use-backup'): LibraryMetadata {
       const merged = mergePersonalDomain(
         'library',
         this.personalLibraryIdentities(),
@@ -769,7 +1150,6 @@ export class LibraryDatabase {
       this.sql.exec('DELETE FROM files WHERE file_key NOT IN (SELECT file_key FROM tracks);')
       this.bump()
       return this.getMetadata()
-    })
   }
   private statement(query: string) {
     let statement = this.statements.get(query)
@@ -796,6 +1176,7 @@ export class LibraryDatabase {
           this.ordered.clear()
           this.totals.clear()
           this.albumAliases = null
+          this.symSpellIndex = null
           this.collections.clear()
         }
         return result
@@ -851,6 +1232,9 @@ export class LibraryDatabase {
       folders: JSON.parse(this.meta('folders')),
       exclusions: JSON.parse(this.meta('exclusions'))
     }
+  }
+  getContentRevision(): number {
+    return Number(this.meta('revision'))
   }
   updateConfiguration(
     configuration: Pick<LibraryMetadata, 'folders' | 'exclusions'>,
@@ -1054,8 +1438,8 @@ export class LibraryDatabase {
     if (this.albumAliases) return this.albumAliases
     const rows = this.statement(
       `SELECT album_key,album,min(seq) AS first_seq,
-      (SELECT json_extract(t.payload,'$.cover') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) AS cover,
-      (SELECT json_extract(t.payload,'$.coverSource') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) AS cover_source
+      CASE WHEN tracks.album_key LIKE 'dir:%' THEN (SELECT json_extract(t.payload,'$.cover') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) END AS cover,
+      CASE WHEN tracks.album_key LIKE 'dir:%' THEN (SELECT json_extract(t.payload,'$.coverSource') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) END AS cover_source
       FROM tracks GROUP BY album_key ORDER BY first_seq`
     ).all() as Row[]
     const aliases = new Map<string, string[]>(),
@@ -1080,14 +1464,46 @@ export class LibraryDatabase {
     this.albumAliases = aliases
     return aliases
   }
-  private where(query: LibraryQuery, useFts = true): { sql: string; params: SQLInputValue[] } {
-    const conditions: string[] = [],
-      params: SQLInputValue[] = []
-    const add = (sql: string, ...values: SQLInputValue[]) => {
-      conditions.push(sql)
-      params.push(...values)
+  private getSymSpellIndex(): SymSpellIndex {
+    if (this.symSpellIndex) return this.symSpellIndex
+    const symSpell = new SymSpellIndex()
+    for (const row of this.statement('SELECT title,artist,album FROM tracks ORDER BY seq').iterate()) {
+      symSpell.addTrack({
+        title: text(row.title),
+        artist: text(row.artist),
+        album: text(row.album)
+      })
     }
-    const q = normalizeSearch(query.search ?? '')
+    this.symSpellIndex = symSpell
+    return symSpell
+  }
+  private buildSearchPredicate(
+    query: LibraryQuery,
+    searchStr: string,
+    useFts: boolean,
+    add: (sql: string, ...values: SQLInputValue[]) => void
+  ): void {
+    if (query.sort === 'unifiedSearch' && !query.searchLiteral) {
+      const pq = prepareSearchQuery(searchStr)
+      if (!pq.fullNormalized) return
+      for (const token of pq.isMultiToken ? pq.tokens : [pq.fullNormalized]) {
+        if (useFts && [...token].length >= 3)
+          add(
+            query.playlistView
+              ? 'uid IN (SELECT rowid FROM playlist_search WHERE playlist_search MATCH ?)'
+              : 'seq IN (SELECT rowid FROM track_search WHERE track_search MATCH ?)',
+            `${query.searchFileName ? '' : 'search_text:'}"${token}"`
+          )
+        add(
+          query.searchFileName
+            ? '(instr(search_text,?)>0 OR instr(search_file,?)>0)'
+            : 'instr(search_text,?)>0',
+          ...(query.searchFileName ? [token, token] : [token])
+        )
+      }
+      return
+    }
+    const q = normalizeSearch(searchStr)
     if (q) {
       if (!query.searchLiteral && useFts && [...q].length >= 3)
         add(
@@ -1104,11 +1520,64 @@ export class LibraryDatabase {
           ...(query.searchFileName ? [q, q] : [q])
         )
     }
-    if (query.searchLiteral && query.search?.trim())
+    if (query.searchLiteral && searchStr.trim())
       add(
         'library_metadata_contains(title,artist,album,?)=1',
-        query.search.trim().toLocaleLowerCase('zh-CN')
+        searchStr.trim().toLocaleLowerCase('zh-CN')
       )
+  }
+  private resolveUnifiedSearch(query: LibraryQuery): {
+    effectiveSearch: string
+    typoPenaltyFactor: number
+  } {
+    if (
+      query.sort !== 'unifiedSearch' ||
+      query.searchLiteral ||
+      !query.search?.trim() ||
+      query.playlistView
+    ) {
+      return { effectiveSearch: query.search ?? '', typoPenaltyFactor: 1 }
+    }
+    const pq = prepareSearchQuery(query.search)
+    if (!pq.fullNormalized) {
+      return { effectiveSearch: query.search, typoPenaltyFactor: 1 }
+    }
+    if (pq.tokens.some((t) => getMaxSymSpellTolerance(t) > 0)) {
+      const directWhere = this.whereWithSearch(query, query.search, true)
+      const hasDirect = !!this.statement(`SELECT 1 FROM tracks ${directWhere.sql} LIMIT 1`).get(
+        ...directWhere.params
+      )
+      if (!hasDirect) {
+        const suggestion = this.getSymSpellIndex().suggestQuery(query.search)
+        if (suggestion) {
+          return {
+            effectiveSearch: suggestion.correctedQuery,
+            typoPenaltyFactor: suggestion.penaltyFactor
+          }
+        }
+      }
+    }
+    return { effectiveSearch: query.search, typoPenaltyFactor: 1 }
+  }
+  private where(query: LibraryQuery, useFts = true): { sql: string; params: SQLInputValue[] } {
+    const searchStr =
+      query.sort === 'unifiedSearch'
+        ? this.resolveUnifiedSearch(query).effectiveSearch
+        : (query.search ?? '')
+    return this.whereWithSearch(query, searchStr, useFts)
+  }
+  private whereWithSearch(
+    query: LibraryQuery,
+    searchStr: string,
+    useFts = true
+  ): { sql: string; params: SQLInputValue[] } {
+    const conditions: string[] = [],
+      params: SQLInputValue[] = []
+    const add = (sql: string, ...values: SQLInputValue[]) => {
+      conditions.push(sql)
+      params.push(...values)
+    }
+    this.buildSearchPredicate(query, searchStr, useFts, add)
     if (query.folder) {
       const folder = normalizeLibraryPath(query.folder)
       const column =
@@ -1127,7 +1596,7 @@ export class LibraryDatabase {
     }
     if (query.artist)
       add(
-        "library_has_artist(artist,CASE WHEN json_type(payload,'$.artists')='array' THEN json_extract(payload,'$.artists') ELSE NULL END,?)=1",
+        "library_has_artist(artist,CASE WHEN json_type(payload,'$.artists')='array' THEN json_extract(payload,'$.artists') ELSE NULL END,json_extract(payload,'$.identityTags'),?)=1",
         query.artist
       )
     if (query.albumId)
@@ -1178,7 +1647,11 @@ export class LibraryDatabase {
     return stats
   }
   private orderedIds(query: LibraryQuery): string[] {
-    const { sql, params } = this.where(query)
+    const resolvedSearch = query.sort === 'unifiedSearch' ? this.resolveUnifiedSearch(query) : null
+    const { sql, params } =
+      resolvedSearch !== null
+        ? this.whereWithSearch(query, resolvedSearch.effectiveSearch)
+        : this.where(query)
     const direction =
       query.sort === 'recentlyAdded' || (query.sort !== 'playlist' && query.direction === 'desc')
         ? -1
@@ -1193,6 +1666,7 @@ export class LibraryDatabase {
       sort,
       direction,
       sort === 'unifiedSearch' ? (query.preferredSources ?? []) : null,
+      sort === 'unifiedSearch' ? (query.search ?? '') : null,
       sort === 'lastPlayed' ? this.history.revision : null
     ])
     const cached = this.ordered.get(key)
@@ -1210,7 +1684,18 @@ export class LibraryDatabase {
         ).all(JSON.stringify(query.ids), ...params) as Row[]
       ).map((row) => text(row.id))
     else if (sort === 'unifiedSearch')
-      ids = unifiedLibraryOrder(this.sql, sql, params, query.preferredSources ?? [], direction)
+      ids = unifiedLibraryOrder(
+        this.sql,
+        sql,
+        params,
+        query.preferredSources ?? [],
+        direction,
+        {
+          search: resolvedSearch!.effectiveSearch,
+          typoPenaltyFactor: resolvedSearch!.typoPenaltyFactor,
+          searchFileName: Boolean(query.searchFileName)
+        }
+      )
     else if (numeric)
       ids = (
         this.statement(
@@ -1242,7 +1727,7 @@ export class LibraryDatabase {
     validateLibraryQuery(query)
     this.assertContentRevision(query.contentRevision)
     this.assertHistoryRevision(query)
-    if (query.playlistView) return this.playlistViews.query(query)
+    if (query.playlistView) return this.catalogReferences.tracks(this.playlistViews.query(query))
     const { offset, limit } = libraryPageBounds(query.offset, query.limit)
     if (query.anchorId !== undefined) {
       const ids = this.orderedIds(query)
@@ -1310,14 +1795,14 @@ export class LibraryDatabase {
       versions[text(row.id)] = Number(row.version)
       return JSON.parse(text(row.payload)) as LibraryTrackRecord
     })
-    return {
+    return this.catalogReferences.tracks({
       tracks,
       versions,
       total,
       revision: Number(this.meta('revision')),
       offset,
       historyRevision: this.history.revision
-    }
+    })
   }
   private assertContentRevision(expectedRevision?: number): void {
     if (
@@ -1433,15 +1918,17 @@ export class LibraryDatabase {
       throw new Error('Playlist views support track queries, not collection summaries')
     // Search selects collections, not a subset of their members. Counts and
     // album details still describe the complete collection in the requested scope.
-    return this.collections.query(
+    const selection = this.where({ ...query, search: undefined }), aliases = kind === 'albums' ? this.getAlbumAliases() : new Map<string, string[]>()
+    const page = this.collections.query(
       kind,
       query,
       Number(this.meta('revision')),
       JSON.parse(this.meta('folders')),
-      this.where({ ...query, search: undefined }),
-      kind === 'albums' ? this.getAlbumAliases() : new Map(),
+      selection,
+      aliases,
       (sql, params) => this.statement(sql).all(...params) as Row[]
     )
+    return kind === 'albums' || kind === 'artists' ? this.catalogReferences.collections(page, kind, selection, aliases) : page
   }
   createLibraryQueue(query: LibraryQuery, selectedId?: string): LibraryQueueSnapshot {
     validateLibraryQuery(query)
@@ -1463,6 +1950,30 @@ export class LibraryDatabase {
    * owner lease and atomic player adoption, not direct calls to this seam. */
   buildLibraryQueue(command: import('../../shared/libraryQueueBuild.ts').LibraryQueueBuildCommand) {
     return this.queues.stream(command)
+  }
+  importLegacyPlaybackQueue(
+    command: import('../../shared/coreQueueImport.ts').CoreQueueImportCommand
+  ) {
+    return this.queues.importLegacyPlaybackQueue(command)
+  }
+  restoreNamedPlaybackQueue(
+    command: import('../../shared/coreQueueRestore.ts').CoreQueueRestoreCommand
+  ) {
+    return this.queues.restoreNamedPlaybackQueue(command)
+  }
+  extendPlaybackQueue(id: string, revision: number, items: LibraryQueueInsertItem[]) {
+    return this.queues.extend(id, revision, items)
+  }
+  insertCorePlaybackQueue(id: string, revision: number, edit: Extract<LibraryQueueEdit, { kind: 'insert' }>) {
+    return this.queues.edit(id, revision, edit, false, true)
+  }
+  restoreHeartBaseQueue(base: LibraryPlaybackQueueReference, selectedTrackId: string) {
+    return this.queues.restoreHeartBaseQueue(base, selectedTrackId)
+  }
+  replacePlaybackQueueSource(
+    command: import('../../shared/coreSourceRecovery.ts').CoreQueueSourceReplacement
+  ) {
+    return this.queues.replaceSource(command)
   }
   get nextQueueBuildExpiry(): number | undefined {
     return this.queues.nextStreamExpiry
@@ -1618,11 +2129,10 @@ export class LibraryDatabase {
     const job = this.statement('SELECT state FROM scan_jobs WHERE id=?').get(id) as Row | undefined
     if (!job || job.state === 'completed' || job.state === 'cancelled')
       throw new Error('Scan cannot enter this state')
-    this.statement('UPDATE scan_jobs SET state=?,updated_at=? WHERE id=?').run(
-      state,
-      Date.now(),
-      id
-    )
+    this.transaction(() => {
+      this.statement('UPDATE scan_jobs SET state=?,updated_at=? WHERE id=?').run(state, Date.now(), id)
+      if (state !== 'paused') this.statement('DELETE FROM scan_release_dates WHERE job_id=?').run(id)
+    })
   }
   resumeScan(id: string): LibraryScanJob {
     return this.transaction(() => {
@@ -1647,6 +2157,7 @@ export class LibraryDatabase {
           id
         )
       } else {
+        this.statement('DELETE FROM scan_release_dates WHERE job_id=?').run(id)
         this.statement(
           "UPDATE scan_jobs SET state='running',epoch=epoch+1,committed_files=0,failed_files=0,updated_at=? WHERE id=?"
         ).run(Date.now(), id)
@@ -1795,17 +2306,28 @@ export class LibraryDatabase {
           !removing.has(key) &&
           scopes.some((root) => underRoot(key, root)) &&
           folders.some((root) => underRoot(key, root))
-        const unchanged =
-          file?.status === 'complete' &&
-          Number(file.metadata_version) >= LOCAL_LIBRARY_METADATA_VERSION &&
+        const sameBytes =
+          // Earlier JSON migrations retained trusted v0 identities as pending.
+          // They still have playable records; only their date read is missing.
+          (file?.status === 'complete' || (file?.status === 'pending' && Number(file.metadata_version) < LOCAL_LIBRARY_METADATA_VERSION)) &&
           Number(file.has_tracks) &&
           file.identity &&
           sameLocalLibraryFileIdentity(JSON.parse(text(file.identity)), identity)
+        const unchanged = sameBytes && Number(file.metadata_version) >= LOCAL_LIBRARY_METADATA_VERSION
+        const dateOnly = job.mode !== 'full' && sameBytes && !unchanged
+        const stagedDate = dateOnly ? this.statement(
+          'SELECT epoch,release_date,dependencies FROM scan_release_dates WHERE job_id=? AND file_key=?'
+        ).get(id, key) as Row | undefined : undefined
         // A checkpoint describes committed records, not just bytes on disk. A
         // restore, metadata upgrade or later per-file change can invalidate it.
         const sameCheckpoint =
           unchanged &&
           existing?.state === 'complete' &&
+          Number(existing.expected_version) === Number(file.content_version) &&
+          sameLocalLibraryFileIdentity(JSON.parse(text(existing.identity)), identity)
+        const sameDateCheckpoint =
+          dateOnly && stagedDate?.epoch === job.epoch && existing?.epoch === job.epoch &&
+          existing.state === 'complete' &&
           Number(existing.expected_version) === Number(file.content_version) &&
           sameLocalLibraryFileIdentity(JSON.parse(text(existing.identity)), identity)
         const alreadyWorking =
@@ -1814,7 +2336,7 @@ export class LibraryDatabase {
           sameLocalLibraryFileIdentity(JSON.parse(text(existing.identity)), identity)
         const state = !permitted
           ? 'excluded'
-          : sameCheckpoint || (job.mode !== 'full' && unchanged)
+          : sameCheckpoint || sameDateCheckpoint || (job.mode !== 'full' && unchanged)
             ? 'complete'
             : alreadyWorking
               ? 'working'
@@ -1827,6 +2349,11 @@ export class LibraryDatabase {
           Number(file?.content_version ?? 0),
           Number(job.epoch)
         )
+        if (permitted && dateOnly)
+          this.statement('INSERT INTO scan_release_dates VALUES(?,?,?,?,?)').run(
+            id, key, Number(job.epoch), sameDateCheckpoint ? stagedDate!.release_date : null,
+            sameDateCheckpoint ? stagedDate!.dependencies : '[]'
+          )
         if (permitted || removing.has(key))
           this.statement('UPDATE files SET seen_job=? WHERE file_key=?').run(
             `${id}:${job.epoch}`,
@@ -1855,7 +2382,7 @@ export class LibraryDatabase {
       const rows =
         job.state === 'running'
           ? (this.statement(
-              "SELECT file_key,identity FROM scan_items WHERE job_id=? AND epoch=? AND state='pending' ORDER BY file_key LIMIT ?"
+              "SELECT i.file_key,i.identity,d.file_key AS date_key FROM scan_items i LEFT JOIN scan_release_dates d ON d.job_id=i.job_id AND d.file_key=i.file_key AND d.epoch=i.epoch WHERE i.job_id=? AND i.epoch=? AND i.state='pending' ORDER BY i.file_key LIMIT ?"
             ).all(id, Number(job.epoch), limit) as Row[])
           : []
       for (const row of rows) {
@@ -1867,10 +2394,91 @@ export class LibraryDatabase {
       }
       return {
         identities: rows.map((row) => JSON.parse(text(row.identity))),
+        ...(rows.some((row) => row.date_key !== null)
+          ? { releaseDateFilePaths: rows.filter((row) => row.date_key !== null).map((row) => (JSON.parse(text(row.identity)) as LocalLibraryFileIdentity).filePath) }
+          : {}),
         lastBatch: Number(job.last_batch),
         state: text(job.state) as LibraryScanJob['state']
       }
     })
+  }
+  /** Called only inside finishScan's transaction. Validate the entire staged
+   * stream before publishing any date, using bounded pages on both passes. */
+  private publishScanReleaseDates(
+    id: string, epoch: number, scopes: string[], metadata: LibraryMetadata
+  ): { ready: boolean; changed: boolean } {
+    const excluded = new Set(metadata.exclusions.map((item) => normalizeLibraryFilePath(item.filePath)))
+    const removing = this.removal.blockedPaths()
+    const page = (after: string) => this.statement(
+      `SELECT d.file_key,d.release_date,d.dependencies,i.identity,i.expected_version,
+        f.identity AS file_identity,f.content_version,f.status,f.audio_metadata
+      FROM scan_release_dates d JOIN scan_items i ON i.job_id=d.job_id AND i.file_key=d.file_key AND i.epoch=d.epoch
+      LEFT JOIN files f ON f.file_key=d.file_key
+      WHERE d.job_id=? AND d.epoch=? AND i.state='complete' AND d.file_key>? ORDER BY d.file_key LIMIT 256`
+    ).all(id, epoch, after) as Row[]
+    let after = '', invalid = 0
+    while (true) {
+      const rows = page(after)
+      if (!rows.length) break
+      for (const row of rows) {
+        const key = text(row.file_key), identity = JSON.parse(text(row.identity)) as LocalLibraryFileIdentity
+        after = key
+        const permitted = !excluded.has(key) && !removing.has(key) &&
+          scopes.some((root) => underRoot(key, root)) && metadata.folders.some((root) => underRoot(key, root))
+        if (permitted && (row.status === 'complete' || row.status === 'pending') && row.file_identity &&
+          Number(row.expected_version) === Number(row.content_version) &&
+          sameLocalLibraryFileIdentity(JSON.parse(text(row.file_identity)), identity) &&
+          identityStillMatches(identity) &&
+          (JSON.parse(text(row.dependencies)) as LibraryScanDependency[]).every(identityStillMatches)) continue
+        this.statement('DELETE FROM scan_release_dates WHERE job_id=? AND file_key=?').run(id, key)
+        this.statement('UPDATE scan_items SET state=?,error=?,expected_version=? WHERE job_id=? AND file_key=?').run(
+          permitted ? 'stale' : 'excluded', permitted ? 'File changed before date publication' : 'Scope is no longer authorized',
+          Number(row.content_version ?? 0), id, key
+        )
+        if (permitted) this.statement("UPDATE scan_directories SET state='pending',error=NULL WHERE job_id=? AND path=?").run(
+          id, normalizeLibraryFilePath(dirname(identity.filePath))
+        )
+        invalid++
+      }
+    }
+    if (invalid) {
+      this.statement('UPDATE scan_jobs SET committed_files=committed_files-? WHERE id=?').run(invalid, id)
+      return { ready: false, changed: false }
+    }
+    after = ''
+    let changed = false
+    while (true) {
+      const rows = page(after)
+      if (!rows.length) break
+      for (const row of rows) {
+        const key = text(row.file_key), date = normalizeReleaseDate(row.release_date)
+        after = key
+        const tracks = this.statement('SELECT payload FROM tracks WHERE file_key=? ORDER BY seq').all(key) as Row[]
+        for (const record of tracks) {
+          const track = JSON.parse(text(record.payload)) as LibraryTrackRecord
+          if (track.releaseDate === date && (date !== undefined || !Object.hasOwn(track, 'releaseDate'))) continue
+          delete track.releaseDate
+          if (date) track.releaseDate = date
+          changed = this.putTrack(track) || changed
+        }
+        // CUE re-derivation can reuse the physical metadata cache later. Keep
+        // only its date aligned, without replacing any other cached field.
+        const audioMetadata = row.audio_metadata ? JSON.parse(text(row.audio_metadata)) as LibraryTrackRecord : undefined
+        if (audioMetadata) {
+          delete audioMetadata.releaseDate
+          if (date) audioMetadata.releaseDate = date
+        }
+        const identity = { ...JSON.parse(text(row.file_identity)), metadataVersion: LOCAL_LIBRARY_METADATA_VERSION }
+        this.statement("UPDATE files SET identity=?,metadata_version=?,status='complete',audio_metadata=? WHERE file_key=?").run(
+          JSON.stringify(identity), LOCAL_LIBRARY_METADATA_VERSION, audioMetadata ? JSON.stringify(audioMetadata) : null, key
+        )
+        this.statement('UPDATE scan_items SET identity=?,expected_version=(SELECT content_version FROM files WHERE file_key=?) WHERE job_id=? AND file_key=?').run(
+          JSON.stringify(identity), key, id, key
+        )
+      }
+    }
+    this.statement('DELETE FROM scan_release_dates WHERE job_id=?').run(id)
+    return { ready: true, changed }
   }
   finishScan(id: string): LibraryScanFinishResult {
     return this.transaction(() => {
@@ -1896,8 +2504,8 @@ export class LibraryDatabase {
       )
       if (incompleteDirectories || incompleteFiles)
         throw new Error('Incomplete scan cannot remove missing files')
-      const scopes = JSON.parse(text(job.roots)) as string[],
-        authorized = this.getMetadata().folders
+      const metadata = this.getMetadata(), scopes = JSON.parse(text(job.roots)) as string[],
+        authorized = metadata.folders
       for (const root of scopes) {
         if (
           !authorized.some((folder) => underRoot(normalizeLibraryFilePath(root), folder)) ||
@@ -1905,6 +2513,8 @@ export class LibraryDatabase {
         )
           throw new Error('Scan root is no longer authorized or online')
       }
+      const dates = this.publishScanReleaseDates(id, Number(job.epoch), scopes, metadata)
+      if (!dates.ready) return { completed: false, metadata: this.getMetadata(), removedFileCount: 0 }
       let removedFileCount = 0,
         after = ''
       const removing = this.removal.blockedPaths()
@@ -1925,7 +2535,7 @@ export class LibraryDatabase {
       this.statement(
         "UPDATE scan_jobs SET state='completed',checked_files=(SELECT count(*) FROM scan_items WHERE job_id=? AND epoch=?),updated_at=? WHERE id=?"
       ).run(id, Number(job.epoch), Date.now(), id)
-      if (removedFileCount) this.bump()
+      if (removedFileCount || dates.changed) this.bump()
       return { completed: true, metadata: this.getMetadata(), removedFileCount }
     })
   }
@@ -2076,8 +2686,6 @@ export class LibraryDatabase {
         failedDelta = 0,
         changed = false
       for (const file of batch.files) {
-        if (file.metadataRead && !file.error && !file.tracks.length)
-          throw new Error('Successful metadata must contain a playable logical track')
         const key = normalizeLibraryFilePath(file.identity.filePath)
         const previousItem = this.statement(
           'SELECT state,identity,expected_version,epoch FROM scan_items WHERE job_id=? AND file_key=?'
@@ -2089,6 +2697,13 @@ export class LibraryDatabase {
           !sameLocalLibraryFileIdentity(JSON.parse(text(previousItem.identity)), file.identity)
         )
           throw new Error('Scan result was not claimed from its durable task')
+        const dateOnly = !!this.statement(
+          'SELECT 1 FROM scan_release_dates WHERE job_id=? AND file_key=? AND epoch=?'
+        ).get(batch.jobId, key, Number(job.epoch))
+        if (file.releaseDateOnly && !dateOnly)
+          throw new Error('Date-only result was not claimed as a legacy date read')
+        if (!dateOnly && file.metadataRead && !file.error && !file.tracks.length)
+          throw new Error('Successful metadata must contain a playable logical track')
         const currentVersion = Number(
           (
             this.statement('SELECT content_version FROM files WHERE file_key=?').get(key) as
@@ -2122,6 +2737,21 @@ export class LibraryDatabase {
             ).run(batch.jobId, normalizeLibraryFilePath(dirname(file.identity.filePath)))
           continue
         }
+        const error = file.error || (!file.metadataRead ? 'Metadata could not be read' : '')
+        if (dateOnly) {
+          // Older parse-only callers remain valid, but their replacement Track
+          // payloads never gain write authority over a date-only durable task.
+          const date = normalizeReleaseDate(file.releaseDateOnly ? file.releaseDate : file.tracks[0]?.releaseDate)
+          this.statement('UPDATE scan_release_dates SET release_date=?,dependencies=? WHERE job_id=? AND file_key=?').run(
+            error ? null : date ?? null, JSON.stringify(file.dependencies ?? []), batch.jobId, key
+          )
+          this.statement('UPDATE scan_items SET state=?,error=? WHERE job_id=? AND file_key=?').run(
+            error ? 'failed' : 'complete', error || null, batch.jobId, key
+          )
+          if (error) failedDelta++
+          else committedDelta++
+          continue
+        }
         const previous = this.statement(
           'SELECT id,payload FROM tracks WHERE file_key=? ORDER BY seq'
         ).all(key) as Row[]
@@ -2130,7 +2760,6 @@ export class LibraryDatabase {
         const bySegment = new Map(oldTracks.map((track) => [segmentKey(track), track]))
         // Failed metadata never replaces a previously playable record. Its identity remains
         // retryable even when a filename-only fallback is admitted for a newly discovered file.
-        const error = file.error || (!file.metadataRead ? 'Metadata could not be read' : '')
         const retainedIds: string[] = []
         if (!error || !previous.length) {
           for (const track of file.tracks) {

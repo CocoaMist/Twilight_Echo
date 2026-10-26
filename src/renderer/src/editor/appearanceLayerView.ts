@@ -131,7 +131,13 @@ function layerFor(id?: string): AppearanceLayer | undefined {
   if (id === 'navigation') return 'navigation'
   if (id === 'material' || id === 'title') return 'title'
   if (id === 'player-bar' || id === 'player') return 'player'
-  if (id === 'card' || id === 'content' || id === 'inner-panel' || id === 'controls')
+  if (
+    id === 'card' ||
+    id === 'content' ||
+    id === 'inner-panel' ||
+    id === 'controls' ||
+    id === 'player-page'
+  )
     return 'content'
   return undefined
 }
@@ -159,7 +165,8 @@ export function appearanceLayerTransform(layer: AppearanceLayer, spacing: number
 function partOffset(id: string, spacing: number) {
   if (id === 'chrome-controls') return { y: -0.4 * spacing, z: 5.18 * spacing }
   if (id === 'player-controls') return { y: -0.4 * spacing, z: 4.18 * spacing }
-  if (id === 'card') return { y: -0.55 * spacing, z: 2.5 * spacing }
+  if (id === 'card' || id === 'player-cover' || id === 'player-lyrics')
+    return { y: -0.55 * spacing, z: 2.5 * spacing }
   if (id === 'controls') return { y: -0.7 * spacing, z: 2.85 * spacing }
   return layerOffset(layerFor(id) ?? 'content', spacing)
 }

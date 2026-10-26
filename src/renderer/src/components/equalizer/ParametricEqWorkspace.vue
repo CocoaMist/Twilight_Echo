@@ -142,6 +142,7 @@ const geometry = shallowRef({
 })
 const compact = ref(false)
 const spectrumGradientId = `eq-spectrum-${useId()}`
+void spectrumGradientId
 const spectrum = useEqSpectrum({
   document: () => props.hostDocument ?? document,
   levels: () => props.spectrumLevels,
@@ -156,14 +157,14 @@ const wheelCommit = createEqWheelCommit(() => {
   emit('commit')
 })
 const bandColors = [
-  'var(--te-eq-band-blue, #3b9edb)',
-  'var(--te-eq-band-cyan, #20b9c7)',
-  'var(--te-eq-band-green, #25ae81)',
-  'var(--te-eq-band-yellow, #d4b32d)',
-  'var(--te-eq-band-orange, #ec8545)',
-  'var(--te-eq-band-magenta, #d55dda)',
-  'var(--te-eq-band-violet, #9380e7)',
-  'var(--te-eq-band-red, #e45b67)'
+  'var(--te-eq-band-blue, #4a6b82)',
+  'var(--te-eq-band-cyan, #4e757a)',
+  'var(--te-eq-band-green, #527364)',
+  'var(--te-eq-band-yellow, #7a6b4f)',
+  'var(--te-eq-band-orange, #7e6352)',
+  'var(--te-eq-band-magenta, #6d6073)',
+  'var(--te-eq-band-violet, #5d647a)',
+  'var(--te-eq-band-red, #7c5a5a)'
 ]
 const frequencyTicks = [
   20, 30, 50, 70, 100, 200, 300, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000, 20000
@@ -846,9 +847,9 @@ defineExpose({ finishInteraction })
           class="spectrum-scale"
           aria-label="频谱 dB 刻度"
         >
-          <span style="top: 12%">+10 dB</span>
-          <span style="top: 55%">{{ 10 - spectrumRange / 2 }} dB</span>
-          <span style="top: 98%">{{ 10 - spectrumRange }} dB</span>
+          <span style="top: 8%">+10 dB</span>
+          <span style="top: 34%">{{ 10 - spectrumRange / 2 }} dB</span>
+          <span style="top: 92%">{{ 10 - spectrumRange }} dB</span>
         </div>
         <svg
           class="parametric-plot"
@@ -856,17 +857,12 @@ defineExpose({ finishInteraction })
           preserveAspectRatio="none"
           aria-hidden="true"
         >
-          <defs>
-            <linearGradient :id="spectrumGradientId" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="var(--eq-spectrum)" stop-opacity="0.10" />
-              <stop offset="100%" stop-color="var(--eq-spectrum)" stop-opacity="0.01" />
-            </linearGradient>
-          </defs>
           <path
             v-show="responseView === 'dsp' && spectrumVisible"
             :ref="spectrum.fillRef"
             class="live-spectrum-fill"
-            :fill="`url(#${spectrumGradientId})`"
+            fill="var(--eq-spectrum)"
+            fill-opacity="0.06"
           />
           <path
             v-show="responseView === 'dsp' && spectrumVisible"
@@ -1240,12 +1236,12 @@ defineExpose({ finishInteraction })
   display: flex;
   align-items: center;
   gap: 24px;
-  min-height: 54px;
+  min-height: 48px;
   flex-shrink: 0;
   padding: 0 18px;
-  border-radius: 14px 14px 0 0;
+  border-radius: 6px 6px 0 0;
   border-bottom: 1px solid var(--eq-border-soft);
-  background: linear-gradient(180deg, var(--eq-panel-raised), var(--eq-surface));
+  background: var(--eq-panel);
   z-index: 40;
 }
 .stage-brand {
@@ -1289,17 +1285,16 @@ defineExpose({ finishInteraction })
   display: flex;
   flex: 1;
   min-height: 300px;
-  padding: 38px 94px 60px 28px;
+  padding: 42px 94px 56px 28px;
   overflow: hidden;
-  background:
-    radial-gradient(ellipse at 50% 85%, var(--eq-surface-end), transparent 80%), var(--eq-surface);
+  background: var(--eq-surface);
 }
 .graph-heading {
   position: absolute;
-  inset: 12px 68px auto 22px;
+  inset: 10px 94px auto 28px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   color: var(--eq-text-subtle);
   font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   font-variant-numeric: tabular-nums;
@@ -1307,7 +1302,7 @@ defineExpose({ finishInteraction })
 }
 .graph-range {
   margin-left: auto;
-  color: var(--eq-response);
+  color: var(--eq-text);
   font-family: var(--eq-mono);
 }
 .band-clipboard-actions {
@@ -1316,13 +1311,18 @@ defineExpose({ finishInteraction })
   pointer-events: auto;
 }
 .band-clipboard-actions button {
-  padding: 3px 8px;
+  min-height: 22px;
+  padding: 2px 8px;
   color: var(--eq-text-muted);
   background: var(--eq-panel);
   border: 1px solid var(--eq-border-soft);
-  border-radius: 4px;
+  border-radius: 3px;
   font: inherit;
   cursor: pointer;
+}
+.band-clipboard-actions button:hover:not(:disabled) {
+  color: var(--eq-text);
+  border-color: var(--eq-border);
 }
 .band-clipboard-actions button:disabled {
   opacity: 0.45;
@@ -1333,12 +1333,13 @@ defineExpose({ finishInteraction })
   outline-offset: 2px;
 }
 .graph-range select {
+  min-height: 22px;
   pointer-events: auto;
   background: var(--eq-panel);
-  color: var(--eq-response);
+  color: var(--eq-text);
   border: 1px solid var(--eq-border-soft);
-  border-radius: 4px;
-  padding: 3px 5px;
+  border-radius: 3px;
+  padding: 2px 6px;
   font: inherit;
   cursor: pointer;
 }
@@ -1350,9 +1351,13 @@ defineExpose({ finishInteraction })
   border-style: dashed;
 }
 .bypass-label {
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
   border: 1px solid var(--eq-border-soft);
   border-radius: 3px;
+  background: var(--eq-panel);
 }
 .band-selection-box {
   position: absolute;
@@ -1445,9 +1450,10 @@ defineExpose({ finishInteraction })
 }
 .spectrum-scale span {
   position: absolute;
-  left: 4px;
+  left: 6px;
   transform: translateY(-50%);
   color: var(--eq-text-subtle);
+  opacity: 0.65;
   font: 9px var(--eq-mono);
 }
 .spectrum-peak-line {
@@ -1548,9 +1554,7 @@ defineExpose({ finishInteraction })
 .parametric-band-handle.selected::before,
 .parametric-band-handle.hovered::before {
   inset: 6px;
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--band-color) 22%, transparent),
-    0 0 12px color-mix(in srgb, var(--band-color) 36%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--band-color) 28%, transparent);
 }
 .parametric-band-handle.selected::before {
   background: color-mix(in srgb, var(--band-color) 62%, var(--eq-surface));
@@ -1666,9 +1670,9 @@ defineExpose({ finishInteraction })
 }
 .output-meter {
   position: absolute;
-  top: 38px;
+  top: 42px;
   right: 12px;
-  bottom: 60px;
+  bottom: 56px;
   width: 37px;
   display: grid;
   grid-template-columns: 1fr 5px 5px;
@@ -1978,6 +1982,7 @@ defineExpose({ finishInteraction })
   width: auto;
   max-width: none;
   border-left: 1px solid var(--eq-border-soft);
+  background: var(--eq-panel);
   z-index: 2;
 }
 .docked-inspector .floating-band-inspector :deep(.band-inspector) {
@@ -1989,20 +1994,42 @@ defineExpose({ finishInteraction })
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  justify-content: center;
-  gap: 24px;
-  padding: 24px 18px;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 16px;
   background: transparent;
 }
 .docked-inspector :deep(.inspector-identity) {
   width: 100%;
   display: grid;
-  gap: 16px;
+  gap: 12px;
+}
+.docked-inspector :deep(.band-identity-row) {
+  padding-right: 30px;
+}
+.docked-inspector :deep(.filter-select) {
+  padding: 7px 10px;
+  border: 1px solid var(--eq-border-soft);
+  border-radius: 4px;
+  background: var(--eq-surface);
+}
+.docked-inspector :deep(.inspector-actions) {
+  top: 14px;
+  right: 14px;
+  bottom: auto;
+  flex-direction: row;
+  gap: 4px;
+}
+.docked-inspector :deep([aria-label='收起频段面板']) {
+  display: none;
 }
 .docked-inspector :deep(.precision-controls) {
-  grid-template-columns: minmax(5.5em, 1fr) minmax(5.5em, 1fr) minmax(4em, 0.8fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
   width: 100%;
-  justify-content: center;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--eq-border-soft);
 }
 .docked-inspector :deep(.knob-caption),
 .docked-inspector :deep(.band-state),

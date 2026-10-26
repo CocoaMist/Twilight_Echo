@@ -51,7 +51,6 @@ type LyricDraft = {
 
 const playbackStore = usePlayerStore()
 const { currentTrack, lyricsLoadState } = playbackStore
-const { refreshCurrentLyrics } = playbackStore
 const lyricsManagement = useLyricsManagement()
 
 const lyricSaving = ref(false)
@@ -71,6 +70,7 @@ const draftRomanization = ref('')
 const seededDraft = ref<LyricDraft | null>(null)
 const seededTrackId = ref('')
 const seededTrackTitle = ref('')
+const seededRevision = ref<number | null>(null)
 const onlineLyricCandidates = ref<OnlineLyricsCandidateUi[]>([])
 const onlineCandidateTrackId = ref('')
 const voiceLane = ref<LyricVoiceLane>('center')
@@ -112,12 +112,6 @@ const draftDirty = computed(() => {
 const draftTrackMismatch = computed(
   () =>
     draftDirty.value && seededTrackId.value !== '' && seededTrackId.value !== activeTrackId.value
-)
-const requiresResolver = computed(
-  () =>
-    draftOriginalSelection.value !== 'manual' ||
-    draftTranslationSelection.value !== 'manual' ||
-    draftRomanizationSelection.value !== 'manual'
 )
 const originalAutomaticSource = computed(() => lyricSourceLabel(currentTrack.value?.lyricsSource))
 const translationAutomaticSource = computed(() =>
@@ -288,6 +282,7 @@ function currentDraft(): LyricDraft {
 
 function seedDraftFromTrack(): void {
   const track = currentTrack.value
+  seededRevision.value = lyricsManagement.getRevision()
   selectedVoiceRowIndexes.value = []
   voiceArrangementUndo.value = null
   if (!track) {
@@ -326,7 +321,7 @@ function seedDraftFromTrack(): void {
 }
 
 watch(
-  [activeTrackId, activeOverrideUpdatedAt],
+  [activeTrackId, activeOverrideUpdatedAt, lyricsManagement.revision],
   () => {
     if (!draftDirty.value) seedDraftFromTrack()
   },
@@ -406,25 +401,31 @@ async function saveLyricManager(): Promise<void> {
     return
   }
   const trackId = track.id
-  const needsResolver = requiresResolver.value
+  if (seededRevision.value === null) {
+    lyricManagerError.value = '歌词尚未就绪，请稍后重试'
+    return
+  }
   lyricSaving.value = true
   lyricManagerError.value = ''
   lyricManagerNotice.value = ''
   try {
-    await lyricsManagement.updateTrack(trackId, {
-      offsetMs: Number(draftTrackOffsetMs.value),
-      source: persistedSource(),
-      originalSelection: draftOriginalSelection.value,
-      translationSelection: draftTranslationSelection.value,
-      romanizationSelection: draftRomanizationSelection.value,
-      original: draftOriginal.value.trim() || null,
-      translation: draftTranslation.value.trim() || null,
-      romanization: draftRomanization.value.trim() || null
-    })
-    if (currentTrack.value?.id !== trackId) return
-    if (needsResolver) await refreshCurrentLyrics()
+    await lyricsManagement.updateTrack(
+      trackId,
+      {
+        offsetMs: Number(draftTrackOffsetMs.value),
+        source: persistedSource(),
+        originalSelection: draftOriginalSelection.value,
+        translationSelection: draftTranslationSelection.value,
+        romanizationSelection: draftRomanizationSelection.value,
+        original: draftOriginal.value.trim() || null,
+        translation: draftTranslation.value.trim() || null,
+        romanization: draftRomanization.value.trim() || null
+      },
+      seededRevision.value
+    )
     if (currentTrack.value?.id !== trackId) return
     seededDraft.value = currentDraft()
+    seededRevision.value = lyricsManagement.getRevision()
     lyricManagerNotice.value = '歌词组合已保存'
   } catch (error) {
     lyricManagerError.value = error instanceof Error ? error.message : String(error)
@@ -445,17 +446,19 @@ async function restoreAutomaticLyrics(): Promise<void> {
   lyricManagerError.value = ''
   lyricManagerNotice.value = ''
   try {
-    await lyricsManagement.updateTrack(trackId, {
-      source: 'auto',
-      originalSelection: 'automatic',
-      translationSelection: 'automatic',
-      romanizationSelection: 'automatic',
-      original: null,
-      translation: null,
-      romanization: null
-    })
-    if (currentTrack.value?.id !== trackId) return
-    await refreshCurrentLyrics()
+    await lyricsManagement.updateTrack(
+      trackId,
+      {
+        source: 'auto',
+        originalSelection: 'automatic',
+        translationSelection: 'automatic',
+        romanizationSelection: 'automatic',
+        original: null,
+        translation: null,
+        romanization: null
+      },
+      seededRevision.value
+    )
     if (currentTrack.value?.id !== trackId) return
     seedDraftFromTrack()
     lyricManagerNotice.value = '已恢复自动歌词'
@@ -473,7 +476,7 @@ async function importLyricsIntoDraft(): Promise<void> {
   lyricManagerError.value = ''
   lyricManagerNotice.value = ''
   try {
-    const contents = await window.api.data.importLyrics()
+    const contents = await lyricsManagement.importDraft()
     if (currentTrack.value?.id !== trackId || contents == null) return
     draftOriginal.value = contents
     voiceArrangementUndo.value = null
@@ -497,7 +500,7 @@ async function saveDraftAsLrc(): Promise<void> {
   lyricManagerError.value = ''
   lyricManagerNotice.value = ''
   try {
-    const path = await window.api.data.saveLyrics(draftOriginal.value)
+    const path = await lyricsManagement.exportDraft(draftOriginal.value)
     if (path) lyricManagerNotice.value = `已导出：${path}`
   } catch (error) {
     lyricManagerError.value = error instanceof Error ? error.message : String(error)
@@ -544,15 +547,7 @@ async function searchOnlineIntoDraft(): Promise<void> {
   onlineLyricCandidates.value = []
   onlineCandidateTrackId.value = ''
   try {
-    const result = await window.api.data.searchOnlineLyrics({
-      title: track.title,
-      artist: track.artist,
-      album: track.album || undefined,
-      durationSeconds:
-        typeof track.duration === 'number' && Number.isFinite(track.duration)
-          ? track.duration
-          : undefined
-    })
+    const result = await lyricsManagement.search()
     if (currentTrack.value?.id !== trackId) return
     const candidates = Array.isArray(result.candidates) ? result.candidates : []
     onlineLyricCandidates.value = candidates.slice(0, 12)

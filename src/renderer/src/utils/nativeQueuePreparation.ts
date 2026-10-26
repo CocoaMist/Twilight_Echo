@@ -1,6 +1,9 @@
-import type { Track, TrackSource } from '../types/music'
+import type { TrackData as Track, TrackSource } from '../../../shared/track.ts'
 import type { PlayMode } from '../types/settings'
-import { MAX_NATIVE_QUEUE_ITEMS } from '../../../shared/nativeQueue.ts'
+import {
+  MAX_NATIVE_QUEUE_ITEMS,
+  MAX_QUEUE_OCCURRENCE_ID_LENGTH
+} from '../../../shared/nativeQueue.ts'
 import { playModeWrapsAtQueueEnd, toNativePlayMode } from '../../../shared/playbackModes.ts'
 import { isTwilightMediaGrantTarget, shouldUseNativePlaybackTarget } from './playbackRouting.ts'
 
@@ -179,7 +182,7 @@ function validateLibraryWindow(options: PrepareNativeQueueOptions): void {
       (track) =>
         typeof track.queueEntryId !== 'string' ||
         !track.queueEntryId ||
-        track.queueEntryId.length > 128
+        track.queueEntryId.length > MAX_QUEUE_OCCURRENCE_ID_LENGTH
     ) ||
     new Set(options.queue.map((track) => track.queueEntryId)).size !== options.queue.length ||
     findCurrentQueueIndex(options) < 0

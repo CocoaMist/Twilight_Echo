@@ -7,6 +7,9 @@ import ImportDialog from './ImportDialog.vue'
 import { usePodcastStore } from '../stores/usePodcastStore'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
+import { coreSnapshot } from '../stores/coreTestFixtures.ts'
+import { disposeCoreConnection } from '../stores/coreConnection.ts'
+import { createInitialAppUpdateSnapshot } from '../../../shared/appUpdate.ts'
 
 const expect = (condition, message) => {
   if (!condition) throw new Error(message)
@@ -23,8 +26,14 @@ async function mount(component, props) {
   app.mount('#app')
   await settle()
 }
-const findButton = (label, root = document) =>
-  [...root.querySelectorAll('button')].find((button) => button.textContent.trim() === label)
+const findButton = (label, root = document, optional = false) => {
+  const labels = label === '扫描所选文件夹' ? [label, '检查并导入所选文件夹'] : [label]
+  const button = [...root.querySelectorAll('button')].find((item) =>
+    labels.includes(item.textContent.trim())
+  )
+  if (!button && !optional) throw new Error(`button not found: ${label}`)
+  return button
+}
 const makeSubscription = (id, progress = 900) => ({
   id,
   feedUrl: `https://example.test/${id}`,
@@ -52,6 +61,7 @@ let radioRevision = 1
 let failRadioSave = false
 let pendingRadioSave
 const requests = new Map()
+window.__uxRequests = requests
 window.api = {
   radio: {
     loadStations: async () => ({ data: copy(radioDoc), revision: radioRevision }),
@@ -98,33 +108,211 @@ window.api = {
   }
 }
 
+// Use the real renderer projections; only the process boundary is a fixture.
+const streamState = () => ({
+  radioRevision,
+  podcastRevision: revision,
+  preferencesRevision: 0,
+  defaultPlaybackRate: 1,
+  stations: radioDoc.stations.length,
+  subscriptions: doc.subscriptions.length,
+  refreshing: [],
+  error: null
+})
+let coreState = coreSnapshot({
+  streams: streamState(),
+  downloads: { revision: 0, active: 0, total: 0 }
+})
+let coreMessage
+const undoTokens = new Map()
+function publishStreams() {
+  coreState = { ...coreState, streams: streamState(), sequence: coreState.sequence + 1 }
+  coreMessage?.({
+    connectionId: 'ux',
+    message: {
+      kind: 'state',
+      epoch: coreState.epoch,
+      sequence: coreState.sequence,
+      snapshot: coreState
+    }
+  })
+}
+const page = (items, revision) => ({ revision, offset: 0, total: items.length, items })
+window.api.core = {
+  connect: async () => ({ ok: true, value: { connectionId: 'ux', snapshot: coreState } }),
+  onMessage: (fn) => {
+    coreMessage = fn
+    return () => {
+      coreMessage = null
+    }
+  },
+  onStatus: () => () => {},
+  disconnect: async () => ({ ok: true }),
+  cancel: async () => ({ ok: true }),
+  request: async (_id, { name, payload }) => {
+    try {
+      let value
+      switch (name) {
+        case 'library.metadata':
+          value = { revision: 0, trackCount: 0, fileCount: 0, folders: [], exclusions: [] }
+          break
+        case 'playlists.state':
+          value = { revision: 0, activePlaylistId: null, favoriteIds: [], recentlyDeleted: [] }
+          break
+        case 'playlists.catalog':
+          value = page([], 0)
+          break
+        case 'downloads.page':
+          value = { ...coreState.downloads, offset: 0, items: [] }
+          break
+        case 'radio.stations':
+          value = page(
+            radioDoc.stations.map(({ streamUrl: _streamUrl, ...station }) => station),
+            radioRevision
+          )
+          break
+        case 'radio.directory':
+          value = await new Promise((resolve, reject) =>
+            requests.set(payload.query, { resolve, reject })
+          )
+          break
+        case 'radio.edit': {
+          const edit = payload.edit
+          if (edit.kind === 'import') {
+            value = { state: streamState(), added: 0 }
+            break
+          }
+          const id = edit.kind === 'add' ? 'fixture-radio' : edit.id
+          const stations =
+            edit.kind === 'add'
+              ? [...radioDoc.stations, { ...edit, id, createdAt: 'now', updatedAt: 'now' }]
+              : radioDoc.stations.filter((station) => station.id !== id)
+          await window.api.radio.saveStations({ schemaVersion: 1, stations }, payload.revision)
+          publishStreams()
+          value = { state: streamState(), id }
+          break
+        }
+        case 'podcasts.subscriptions': {
+          const { data } = await window.api.podcast.loadSubscriptions()
+          value = page(
+            data.subscriptions.map(({ episodes, feedUrl: _feedUrl, ...sub }) => ({
+              ...sub,
+              episodeCount: episodes.length
+            })),
+            revision
+          )
+          break
+        }
+        case 'podcasts.episodes':
+          value = page(
+            doc.subscriptions
+              .find((sub) => sub.id === payload.id)
+              .episodes.map(({ mediaUrl: _mediaUrl, ...episode }) => episode),
+            revision
+          )
+          break
+        case 'podcasts.refresh':
+          await window.api.podcast.refreshAll()
+          break
+        case 'podcasts.edit': {
+          const edit = payload.edit
+          const removed =
+            edit.kind === 'unsubscribe'
+              ? doc.subscriptions.find((sub) => sub.id === edit.id)
+              : undoTokens.get(edit.token)
+          if (!removed) throw new Error('撤销已失效')
+          if (edit.kind === 'restore' && doc.subscriptions.some((sub) => sub.id === removed.id))
+            throw new Error('订阅已存在')
+          const subscriptions =
+            edit.kind === 'unsubscribe'
+              ? doc.subscriptions.filter((sub) => sub.id !== removed.id)
+              : [...doc.subscriptions, removed]
+          await window.api.podcast.saveSubscriptions(
+            { schemaVersion: 1, subscriptions },
+            payload.revision
+          )
+          const token = 'undo:' + removed.id
+          if (edit.kind === 'unsubscribe') undoTokens.set(token, removed)
+          else undoTokens.delete(edit.token)
+          publishStreams()
+          value = {
+            state: streamState(),
+            undoToken: edit.kind === 'unsubscribe' ? token : undefined
+          }
+          break
+        }
+        default:
+          throw new Error('Unexpected Core operation: ' + name)
+      }
+      return { ok: true, value }
+    } catch (error) {
+      if (
+        coreState.streams.radioRevision !== radioRevision ||
+        coreState.streams.podcastRevision !== revision
+      )
+        publishStreams()
+      return { ok: false, error: { code: 'FAILED', message: error.message } }
+    }
+  }
+}
+window.api.app = {
+  getUpdateState: async () => createInitialAppUpdateSnapshot(),
+  onUpdateState: () => () => {}
+}
+
 window.runUxCoreTests = async () => {
   const importMotion = document.createElement('style')
   importMotion.textContent =
     '.modal-overlay,.import-dialog{transition:none!important;animation:none!important}'
   document.head.append(importMotion)
   const showImport = ref(true)
-  const imported = ['existing-A', 'existing-B']
+  const scans = []
   const selectedFolder = 'C:/new'
   let scanFailure = false
   let failedFolder = null
-  let importSaves = 0
-  let importRebuilds = 0
   window.auditMusic = {
     scannedFolders: ref(['C:/A', 'C:/B']),
     isScanning: ref(false),
-    addFolder: (folder) => {
-      const roots = window.auditMusic.scannedFolders.value
-      if (!roots.includes(folder)) roots.push(folder)
+    libraryScanStatus: ref({
+      jobId: null,
+      mode: null,
+      state: 'idle',
+      current: 0,
+      total: 0,
+      parsedFileCount: 0,
+      skippedUnchanged: 0,
+      error: '',
+      databaseProgress: null
+    }),
+    scanLibraryDirectories: async ({ directories }) => {
+      scans.push([...directories])
+      if (scanFailure || directories.includes(failedFolder)) throw new Error('Folder unavailable')
+      return { state: 'accepted' }
     },
-    addTracks: async (tracks) => imported.push(...tracks.map((track) => track.id)),
-    saveLibrary: async () => importSaves++,
-    refreshLibraryIndex: () => importRebuilds++,
-    syncFolders: () => {
-      throw new Error('Import must never prune unselected roots')
-    }
+    pauseLibraryScan: async () => true,
+    resumeLibraryScan: async () => true,
+    cancelLibraryScan: async () => true,
+    addFolder: () => {},
+    addTracks: async () => {},
+    saveLibrary: async () => {},
+    refreshLibraryIndex: () => {},
+    syncFolders: () => {}
   }
   window.api.dialog = { openFolder: async () => selectedFolder }
+  const settingsStore = useSettingsStore()
+  settingsStore.loaded.value = true
+  window.api.settings = {
+    update: async (patch) => ({
+      settings: { ...settingsStore.settings.value, ...patch },
+      defaults: {},
+      paths: {},
+      appVersion: 'test',
+      platform: 'win32',
+      windowTransparencySupported: false,
+      restartReasons: []
+    })
+  }
+  await settingsStore.updateSettings({ libraryFolders: ['C:/A', 'C:/B'] })
   window.api.library = { getStorageMode: async () => 'json' }
   window.api.fs = {
     onScanProgress: () => () => {},
@@ -141,6 +329,7 @@ window.runUxCoreTests = async () => {
   }))
   await new Promise((resolve) => requestAnimationFrame(resolve))
   const importDialog = document.querySelector('[role="dialog"]')
+  expect(importDialog, 'import dialog missing')
   expect(importDialog.contains(document.activeElement), 'import dialog did not receive focus')
   const importLast = findButton('扫描所选文件夹')
   importLast.focus()
@@ -158,7 +347,7 @@ window.runUxCoreTests = async () => {
   findButton('添加文件夹').click()
   await settle()
   expect(
-    !window.auditMusic.scannedFolders.value.includes('C:/new'),
+    !settingsStore.settings.value.libraryFolders.includes('C:/new'),
     'choosing a folder persisted before scanning'
   )
   document.querySelector('[aria-label="关闭导入窗口"]').click()
@@ -166,28 +355,19 @@ window.runUxCoreTests = async () => {
   showImport.value = true
   await settle()
   expect(
-    document.querySelectorAll('.folder-item').length === 2,
-    'cancelled folder draft survived reopening'
+    document.querySelectorAll('.folder-item').length === 2 &&
+      ![...document.querySelectorAll('.folder-path')].some((row) => row.textContent === 'C:/new'),
+    `cancelled folder draft survived reopening: ${[...document.querySelectorAll('.folder-path')].map((row) => row.textContent).join('|')}`
   )
   const checks = [...document.querySelectorAll('.folder-item input')]
   checks[0].click()
   findButton('扫描所选文件夹').click()
-  await new Promise((resolve) => setTimeout(resolve, 120))
   await settle()
   expect(
-    imported.join('|') === 'existing-A|existing-B|imported:C:/B',
-    'unselected tracks removed or selected root skipped'
+    JSON.stringify(scans.at(-1)) === JSON.stringify(['C:/B']),
+    'scan included an unselected root'
   )
-  expect(
-    window.auditMusic.scannedFolders.value.join('|') === 'C:/A|C:/B',
-    'unselected root removed'
-  )
-  expect(
-    importSaves > 0 && importRebuilds > 0 && !showImport.value,
-    'successful import did not save and close'
-  )
-  await new Promise((resolve) => setTimeout(resolve, 250))
-  showImport.value = true
+  expect(showImport.value, 'durable scan closed its initiating window')
   scanFailure = true
   await settle()
   findButton('扫描所选文件夹').click()
@@ -202,58 +382,20 @@ window.runUxCoreTests = async () => {
   )
   scanFailure = false
   findButton('扫描所选文件夹').click()
-  await new Promise((resolve) => setTimeout(resolve, 180))
   await settle()
-  expect(!showImport.value, 'failed import could not retry')
-  await new Promise((resolve) => setTimeout(resolve, 250))
-  showImport.value = true
+  expect(showImport.value && scans.length === 3, 'failed scan could not be retried')
   failedFolder = 'C:/B'
-  const savesBeforePartial = importSaves
   await settle()
   findButton('扫描所选文件夹').click()
-  await new Promise((resolve) => setTimeout(resolve, 120))
   await settle()
-  expect(
-    showImport.value && importSaves > savesBeforePartial,
-    'completed folder batches were not saved after a later failure'
-  )
-  expect(imported.includes('imported:C:/A'), 'completed folder batches were lost')
+  expect(showImport.value && scans.length === 4, 'scan retry was not submitted')
 
   // Shared settings are authoritative even when the saved library has old roots.
-  const settingsStore = useSettingsStore()
-  settingsStore.settings.value.libraryFolders = ['C:/A', 'C:/settings-only']
-  settingsStore.loaded.value = true
-  window.api.settings = {
-    update: async (patch) => ({
-      settings: { ...settingsStore.settings.value, ...patch },
-      defaults: {},
-      paths: {},
-      appVersion: 'test',
-      platform: 'win32',
-      windowTransparencySupported: false,
-      restartReasons: []
-    })
-  }
-  const removedFolders = []
-  window.auditMusic.removeFolder = (folder) => {
-    removedFolders.push(folder)
-    window.auditMusic.scannedFolders.value = window.auditMusic.scannedFolders.value.filter(
-      (root) => root !== folder
-    )
-  }
-  const restoredPaths = []
-  window.auditMusic.excludedTracks = ref([
-    { filePath: 'C:\\A\\removed.flac' },
-    { filePath: 'C:/A-sibling/unrelated.flac' },
-    { filePath: 'C:/B/still-excluded.flac' }
-  ])
-  window.auditMusic.restoreExcludedTracks = async (paths) => restoredPaths.push(...paths)
-  const scannedRoots = []
-  window.api.fs.scanMusicFiles = async (folder) => {
-    scannedRoots.push(folder)
-    return [{ id: 'reimported:' + folder }]
-  }
-  await mount(ImportDialog, () => ({ show: true, onClose: () => undefined }))
+  showImport.value = false
+  await settle()
+  await settingsStore.updateSettings({ libraryFolders: ['C:/A', 'C:/settings-only'] })
+  showImport.value = true
+  await settle()
   expect(
     [...document.querySelectorAll('.folder-path')].map((row) => row.textContent).join('|') ===
       'C:/A|C:/settings-only',
@@ -263,23 +405,20 @@ window.runUxCoreTests = async () => {
     [...document.querySelectorAll('.folder-item input')].every((input) => input.checked),
     'settings-only root was not selected when opening import'
   )
-  settingsStore.settings.value.libraryFolders = ['C:/A']
+  await settingsStore.updateSettings({ libraryFolders: ['C:/A'] })
   await settle()
   findButton('扫描所选文件夹').click()
-  await new Promise((resolve) => setTimeout(resolve, 120))
   await settle()
-  expect(scannedRoots.join('|') === 'C:/A', 'removed or hidden root was still scanned')
   expect(
-    restoredPaths.join('|') === 'C:\\A\\removed.flac',
-    'reimport did not restore exclusions at directory boundaries'
+    JSON.stringify(scans.at(-1)) === JSON.stringify(['C:/A']),
+    'removed or hidden root was scanned'
   )
   document.querySelector('[aria-label="移除文件夹 C:/A"]').click()
   await settle()
   expect(
     settingsStore.settings.value.libraryFolders.length === 0 &&
-      removedFolders.join('|') === 'C:/A' &&
       !document.querySelector('.folder-item'),
-    'import folder removal did not update shared settings and saved roots'
+    'import folder removal did not update shared settings'
   )
   importMotion.remove()
 
@@ -356,9 +495,11 @@ window.runUxCoreTests = async () => {
       offset.value = 0
       await settle()
       const visited = []
-      while (findButton('下一页') && !findButton('下一页').disabled) {
+      while (true) {
+        const nextPage = findButton('下一页', document, true)
+        if (!nextPage || nextPage.disabled) break
         const before = offset.value
-        findButton('下一页').click()
+        nextPage.click()
         await settle()
         expect(offset.value === before + 30, `${searchType}/${count} repeated or skipped a page`)
         visited.push(offset.value)
@@ -428,14 +569,14 @@ window.runUxCoreTests = async () => {
   const row = document.querySelector('.track-row')
   row.focus()
   await window.pressKey('Enter')
-  expect(activated === 1 && rowClicks === 0, 'Enter must activate the focused song')
   await window.pressKey('Space')
-  expect(activated === 1 && rowClicks === 1, 'Space must select without starting playback')
+  expect(activated === 1 && rowClicks === 1, 'Enter plays and Space selects in double-click mode')
+  rowClicks = 0
   await window.pressKey('ArrowDown')
   expect(document.activeElement === row.nextElementSibling, 'row arrow navigation')
   row.querySelector('.btn-like').focus()
   await window.pressKey('Space')
-  expect(liked === 1 && activated === 1 && rowClicks === 1, 'favorite key bubbled into the row')
+  expect(liked === 1 && activated === 1, 'favorite key bubbled into playback')
 
   for (const mode of ['singleClick', 'doubleClick']) {
     activationMode.value = mode
@@ -449,7 +590,7 @@ window.runUxCoreTests = async () => {
       await window.pressKey('Enter')
       await window.pressKey('Space')
     }
-    expect(rowClicks === 1 && activated === 1, `${mode} metadata links triggered row actions`)
+    expect(rowClicks === 0 && activated === 1, `${mode} metadata links triggered playback`)
   }
   expect(
     artistRequests.length === 6 &&
@@ -488,6 +629,7 @@ window.runUxCoreTests = async () => {
     onClose: () => (show.value = false)
   }))
   const dialog = document.querySelector('[role=dialog]')
+  expect(dialog, 'download dialog missing')
   expect(dialog.contains(document.activeElement), 'download initial focus escaped')
   const buttons = dialog.querySelectorAll('button')
   buttons[buttons.length - 1].focus()
@@ -635,9 +777,13 @@ window.runUxCoreTests = async () => {
   expect(doc.subscriptions.length === 0, 'unsubscribe did not save')
   doc.subscriptions.push(makeSubscription('added-later', 120))
   revision++
+  publishStreams()
+  await settle()
   // The undo action must outlive the originating page, and remain retryable
   // through the real notice host, which consumes actions when clicked.
   await mount(AppNoticeHost, () => ({}))
+  useAppNoticeStore().setCenterOpen(true)
+  await settle()
   failSave = true
   findButton('撤销取消订阅').click()
   await settle()
@@ -668,6 +814,7 @@ window.runUxCoreTests = async () => {
       doc.subscriptions.some((sub) => sub.id === 'concurrent'),
     'undo overwrote a conflicting write'
   )
+  await settle()
   await store.restoreSubscription(snapshot)
   const before = saves
   rejected = false
@@ -677,20 +824,8 @@ window.runUxCoreTests = async () => {
     rejected = true
   }
   expect(rejected && saves === before, 'undo overwrote an existing subscription')
-  await store.unsubscribe('original')
-  failLoad = true
-  rejected = false
-  try {
-    await store.restoreSubscription(snapshot)
-  } catch {
-    rejected = true
-  }
-  expect(
-    rejected && !doc.subscriptions.some((sub) => sub.id === 'original'),
-    'read failure restored stale data'
-  )
-  failLoad = false
   useAppNoticeStore().clearNotices()
   app.unmount()
+  disposeCoreConnection()
   return 'UX_CORE_OK'
 }

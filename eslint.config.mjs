@@ -9,7 +9,10 @@ export default defineConfig(
     ignores: [
       '**/node_modules/**',
       '**/.cache/**',
-      '**/.artifacts/**',
+      '.artifacts/**',
+      '.local/**',
+      '.repro-policy/**',
+      '.org-build.mjs',
       '**/.birdview/**',
       '**/.workbuddy/**',
       '**/.codex-tools/**',
@@ -26,6 +29,7 @@ export default defineConfig(
       '**/audio-engine/build/**',
       '**/audio-engine/out/**',
       'src/main/plugins/rhine-vendor/**',
+      'src/core/plugins/rhine-vendor/**',
       '**/packages/create-twilight-plugin/**/*.cjs'
     ]
   },
@@ -163,7 +167,11 @@ export default defineConfig(
     }
   },
   {
-    files: ['**/*.test.{ts,mts,js,mjs,cjs}', '**/*.test.ts'],
+    files: [
+      '**/*.test.{ts,mts,js,mjs,cjs}',
+      '**/*TestFixture.ts',
+      '**/*TestFixtures.ts'
+    ],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-empty-function': 'off',

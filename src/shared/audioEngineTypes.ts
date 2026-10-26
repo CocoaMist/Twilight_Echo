@@ -25,7 +25,7 @@ export type ChannelRoutingMode =
   | 'mono-to-stereo'
   | 'mono-to-multichannel'
 /** PCM → DSD output-stage modulation; off keeps PCM sources on the float/typed PCM path. */
-export type PcmToDsdMode = 'off' | 'dsd64' | 'dsd128' | 'dsd256'
+export type PcmToDsdMode = 'off' | 'dsd64' | 'dsd128' | 'dsd256' | 'dsd512'
 export type SacdProgramMode = 'auto' | 'stereo' | 'multichannel'
 export type EqualizerFilterType =
   | 'peak'
@@ -420,6 +420,10 @@ export interface BpmAnalysisResult {
 export interface LoudnessAnalysisResult {
   integratedLufs: number
   truePeakDb: number
+  loudnessRangeLu?: number
+  waveformPeaks?: string
+  noiseStartMs?: number
+  noiseEndMs?: number
   source: 'analyzed'
   analyzedAt: string
   algorithmVersion: number
@@ -427,6 +431,17 @@ export interface LoudnessAnalysisResult {
   channels?: number
   analyzedFrames?: number
   available?: boolean
+}
+
+export interface RenderPerformanceSnapshot {
+  callbackCount: number
+  totalCallbackNanoseconds: number
+  meanCallbackNanoseconds?: number
+  peakCallbackNanoseconds: number
+  p999DeadlineRatioUpper: number
+  totalDeadlineNanoseconds: number
+  deadlineMissCount: number
+  callbackDeadlineLoadPercent?: number
 }
 
 export interface HeadphoneCompensationSettings {
@@ -531,6 +546,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   supportsOutputPerfect: boolean
   sourceExact: boolean
   diagnostics: OutputDiagnostics
+  renderPerformance?: RenderPerformanceSnapshot
   deviceRecovered: boolean
   recoveryCount: number
   outputSampleRate: number
@@ -540,6 +556,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   pcmPassthrough: boolean
   dspActive: boolean
   replayGainActive: boolean
+  loudnormActive?: boolean
   eqActive: boolean
   convolverActive: boolean
   crossfeedActive: boolean
@@ -583,6 +600,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   upcomingTrack: AudioEngineQueueItem | null
   /** Live ICY StreamTitle (radio). Empty when unavailable. */
   streamTitle?: string
+  clipCount?: number
 }
 
 export type OutputProviderImplementation = 'legacy-native' | 'miniaudio'
@@ -646,6 +664,7 @@ export interface OutputInfo {
   latencyInfo: LatencyInfo
   channelRoutingMode: string
   diagnostics: OutputDiagnostics
+  renderPerformance?: RenderPerformanceSnapshot
   deviceRecovered: boolean
   recoveryCount: number
   nativeDsp?: { plugins: unknown[]; graph?: import('./dspGraph.ts').DspGraphStatus }

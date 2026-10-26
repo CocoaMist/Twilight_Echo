@@ -6,7 +6,7 @@ import {
 import type { EditorRect, EditorSize } from './viewportGeometry.ts'
 
 export type AppearanceSurface = {
-  id: 'card' | 'controls' | 'navigation'
+  id: 'card' | 'controls' | 'navigation' | 'player-page'
   element: HTMLElement
   rect: EditorRect
   pose?: string
@@ -82,6 +82,31 @@ export function measureAppearanceSurfaces(
         element: bookmark,
         rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
       })
+  }
+  const playerStage = content.querySelector<HTMLElement>('.appearance-preview-player-stage')
+  if (playerStage) {
+    for (const [selector, pose] of [
+      ['.appearance-preview-cover-frame', 'player-cover'],
+      ['.appearance-preview-player-lyrics', 'player-lyrics']
+    ] as const) {
+      const element = playerStage.querySelector<HTMLElement>(selector)
+      if (!element) continue
+      const style = view.getComputedStyle(element)
+      if (
+        (style.visibility !== 'visible' && scene.style.visibility !== 'hidden') ||
+        style.display === 'none'
+      )
+        continue
+      const rect = element.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0 && rect.left < size.width && rect.right > 0)
+        result.push({
+          id: 'player-page',
+          pose,
+          element,
+          interactive: true,
+          rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+        })
+    }
   }
   return result
 }

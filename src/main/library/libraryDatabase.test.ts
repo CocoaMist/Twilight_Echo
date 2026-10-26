@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -332,14 +333,15 @@ test('opening an existing v9 library adds compact read indexes without changing 
   const metadata = original.getMetadata(),
     page = original.getTracksByIds(['retained'])
   original.sql.exec(
-    'DROP INDEX tracks_insertion; DROP INDEX files_count; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=9;'
+    LEGACY_QUEUE_SCHEMA_SQL +
+      'DROP INDEX tracks_insertion; DROP INDEX files_count; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=9;'
   )
   original.close()
   const reopened = new LibraryDatabase(file)
   try {
     assert.deepEqual(reopened.getMetadata(), metadata)
     assert.deepEqual(reopened.getTracksByIds(['retained']), page)
-    assert.equal(reopened.sql.prepare('PRAGMA user_version').get()!.user_version, 10)
+    assert.equal(reopened.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
     for (const name of ['tracks_insertion', 'files_count'])
       assert.ok(
         reopened.sql.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name)

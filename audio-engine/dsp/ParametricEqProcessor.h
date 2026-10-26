@@ -12,6 +12,7 @@ class ParametricEqProcessor final : public IAudioProcessor {
   void prepare(const AudioFormat& format) override;
   void setTrackContext(const DspTrackContext& context) override;
   void process(float* samples, size_t frameCount) override;
+  void processDouble(double* samples, size_t frameCount) override;
   void reset() override;
   bool isActive() const override;
 
@@ -28,6 +29,7 @@ class ParametricEqProcessor final : public IAudioProcessor {
     double z2 = 0.0;
 
     float process(float input, const Biquad& coeffs);
+    double processDouble(double input, const Biquad& coeffs);
     void reset();
   };
 

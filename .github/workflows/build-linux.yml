@@ -146,4 +146,3 @@ jobs:
           --tag "$RELEASE_TAG"
           --assets release-assets
           --platform linux
-

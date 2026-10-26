@@ -12,103 +12,98 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { useEqualizerHistory } from '../composables/useEqualizerHistory.ts'
 import { computed, ref } from 'vue'
-import { createDspFactoryScene, type DspSceneState } from '../../../shared/dspGraph.ts'
+import { createDspFactoryScene } from '../../../shared/dspGraph.ts'
+import { mergeEqualizerPatch } from '../utils/equalizerSettingsPatch.ts'
 
 const page = readFileSync(new URL('./EqualizerPage.vue', import.meta.url), 'utf8')
+
+function declarations(...names: string[]): string {
+  return names
+    .map((name) => {
+      const declaration = page.match(
+        new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`)
+      )?.[0]
+      assert.ok(declaration, `${name} exists in the EQ page`)
+      return stripTypeScriptTypes(declaration)
+    })
+    .join('\n')
+}
 
 test('opening a master-bypassed default scene preserves the separate EQ module switch', () => {
   const declaration = page.match(/function applyActiveSceneEqToEditor\([\s\S]*?\n\}/)?.[0]
   assert.ok(declaration)
   const scene = createDspFactoryScene('headphoneCorrection', 'default')
   scene.graph.nodes.find((node) => node.type === 'equalizer')!.enabled = false
-  let processing = normalizeAudioProcessing({ dspEnabled: false, eqEnabled: true })
+  const processing = { value: normalizeAudioProcessing({ dspEnabled: false, eqEnabled: true }) }
   const apply = runInNewContext(
     `${stripTypeScriptTypes(declaration)}\napplyActiveSceneEqToEditor`,
     {
       loadedSceneId: null,
       opraCompensationEnabled: { value: false },
-      audioProcessing: { value: processing },
+      audioProcessing: processing,
       appSettings: { value: null },
       normalizeAudioProcessing,
-      audioOutputDspStore: {
-        applyAudioProcessingState: (next: typeof processing) => {
-          processing = next
-        }
-      }
+      structuredClone
     }
   )
   apply({ scenes: [scene], activeSceneId: 'default' })
-  assert.equal(processing.dspEnabled, false)
-  assert.equal(processing.eqEnabled, true)
+  assert.equal(processing.value.dspEnabled, false)
+  assert.equal(processing.value.eqEnabled, true)
 })
 
-test('live EQ creates an absent active-scene EQ, stacks OPRA once and requires explicit DSD consent', async () => {
-  const declaration = page.match(/async function syncActiveSceneEq\([\s\S]*?\n\}/)?.[0]
-  assert.ok(declaration)
-  const scene = createDspFactoryScene('transparent', 'active')
-  scene.graph.nodes = [
-    { id: 'legacy', type: 'nativePlugin', pluginAbiVersion: 1, enabled: true, params: {} }
-  ]
-  let state: DspSceneState = {
-    scenes: [scene],
-    activeSceneId: 'active',
-    pinnedSceneId: null,
-    graph: scene.graph,
-    requiresPcmFallback: true,
-    dsdPcmFallbackApplied: false
-  }
-  let consent = false,
-    writes = 0,
-    applied = 0
+test('EQ submits only manual bands to Core and refreshes the acknowledged projection', async () => {
+  const initial = normalizeAudioProcessing({ eqMode: 'parametric', eqEnabled: true })
+  const submitted: Partial<typeof initial>[] = []
+  let refreshes = 0
   const context = {
+    Error,
+    structuredClone,
     props: { embedded: true },
     loadedSceneId: 'active',
-    crypto: { randomUUID: () => 'test' },
-    opraCompensationEnabled: { value: true },
-    headphoneCompensation: {
-      value: { preampDb: -2, bands: [{ frequency: 200, gain: 2, q: 1, filterType: 'peak' }] }
-    },
+    coreAudio: { getDspSceneState: async () => ({ activeSceneId: 'active' }) },
+    audioProcessing: { value: initial },
+    autoPreampEnabled: { value: true },
+    activeTab: { value: 'graphic' },
+    selectedBandIndex: { value: 0 },
+    selectedBandIndices: { value: [0] },
+    selectBand() {},
+    appSettings: { value: { audioProcessing: initial } },
     cloneBands,
-    window: {
-      confirm: () => consent,
-      api: {
-        audioEngine: {
-          getDspSceneState: async () => JSON.parse(JSON.stringify(state)),
-          setDspScenes: async (scenes: DspSceneState['scenes']) => {
-            writes++
-            state = { ...state, scenes }
-            return state
-          },
-          applyDspScene: async () => {
-            applied++
-            return state
-          }
-        }
-      }
+    setAudioProcessing: async (
+      edit: Partial<typeof initial>,
+      options: { throwOnError: boolean }
+    ) => {
+      assert.equal(options.throwOnError, true)
+      submitted.push(edit)
+    },
+    refreshEqualizerProjection: async () => {
+      refreshes++
+      context.audioProcessing.value = { ...initial, eqPreamp: -6.5 }
     }
   }
-  const sync = runInNewContext(`${stripTypeScriptTypes(declaration)}\nsyncActiveSceneEq`, context)
-  const settings = normalizeAudioProcessing({
-    eqMode: 'parametric',
-    dspEnabled: true,
-    eqEnabled: true,
-    eqBands: [{ frequency: 1000, gain: -3, q: 1, filterType: 'peak' }]
-  })
-  await sync(settings)
-  assert.equal(writes, 1)
-  assert.equal(applied, 0)
-  assert.deepEqual(
-    state.scenes[0].graph.nodes.map((node) => node.type),
-    ['equalizer', 'nativePlugin']
+  const apply = runInNewContext(
+    `${declarations('applyEqualizerSnapshot')}\napplyEqualizerSnapshot`,
+    context
   )
-  assert.equal((state.scenes[0].graph.nodes[0].params.bands as unknown[]).length, 2)
-  consent = true
-  await sync(settings)
-  assert.equal(applied, 1)
-  assert.equal((state.scenes[0].graph.nodes[0].params.bands as unknown[]).length, 2)
+  const snapshot = {
+    ...initial,
+    eqBands: [{ frequency: 1000, gain: -3, q: 1, filterType: 'peak' as const }]
+  }
+  await apply(snapshot)
+  assert.deepEqual(submitted[0].eqBands, snapshot.eqBands)
+  assert.notEqual(submitted[0].eqBands, snapshot.eqBands)
+  assert.equal(Object.hasOwn(submitted[0], 'eqPreamp'), false)
+  assert.equal(refreshes, 1)
+  assert.equal(context.audioProcessing.value.eqPreamp, -6.5)
+  assert.equal(context.activeTab.value, 'parametric')
+  assert.equal(context.appSettings.value.audioProcessing.eqPreamp, -6.5)
+  context.autoPreampEnabled.value = false
+  await apply({ ...snapshot, eqPreamp: 2.3 })
+  assert.equal(submitted[1].eqPreamp, 2.3)
   context.loadedSceneId = 'old-device-scene'
-  await assert.rejects(sync(settings), /活动场景已改变/)
-  assert.equal(writes, 2)
+  await assert.rejects(apply(snapshot), /活动场景已改变/)
+  assert.equal(submitted.length, 2)
+  assert.equal(refreshes, 2)
 })
 
 function createPersistenceHarness() {
@@ -127,9 +122,23 @@ function createPersistenceHarness() {
   }
   let persisted = structuredClone(initial)
   const appSettings = ref(structuredClone(initial))
-  const scenes: unknown[] = []
+  let refreshes = 0
+  const profile = {
+    applicable: true,
+    productId: 'headphone',
+    productName: 'Headphone',
+    vendorName: 'Vendor',
+    eqId: 'profile',
+    author: 'Author',
+    details: '',
+    link: '',
+    preampDb: -2,
+    bands: [{ frequency: 200, gain: 2, q: 1, filterType: 'peak' as const }],
+    unsupportedBandTypes: []
+  }
   const context = {
     Error,
+    structuredClone,
     appSettings,
     userPresets: computed(() => appSettings.value.audioEqPresets),
     headphoneCompensation: computed(() => appSettings.value.headphoneCompensation),
@@ -146,6 +155,21 @@ function createPersistenceHarness() {
     commitChain: Promise.resolve(),
     finishParametricEdits() {},
     cloneBands,
+    autoPreampEnabled: ref(false),
+    projectedAudioProcessing: { value: structuredClone(initial.audioProcessing) },
+    audioOutputDspStore: {
+      refreshAudioOutputState: async () => {
+        refreshes++
+      }
+    },
+    core: {
+      query: async (name: string, payload: unknown) => {
+        if (name === 'audio.dsp') return { autoPreamp: { enabled: false } }
+        assert.equal(name, 'opra.profile')
+        assert.deepEqual(JSON.parse(JSON.stringify(payload)), { id: profile.eqId })
+        return profile
+      }
+    },
     window: {
       api: {
         settings: {
@@ -154,37 +178,20 @@ function createPersistenceHarness() {
             persisted = { ...persisted, ...structuredClone(patch) }
             return structuredClone(persisted)
           }
-        },
-        audioEngine: {
-          getDspSceneState: async () => ({
-            activeSceneId: 'main',
-            pinnedSceneId: 'main',
-            scenes: [{ id: 'main', graph: { nodes: [{ type: 'equalizer', params: {} }] } }]
-          }),
-          setDspScenes: async (value: unknown) => {
-            scenes.push(structuredClone(value))
-          }
         }
       }
     },
     console: { error() {} }
   }
-  const declarations = ['saveEqPreset', 'disableOpraCompensation', 'syncActiveSceneEq']
-    .map((name) => {
-      const declaration = page.match(new RegExp(`async function ${name}\\([\\s\\S]*?\\n\\}`))?.[0]
-      assert.ok(declaration)
-      return stripTypeScriptTypes(declaration)
-    })
-    .join('\n')
   const actions = runInNewContext(
-    `${declarations}\n({saveEqPreset,disableOpraCompensation,syncActiveSceneEq})`,
+    `${declarations('saveEqPreset', 'disableOpraCompensation', 'applyOpraProfile', 'refreshEqualizerProjection', 'loadAutoPreampPreference')}\n({saveEqPreset,disableOpraCompensation,applyOpraProfile})`,
     context
   ) as {
     saveEqPreset(): Promise<void>
     disableOpraCompensation(): Promise<void>
-    syncActiveSceneEq(settings: typeof initial.audioProcessing): Promise<void>
+    applyOpraProfile(value: typeof profile): Promise<void>
   }
-  return { context, actions, scenes, persisted: () => persisted }
+  return { context, actions, profile, refreshes: () => refreshes, persisted: () => persisted }
 }
 
 test('saving successive presets sends cloneable snapshots of existing reactive bands', async () => {
@@ -220,22 +227,21 @@ test('preset persistence failure preserves the name and exposes a retryable erro
   assert.equal(context.appSettings.value.audioEqPresets.length, 1)
 })
 
-test('disabling OPRA persists reactive bands and synchronizes the manual scene', async () => {
-  const { context, actions, scenes, persisted } = createPersistenceHarness()
+test('disabling OPRA persists cloneable bands and reloads the Core projection', async () => {
+  const { context, actions, refreshes, persisted } = createPersistenceHarness()
   await actions.disableOpraCompensation()
   assert.equal(persisted().headphoneCompensation.enabled, false)
   assert.equal(context.appSettings.value.headphoneCompensation.enabled, false)
   assert.equal(context.opraError.value, '')
-  assert.equal(scenes.length, 1)
+  assert.equal(refreshes(), 1)
   assert.deepEqual(
-    (scenes[0] as { graph: { nodes: { params: { bands: unknown[] } }[] } }[])[0].graph.nodes[0]
-      .params.bands,
+    structuredClone(persisted().headphoneCompensation.bands),
     structuredClone(defaultAudioProcessing.eqBands)
   )
 })
 
 test('failed OPRA persistence keeps compensation enabled and exposes the failure', async () => {
-  const { context, actions, scenes, persisted } = createPersistenceHarness()
+  const { context, actions, refreshes, persisted } = createPersistenceHarness()
   context.window.api.settings.update = async () => {
     throw new Error('permission denied')
   }
@@ -243,28 +249,33 @@ test('failed OPRA persistence keeps compensation enabled and exposes the failure
   assert.equal(persisted().headphoneCompensation.enabled, true)
   assert.equal(context.appSettings.value.headphoneCompensation.enabled, true)
   assert.match(context.opraError.value, /permission denied/)
-  assert.equal(scenes.length, 0)
+  assert.equal(refreshes(), 0)
 })
 
-test('scene synchronization clones reactive bands with and without OPRA', async () => {
-  const { context, actions, scenes } = createPersistenceHarness()
-  await actions.syncActiveSceneEq(context.audioProcessing.value)
-  context.appSettings.value.headphoneCompensation.enabled = false
-  await actions.syncActiveSceneEq(context.audioProcessing.value)
-  assert.equal(scenes.length, 2)
+test('applying OPRA fetches the full Core profile without stacking it into the manual editor', async () => {
+  const { context, actions, profile, refreshes, persisted } = createPersistenceHarness()
+  await actions.applyOpraProfile({ ...profile, bands: [] })
+  assert.deepEqual(persisted().headphoneCompensation.bands, profile.bands)
+  assert.equal(persisted().headphoneCompensation.preampDb, -2)
+  assert.equal(refreshes(), 1)
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.audioProcessing.value.eqBands)),
+    defaultAudioProcessing.eqBands
+  )
+  assert.equal(context.opraApplyingEqId.value, '')
 })
 
 test('OPRA scene failure is reported after persistence and a successful retry clears it', async () => {
   const { context, actions, persisted } = createPersistenceHarness()
-  const setDspScenes = context.window.api.audioEngine.setDspScenes
-  context.window.api.audioEngine.setDspScenes = async () => {
+  const refresh = context.audioOutputDspStore.refreshAudioOutputState
+  context.audioOutputDspStore.refreshAudioOutputState = async () => {
     throw new Error('DSP unavailable')
   }
   await actions.disableOpraCompensation()
   assert.equal(persisted().headphoneCompensation.enabled, false)
   assert.equal(context.appSettings.value.headphoneCompensation.enabled, false)
   assert.match(context.opraError.value, /DSP unavailable/)
-  context.window.api.audioEngine.setDspScenes = setDspScenes
+  context.audioOutputDspStore.refreshAudioOutputState = refresh
   await actions.disableOpraCompensation()
   assert.equal(context.opraError.value, '')
 })
@@ -368,203 +379,193 @@ const toolbar = readFileSync(
 )
 const equalizerUi = [page, chart, opra, graphic, toolbar].join('\n')
 
-const autoPreampDeclarations = [
-  'loadAutoPreampPreference',
-  'saveAutoPreampPreference',
-  'toggleAutoPreamp',
-  'applyAutoPreamp',
-  'stagePreamp',
-  'updatePreampInput'
-]
-  .map((name) => {
-    const declaration = page.match(
-      new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`)
-    )?.[0]
-    assert.ok(declaration)
-    return stripTypeScriptTypes(declaration)
-  })
-  .join('\n')
-
-test('auto compensation restores the manual preamp, survives reopening and permits manual overrides', async () => {
-  const initial = normalizeAudioProcessing({
-    ...defaultAudioProcessing,
-    eqMode: 'parametric',
-    eqPreamp: 2.3
-  })
-  const stored = new Map<string, string>()
-  let applies = 0,
-    previews = 0,
-    manualCommit = Promise.resolve()
-  const context = {
-    audioProcessing: { value: initial },
-    autoPreampEnabled: { value: false },
-    autoPreampTargetDb: { value: -6.5 },
-    manualPreampBeforeAuto: null as number | null,
-    autoPreampStorageKey: 'auto',
-    manualPreampStorageKey: 'manual',
-    commitChain: Promise.resolve(),
-    eqApplyFeedback: { value: 'idle' },
-    pendingPreamp: null as number | null,
-    clampNumber,
-    finishParametricEdits() {},
-    scheduleStagedFlush: () => {
-      previews++
-    },
-    runEqApply: async (action: () => Promise<void>) => {
-      try {
-        await action()
-        context.eqApplyFeedback.value = 'applied'
-      } catch {
-        context.eqApplyFeedback.value = 'failed'
-      }
-    },
-    updateAudioProcessing: (patch: Partial<typeof initial>) =>
-      history.commit({ ...context.audioProcessing.value, ...patch }),
-    commitStagedBands: () => {
-      const snapshot = {
-        ...context.audioProcessing.value,
-        eqPreamp: context.pendingPreamp!
-      }
-      manualCommit = context.commitChain.then(() => history.commit(snapshot))
-      context.commitChain = manualCommit
-      return manualCommit
-    },
-    localStorage: {
-      getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => stored.set(key, value),
-      removeItem: (key: string) => stored.delete(key)
-    }
+function createAutoPreampHarness() {
+  const initial = normalizeAudioProcessing({ eqMode: 'parametric', eqEnabled: true, eqPreamp: 2.3 })
+  const state = {
+    revision: 7,
+    processing: structuredClone(initial),
+    autoPreamp: { enabled: false }
   }
-  const history = useEqualizerHistory(initial, async (snapshot) => {
-    applies++
-    context.audioProcessing.value = { ...context.audioProcessing.value, ...snapshot }
-  })
+  const queries: string[] = []
+  const commands: Array<{ revision: number; edit: { kind: string; enabled?: boolean } }> = []
+  const processingWrites: Partial<typeof initial>[] = []
+  let refreshes = 0
+  const context = {
+    Error,
+    structuredClone,
+    cloneBands,
+    clampNumber,
+    patchBand,
+    normalizeAudioProcessing,
+    mergeEqualizerPatch,
+    props: { embedded: false },
+    loadedSceneId: null,
+    audioProcessing: { value: structuredClone(initial) },
+    projectedAudioProcessing: { value: structuredClone(initial) },
+    autoPreampEnabled: { value: false },
+    activeTab: { value: 'parametric' },
+    selectedBandIndex: { value: 0 },
+    selectedBandIndices: { value: [0] },
+    selectBand() {},
+    appSettings: { value: null },
+    commitChain: Promise.resolve(),
+    pendingBandPatches: new Map(),
+    pendingBandFrame: 0,
+    pendingPreamp: null,
+    eqApplyFeedback: { value: 'idle' },
+    eqApplyError: { value: '' },
+    activeEqApply: Promise.resolve(),
+    applyFeedbackTimer: null,
+    finishParametricEdits() {},
+    scheduleStagedFlush() {},
+    window: { cancelAnimationFrame() {}, setTimeout: () => 1, clearTimeout() {} },
+    core: {
+      query: async (name: string) => {
+        assert.equal(name, 'audio.dsp')
+        queries.push(name)
+        return structuredClone(state)
+      },
+      command: async (name: string, payload: (typeof commands)[number]) => {
+        assert.equal(name, 'audio.dsp.edit')
+        assert.equal(payload.revision, state.revision)
+        commands.push(structuredClone(payload))
+        state.autoPreamp.enabled = payload.edit.enabled!
+        state.processing.eqPreamp = state.autoPreamp.enabled ? -6.5 : 2.3
+        state.revision++
+      }
+    },
+    audioOutputDspStore: {
+      refreshAudioOutputState: async () => {
+        refreshes++
+        context.projectedAudioProcessing.value = structuredClone(state.processing)
+      }
+    },
+    setAudioProcessing: async (patch: Partial<typeof initial>) => {
+      processingWrites.push(structuredClone(patch))
+      if (patch.eqPreamp !== undefined) state.autoPreamp.enabled = false
+      state.processing = { ...state.processing, ...patch }
+      state.revision++
+    },
+    eqHistory: null as unknown as ReturnType<typeof useEqualizerHistory>
+  }
   const actions = runInNewContext(
-    `${autoPreampDeclarations}\n({toggleAutoPreamp,applyAutoPreamp,loadAutoPreampPreference,updatePreampInput})`,
+    `${declarations(
+      'loadAutoPreampPreference',
+      'toggleAutoPreamp',
+      'refreshEqualizerProjection',
+      'stagePreamp',
+      'updatePreampInput',
+      'commitStagedBands',
+      'flushStagedEdit',
+      'updateAudioProcessing',
+      'applyEqualizerSnapshot',
+      'runEqApply',
+      'clearApplyFeedbackTimer'
+    )}
+      \n({loadAutoPreampPreference,toggleAutoPreamp,updatePreampInput,applyEqualizerSnapshot})`,
     context
   )
+  context.eqHistory = useEqualizerHistory(initial, actions.applyEqualizerSnapshot)
+  return {
+    context,
+    actions,
+    state,
+    queries,
+    commands,
+    processingWrites,
+    refreshes: () => refreshes
+  }
+}
+
+test('auto compensation uses the current Core revision and reloads its acknowledged state', async () => {
+  const { context, actions, commands, queries, refreshes } = createAutoPreampHarness()
+  await actions.loadAutoPreampPreference()
   await actions.toggleAutoPreamp()
+  assert.deepEqual(commands, [{ revision: 7, edit: { kind: 'autoPreamp', enabled: true } }])
   assert.equal(context.autoPreampEnabled.value, true)
   assert.equal(context.audioProcessing.value.eqPreamp, -6.5)
-  assert.equal(context.manualPreampBeforeAuto, 2.3)
-  assert.equal(stored.get('manual'), '2.3')
-  context.audioProcessing.value = {
-    ...context.audioProcessing.value,
-    eqBands: [{ ...initial.eqBands[0], gain: 12 }]
-  }
-  context.autoPreampTargetDb.value = -12.5
-  await actions.applyAutoPreamp()
-  await actions.toggleAutoPreamp()
-  assert.equal(context.autoPreampEnabled.value, false)
-  assert.equal(context.audioProcessing.value.eqPreamp, 2.3)
-  assert.equal(context.audioProcessing.value.eqBands[0].gain, 12)
-  assert.equal(stored.get('auto'), '0')
-  assert.equal(stored.has('manual'), false)
-  await history.travel('undo')
-  assert.equal(context.audioProcessing.value.eqPreamp, -12.5)
-  await history.travel('redo')
-  assert.equal(context.audioProcessing.value.eqPreamp, 2.3)
-  await actions.toggleAutoPreamp()
-  context.manualPreampBeforeAuto = null
+  assert.equal(context.eqApplyFeedback.value, 'applied')
+  assert.equal(refreshes(), 1)
   context.autoPreampEnabled.value = false
-  actions.loadAutoPreampPreference()
+  await actions.loadAutoPreampPreference()
   assert.equal(context.autoPreampEnabled.value, true)
-  assert.equal(context.manualPreampBeforeAuto, 2.3)
   await actions.toggleAutoPreamp()
+  assert.deepEqual(commands[1], { revision: 8, edit: { kind: 'autoPreamp', enabled: false } })
   assert.equal(context.audioProcessing.value.eqPreamp, 2.3)
-  await actions.toggleAutoPreamp()
-  const input = { value: '4.2', valueAsNumber: 4.2 }
-  actions.updatePreampInput({ target: input })
-  await manualCommit
-  assert.equal(context.autoPreampEnabled.value, false)
-  assert.equal(context.manualPreampBeforeAuto, null)
-  assert.equal(context.audioProcessing.value.eqPreamp, 4.2)
-  assert.equal(stored.get('auto'), '0')
-  assert.equal(previews, 1)
-  const beforeInvalid = applies
-  actions.updatePreampInput({ target: { value: '', valueAsNumber: NaN } })
-  actions.updatePreampInput({ target: input })
-  assert.equal(applies, beforeInvalid)
-  actions.updatePreampInput({ target: { value: '999', valueAsNumber: 999 } })
-  await manualCommit
-  assert.equal(context.audioProcessing.value.eqPreamp, 24)
-  const applySettings = context.updateAudioProcessing
-  let releaseApply!: () => void
-  let enteredApply!: () => void
-  const entered = new Promise<void>((resolve) => {
-    enteredApply = resolve
-  })
-  const pendingApply = new Promise<void>((resolve) => {
-    releaseApply = resolve
-  })
-  context.updateAudioProcessing = async (patch) => {
-    enteredApply()
-    await pendingApply
-    await applySettings(patch)
-  }
-  const enabling = actions.toggleAutoPreamp()
-  await entered
-  actions.updatePreampInput({ target: { value: '3.7', valueAsNumber: 3.7 } })
-  releaseApply()
-  await enabling
-  await manualCommit
-  assert.equal(context.audioProcessing.value.eqPreamp, 3.7)
-  assert.equal(context.autoPreampEnabled.value, false)
-  assert.equal(context.manualPreampBeforeAuto, null)
-  assert.equal(stored.get('auto'), '0')
-  assert.equal(stored.has('manual'), false)
-  context.updateAudioProcessing = async () => {
-    throw new Error('Engine apply failed')
-  }
-  await actions.toggleAutoPreamp()
-  assert.equal(context.autoPreampEnabled.value, false)
-  assert.equal(context.manualPreampBeforeAuto, null)
-  assert.equal(context.audioProcessing.value.eqPreamp, 3.7)
-  assert.equal(stored.get('auto'), '0')
-  for (const value of ['', 'bad', 'Infinity', '-25', '25']) {
-    stored.set('auto', '1')
-    stored.set('manual', value)
-    actions.loadAutoPreampPreference()
-    assert.equal(context.manualPreampBeforeAuto, null)
-  }
+  assert.equal(queries.length, 6)
+  assert.doesNotMatch(page, /localStorage|manualPreampBeforeAuto|saveAutoPreampPreference/)
 })
 
-test('turning compensation off waits for queued automatic updates before restoring the previous value', async () => {
+test('automatic compensation waits for queued edits and reports Core rejection without publishing state', async () => {
+  const { context, actions, commands, queries, refreshes } = createAutoPreampHarness()
   let release!: () => void
-  const writes: number[] = []
-  const context = {
-    audioProcessing: { value: { eqPreamp: -6.5 } },
-    autoPreampEnabled: { value: true },
-    autoPreampTargetDb: { value: -10 },
-    manualPreampBeforeAuto: 3.7,
-    autoPreampStorageKey: 'auto',
-    manualPreampStorageKey: 'manual',
-    localStorage: { setItem() {}, removeItem() {} },
-    commitChain: new Promise<void>((resolve) => {
-      release = resolve
-    }),
-    eqApplyFeedback: { value: 'idle' },
-    finishParametricEdits() {},
-    runEqApply: async (action: () => Promise<void>) => {
-      await action()
-      context.eqApplyFeedback.value = 'applied'
-    },
-    updateAudioProcessing: async (patch: { eqPreamp: number }) => {
-      writes.push(patch.eqPreamp)
-      await new Promise((resolve) => setImmediate(resolve))
-      context.audioProcessing.value.eqPreamp = patch.eqPreamp
-    }
-  }
-  const actions = runInNewContext(
-    `${autoPreampDeclarations}\n({toggleAutoPreamp,applyAutoPreamp})`,
-    context
-  )
-  const automatic = actions.applyAutoPreamp(),
-    off = actions.toggleAutoPreamp()
-  assert.deepEqual(writes, [])
+  context.commitChain = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const toggle = actions.toggleAutoPreamp()
+  assert.deepEqual(queries, [])
   release()
-  await Promise.all([automatic, off])
-  assert.deepEqual(writes, [-10, 3.7])
+  await toggle
+  assert.equal(commands.length, 1)
+  const command = context.core.command
+  context.core.command = async () => {
+    throw new Error('stale revision')
+  }
+  await actions.toggleAutoPreamp()
+  assert.equal(context.eqApplyFeedback.value, 'failed')
+  assert.match(context.eqApplyError.value, /stale revision/)
+  assert.equal(context.autoPreampEnabled.value, true)
+  assert.equal(context.audioProcessing.value.eqPreamp, -6.5)
+  assert.equal(refreshes(), 1)
+  context.core.command = command
+  await actions.toggleAutoPreamp()
+  assert.equal(context.eqApplyFeedback.value, 'applied')
+  assert.equal(context.eqApplyError.value, '')
+  assert.equal(context.autoPreampEnabled.value, false)
+})
+
+test('manual preamp input rejects invalid text, clamps gain and overrides automatic compensation', async () => {
+  const { context, actions, processingWrites } = createAutoPreampHarness()
+  await actions.toggleAutoPreamp()
+  const invalid = { value: '', valueAsNumber: NaN }
+  actions.updatePreampInput({ target: invalid })
+  assert.equal(invalid.value, '-6.5')
+  assert.equal(processingWrites.length, 0)
+  const input = { value: '999', valueAsNumber: 999 }
+  actions.updatePreampInput({ target: input })
+  await context.commitChain
+  assert.equal(input.value, '24.0')
+  assert.equal(processingWrites[0].eqPreamp, 24)
+  assert.equal(context.audioProcessing.value.eqPreamp, 24)
+  assert.equal(context.autoPreampEnabled.value, false)
+  actions.updatePreampInput({ target: { value: '24', valueAsNumber: 24 } })
+  await context.commitChain
+  assert.equal(processingWrites.length, 1)
+})
+
+test('a manual preamp queued during automatic enable keeps its explicit value after the Core reply', async () => {
+  const { context, actions, processingWrites } = createAutoPreampHarness()
+  const command = context.core.command
+  let release!: () => void
+  let entered!: () => void
+  const started = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  context.core.command = async (name, payload) => {
+    entered()
+    await waiting
+    await command(name, payload)
+  }
+  const enabling = actions.toggleAutoPreamp()
+  await started
+  actions.updatePreampInput({ target: { value: '3.7', valueAsNumber: 3.7 } })
+  release()
+  await enabling
+  await context.commitChain
+  assert.equal(processingWrites[0].eqPreamp, 3.7)
   assert.equal(context.audioProcessing.value.eqPreamp, 3.7)
   assert.equal(context.autoPreampEnabled.value, false)
 })
@@ -644,8 +645,7 @@ test('group previews merge atomically and one undo restores all edited bands', a
       { frequency: 1000, gain: 4, q: 2, filterType: 'peak' }
     ]
   })
-  let renders = 0,
-    applies = 0,
+  let applies = 0,
     frames = 0
   const context = {
     pendingBandPatches: new Map(),
@@ -660,12 +660,6 @@ test('group previews merge atomically and one undo restores all edited bands', a
     cloneBands,
     patchBand,
     window: { requestAnimationFrame: () => ++frames, cancelAnimationFrame() {} },
-    audioOutputDspStore: {
-      applyAudioProcessingState: (value: typeof initial) => {
-        renders++
-        context.audioProcessing.value = value
-      }
-    },
     runEqApply: (action: () => Promise<void>) => action(),
     updateAudioProcessing: (patch: Partial<typeof initial>) =>
       history.commit({ ...context.audioProcessing.value, ...patch })
@@ -689,7 +683,6 @@ test('group previews merge atomically and one undo restores all edited bands', a
   assert.equal(frames, 1)
   assert.equal(context.audioProcessing.value, initial)
   await actions.commitStagedBands()
-  assert.equal(renders, 1)
   assert.equal(applies, 1)
   assert.equal(context.audioProcessing.value.eqBands[0].q, 3)
   assert.deepEqual(
@@ -960,7 +953,7 @@ test('OPRA estimated source deviation is explicitly non-measured and excludes pr
 })
 
 test('AutoEq CSV import switches to a distinct headphone response view with precise data semantics', () => {
-  assert.match(page, /window\.api\.audioEngine\.importFrequencyResponse\(\)/)
+  assert.match(page, /coreAudio\.importFrequencyResponse\(\)/)
   assert.match(page, /type ResponseView = 'dsp' \| 'headphone'/)
   assert.equal(toolbar.match(/>\s*DSP 响应\s*<\/button>/g)?.length, 2)
   assert.equal(toolbar.match(/>\s*耳机频响\s*<\/button>/g)?.length, 2)
@@ -1005,20 +998,15 @@ test('headphone curves have independent accessible visibility controls in both E
   )
 })
 
-test('scene EQ keeps OPRA parameters but obeys DSP and equalizer bypass switches', () => {
-  assert.match(page, /node\.enabled = nextSettings\.dspEnabled && nextSettings\.eqEnabled/)
-  assert.doesNotMatch(
-    page,
-    /node\.enabled = nextSettings\.eqEnabled \|\| opraCompensationEnabled\.value/
-  )
-  assert.match(
-    page,
-    /bands: opraCompensationEnabled\.value\s*\? \[\.\.\.cloneBands\(headphoneCompensation\.value\.bands\), \.\.\.cloneBands\(nextSettings\.eqBands\)\]/
-  )
+test('the editor delegates effective scene processing to Core instead of writing scene graphs', () => {
+  assert.match(page, /await setAudioProcessing\(edit, \{ throwOnError: true \}\)/)
+  assert.doesNotMatch(page, /setDspScenes|applyDspScene|window\.api\.audioEngine/)
 })
 
-test('applying or disabling OPRA re-syncs the DSP scene', () => {
-  assert.equal(page.match(/await syncActiveSceneEq\(audioProcessing\.value\)/g)?.length, 2)
+test('applying or disabling OPRA reloads the acknowledged Core projection', () => {
+  for (const name of ['applyOpraProfile', 'disableOpraCompensation']) {
+    assert.match(declarations(name), /await refreshEqualizerProjection\(\)/)
+  }
 })
 
 test('OPRA-stacked scene bands never overwrite the manual editor state', () => {
@@ -1043,7 +1031,8 @@ test('parametric page puts mode, presets and power into the instrument with a co
   assert.match(page, /class="instrument-mode-switch"/)
   assert.match(page, /class="instrument-power"/)
   assert.match(page, /class="instrument-auto-preamp"/)
-  assert.match(page, /v-if="activeTab !== 'parametric'" class="eq-sidebar"/)
+  assert.match(page, /v-if="activeTab !== 'parametric' && !embedded" class="eq-sidebar"/)
+  assert.match(page, /:docked-inspector="embedded"/)
   assert.doesNotMatch(page, /<header class="parametric-page-header">/)
   assert.match(toolbar, /compact\?: boolean/)
 })
@@ -1117,37 +1106,36 @@ test('freeze retains its frame, downgrades shared demand, and ignores late detai
   assert.equal(context.visualizationConsumerPoints, 0)
 })
 
-test('equalizer state writes go through the store action instead of detaching storeToRefs', () => {
-  assert.match(page, /audioOutputDspStore\.applyAudioProcessingState\(/)
-  // Reassigning the storeToRefs audioProcessing would detach it from the
-  // player store and freeze the graph/sliders while audio still changes.
-  assert.doesNotMatch(
+test('equalizer drafts are separate from the read-only Core projection', () => {
+  assert.match(page, /audioProcessing: projectedAudioProcessing/)
+  assert.match(
     page,
-    /audioProcessing\.value\s*=\s*(appSettings\.value\.audioProcessing|settings|{)/
+    /const audioProcessing = ref<AudioProcessingSettings>\(structuredClone\(projectedAudioProcessing\.value\)\)/
   )
+  assert.match(
+    declarations('refreshEqualizerProjection'),
+    /audioProcessing\.value = structuredClone\(projectedAudioProcessing\.value\)/
+  )
+  assert.doesNotMatch(page, /projectedAudioProcessing\.value\s*=/)
 })
 
 test('staged pointer edits preserve both EQ and DSP bypass without applying to the engine', () => {
   const declaration = page.match(/function flushStagedEdit\(\): void \{[\s\S]*?\n\}/)?.[0]
   assert.ok(declaration)
   for (const enabled of [false, true]) {
-    let staged = defaultAudioProcessing
     const current = { ...defaultAudioProcessing, eqEnabled: enabled, dspEnabled: enabled }
+    const draft = { value: current }
     runInNewContext(`${stripTypeScriptTypes(declaration)}\nflushStagedEdit()`, {
       pendingBandPatches: new Map([[0, { gain: 6 }]]),
       pendingPreamp: null,
-      audioProcessing: { value: current },
-      audioOutputDspStore: {
-        applyAudioProcessingState: (value: typeof current) => {
-          staged = value
-        }
-      },
+      audioProcessing: draft,
       appSettings: { value: null },
       patchBand
     })
-    assert.equal(staged.eqBands[0].gain, 6)
-    assert.equal(staged.eqEnabled, enabled)
-    assert.equal(staged.dspEnabled, enabled)
+    assert.equal(draft.value.eqBands[0].gain, 6)
+    assert.equal(draft.value.eqEnabled, enabled)
+    assert.equal(draft.value.dspEnabled, enabled)
+    assert.equal(current.eqBands[0].gain, 0)
   }
 })
 
@@ -1161,6 +1149,7 @@ test('loading parametric presets preserves zero and thirty-two bands', async () 
   }
   const settings = {
     audioProcessing: defaultAudioProcessing,
+    headphoneCompensation: { bands: [] },
     audioEqPresets: [0, 32].map((count) => ({
       eqMode: 'parametric',
       eqBands: Array.from({ length: count }, () => ({ ...defaultAudioProcessing.eqBands[0] }))
@@ -1168,16 +1157,16 @@ test('loading parametric presets preserves zero and thirty-two bands', async () 
   }
   await runInNewContext(`${stripTypeScriptTypes(declaration)}\nloadAppSettings()`, {
     appSettings,
+    structuredClone,
     normalizeAudioProcessing,
     cloneBands,
     audioProcessing: { value: defaultAudioProcessing },
     activeTab: { value: 'graphic' },
-    audioOutputDspStore: { applyAudioProcessingState: () => undefined },
     applyActiveSceneEqToEditor: () => undefined,
+    coreAudio: { getDspSceneState: async () => ({ scenes: [] }) },
     window: {
       api: {
-        settings: { get: async () => settings },
-        audioEngine: { getDspSceneState: async () => ({ scenes: [] }) }
+        settings: { get: async () => settings }
       }
     }
   })

@@ -17,7 +17,9 @@ export function normalizeChannelRoutingMode(value: unknown): ChannelRoutingMode 
 }
 
 export function normalizePcmToDsdMode(value: unknown): NonNullable<OutputConfig['pcmToDsdMode']> {
-  return value === 'dsd64' || value === 'dsd128' || value === 'dsd256' ? value : 'off'
+  return value === 'dsd64' || value === 'dsd128' || value === 'dsd256' || value === 'dsd512'
+    ? value
+    : 'off'
 }
 
 export function normalizeOutputConfig(

@@ -221,6 +221,15 @@ test('schema 3 default translations migrate to the compact auxiliary size', () =
   assert.equal(customized.styles.translation.fontSize, 18)
 })
 
+test('schema 5 profiles with the legacy 35% anchor upgrade to the centered 50% default', () => {
+  const upgraded = normalizeLyricsAppearance({
+    schemaVersion: 5,
+    anchorPosition: 0.35
+  })
+  assert.equal(upgraded.anchorPosition, 0.5)
+  assert.equal(upgraded.schemaVersion, LYRICS_APPEARANCE_SCHEMA_VERSION)
+})
+
 test('layout, motion and typography knobs are clamped to their published ranges', () => {
   const normalized = normalizeLyricsAppearance({
     coverGap: 999,

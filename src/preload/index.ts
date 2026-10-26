@@ -1,4 +1,5 @@
 import { diagnosticsApi } from './diagnostics.ts'
+import { coreApi } from './domains/coreApi.ts'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   MiniPlayerBootstrap,
@@ -179,7 +180,6 @@ const dynamicIslandWindowApi = {
   command: (command: MiniPlayerCommand): void => {
     ipcRenderer.send('dynamicIsland:command', command)
   },
-  getVisualizationData: audioEngineApi.audioEngine.getVisualizationData,
   setExpanded: (expanded: boolean): Promise<boolean> =>
     ipcRenderer.invoke('dynamicIsland:setExpanded', expanded),
   onState: (cb: (state: MiniPlayerStateSnapshot) => void): (() => void) => {
@@ -201,6 +201,7 @@ const dynamicIslandWindowApi = {
 }
 
 const api = {
+  core: coreApi,
   diagnostics: diagnosticsApi,
   sleepTimer: {
     configure: (state: import('../shared/sleepTimer.ts').SleepTimerState) =>
@@ -245,7 +246,7 @@ if (process.contextIsolated) {
   window.api = exposedApiForDocument()
 }
 
-function exposedApiForDocument():
+function exposedApiForDocument(): { core: typeof coreApi } & (
   | typeof api
   | {
       diagnostics: typeof diagnosticsApi
@@ -263,15 +264,18 @@ function exposedApiForDocument():
       trayPlayer: typeof trayPlayerWindowApi
       experienceWindow: typeof experienceWindowApi
     }
-  | { dynamicIsland: typeof dynamicIslandWindowApi; data: typeof miniPlayerCoverDataApi } {
+  | { dynamicIsland: typeof dynamicIslandWindowApi; data: typeof miniPlayerCoverDataApi }
+) {
   if (isDesktopLyricsDocument())
     return {
+      core: coreApi,
       diagnostics: diagnosticsApi,
       desktopLyrics: desktopLyricsWindowApi,
       experienceWindow: experienceWindowApi
     }
   if (isMiniPlayerDocument()) {
     return {
+      core: coreApi,
       diagnostics: diagnosticsApi,
       miniPlayer: miniPlayerWindowApi,
       data: miniPlayerCoverDataApi,
@@ -280,12 +284,13 @@ function exposedApiForDocument():
   }
   if (isTrayPlayerDocument())
     return {
+      core: coreApi,
       diagnostics: diagnosticsApi,
       trayPlayer: trayPlayerWindowApi,
       experienceWindow: experienceWindowApi
     }
   if (isDynamicIslandDocument()) {
-    return { dynamicIsland: dynamicIslandWindowApi, data: miniPlayerCoverDataApi }
+    return { core: coreApi, dynamicIsland: dynamicIslandWindowApi, data: miniPlayerCoverDataApi }
   }
   return api
 }

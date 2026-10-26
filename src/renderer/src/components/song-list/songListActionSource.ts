@@ -4,12 +4,16 @@ import type {
   LibrarySelectionRequest
 } from '../../../../shared/librarySelection.ts'
 import { normalizeLibraryPath } from '../../../../shared/libraryIdentity.ts'
-import { openLibrarySelectionLease } from '../../stores/library/librarySelectionLease.ts'
+import {
+  openCoreLibrarySelectionLease,
+  type CoreLibrarySelectionApi
+} from '../../stores/library/coreSelection.ts'
 import type {
-  PlaylistMemberPageProducer,
-  PlaylistTrackIdPageProducer,
-  PlaylistTrackPageProducer
-} from '../../stores/library/musicStoreTypes.ts'
+  DisplayTrackProducer,
+  DisplayMemberProducer
+} from '../../stores/library/coreMusicStore.ts'
+import { openLibrarySelectionLease } from '../../stores/library/librarySelectionLease.ts'
+import type { PlaylistTrackIdPageProducer } from '../../stores/library/musicStoreTypes.ts'
 import type { Track } from '../../types/music.ts'
 import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
 import { getTrackSource } from '../../utils/logicalTrackModel.ts'
@@ -25,7 +29,7 @@ export interface SongListActionRow {
  * An intent opens once: a failed/unknown action must be explicitly started anew. */
 export function createSongListActionSource(
   input:
-    | { api: LibrarySelectionBridgeApi; request: LibrarySelectionRequest }
+    | { api: LibrarySelectionBridgeApi | CoreLibrarySelectionApi; request: LibrarySelectionRequest }
     | { rows: SongListActionRow[] },
   guard: () => void = () => {}
 ) {
@@ -37,6 +41,8 @@ export function createSongListActionSource(
   let opened = false
   return {
     count,
+    /** The immutable Core selection intent used by background-owned operations. */
+    request: request ? structuredClone(request) : undefined,
     guard,
     async open(signal?: AbortSignal) {
       if (opened) throw new Error('选择操作已使用，请重新选择')
@@ -44,18 +50,32 @@ export function createSongListActionSource(
       guard()
       if (signal?.aborted) throw new Error('选择操作已取消')
       const lease = request
-        ? await openLibrarySelectionLease(
-            (input as { api: LibrarySelectionBridgeApi }).api,
-            request,
-            signal
-          )
+        ? await ('selection' in
+          (input as { api: LibrarySelectionBridgeApi | CoreLibrarySelectionApi }).api
+            ? openLibrarySelectionLease(
+                (input as { api: LibrarySelectionBridgeApi }).api,
+                request,
+                signal
+              )
+            : openCoreLibrarySelectionLease(
+                (input as { api: CoreLibrarySelectionApi }).api,
+                request,
+                signal
+              ))
         : null
       let closed = false,
         failed = false,
         consuming = false
       const local = explicit?.filter((row) => getTrackSource(row.track) === 'local')
       const files = local
-        ? [...new Map(local.map((row) => [normalizeLibraryPath(row.track.filePath), row])).values()]
+        ? [
+            ...new Map(
+              local.map((row) => [
+                row.track.filePath ? normalizeLibraryPath(row.track.filePath) : row.track.id,
+                row
+              ])
+            ).values()
+          ]
         : null
       async function forEachPage(
         visit: (rows: SongListActionRow[]) => void | Promise<void>,
@@ -93,7 +113,7 @@ export function createSongListActionSource(
           consuming = false
         }
       }
-      const tracks: PlaylistTrackPageProducer = async (append) => {
+      const tracks: DisplayTrackProducer = async (append) => {
         await forEachPage((rows) => {
           guard()
           return append(rows.map((row) => row.track))
@@ -107,7 +127,7 @@ export function createSongListActionSource(
         })
         return guard
       }
-      const members: PlaylistMemberPageProducer = async (append) => {
+      const members: DisplayMemberProducer = async (append) => {
         await forEachPage((rows) => {
           guard()
           return append(
@@ -122,6 +142,7 @@ export function createSongListActionSource(
       return {
         count,
         revision: lease?.snapshot.revision,
+        selectionId: lease?.snapshot.id,
         localTrackCount: lease?.snapshot.localTrackCount ?? local!.length,
         fileCount: lease?.snapshot.fileCount ?? files!.length,
         forEachPage,

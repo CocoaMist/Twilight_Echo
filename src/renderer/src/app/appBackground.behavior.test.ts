@@ -102,7 +102,7 @@ const pageImage='background://page.svg'
 const pair={kind:'image',light:'#f4f4f7',dark:'#0f1114',image:globalImage}
 const pages=Object.fromEntries(['local','settings','streaming','player'].map(page=>[page,{...pair,inherit:true}]))
 const settings={theme:'pureWhite',accentColor:'blue',uiDensity:'comfortable',surfaceMaterial:'liquidGlass',appBackground:{global:{...pair},pages}}
-window.api={
+window.api={core:{onMessage:()=>()=>{},onStatus:()=>()=>{}},
   settings:{onChanged:()=>()=>{}},
   plugins:{onChanged:()=>()=>{}},
   themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}}

@@ -146,7 +146,7 @@ export const LYRICS_RANGES = {
   cascadeSpeed: { min: 0, max: 100, step: 5 }
 } as const satisfies Record<string, LyricsRange>
 
-export const LYRICS_APPEARANCE_SCHEMA_VERSION = 5
+export const LYRICS_APPEARANCE_SCHEMA_VERSION = 6
 
 /**
  * `cascadeSpeed` is a speed, so it maps to a delay multiplier geometrically:
@@ -236,7 +236,7 @@ export const DEFAULT_LYRICS_APPEARANCE: LyricsAppearanceSettings = {
   lyricsOffsetX: 0,
   coverSize: 100,
   coverRadius: 26,
-  anchorPosition: 0.35,
+  anchorPosition: 0.5,
   translationSpacing: 0,
   hidePassedLines: false,
   scaleIntensity: 100,
@@ -253,6 +253,8 @@ export const DEFAULT_LYRICS_APPEARANCE: LyricsAppearanceSettings = {
 
 /** The `inactiveOpacity` default before it was ever wired to rendering. */
 const LEGACY_INERT_INACTIVE_OPACITY = 40
+/** The `anchorPosition` default before the active lyric was centered at 50%. */
+const LEGACY_ABOVE_CENTER_ANCHOR_POSITION = 0.35
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
@@ -542,11 +544,14 @@ export function normalizeLyricsAppearance(
       LYRICS_RANGES.coverRadius,
       DEFAULT_LYRICS_APPEARANCE.coverRadius
     ),
-    anchorPosition: clampRange(
-      value.anchorPosition,
-      LYRICS_RANGES.anchorPosition,
-      DEFAULT_LYRICS_APPEARANCE.anchorPosition
-    ),
+    anchorPosition:
+      storedVersion < 6 && value.anchorPosition === LEGACY_ABOVE_CENTER_ANCHOR_POSITION
+        ? DEFAULT_LYRICS_APPEARANCE.anchorPosition
+        : clampRange(
+            value.anchorPosition,
+            LYRICS_RANGES.anchorPosition,
+            DEFAULT_LYRICS_APPEARANCE.anchorPosition
+          ),
     translationSpacing: clampRange(
       value.translationSpacing,
       LYRICS_RANGES.translationSpacing,

@@ -70,13 +70,13 @@ function artifactFacts(filePath, artifactDir) {
 
 function runtimeResamplerStatus(runtimeStatus) {
   const outputStage = runtimeStatus?.outputStage ?? runtimeStatus
-  const engine = outputStage?.resamplerEngine
-  if (engine !== 'swr' && engine !== 'soxr') {
+  const engine = outputStage?.effectiveResampler
+  if (outputStage?.resampled !== true || (engine !== 'swr' && engine !== 'soxr')) {
     return { actualEngine: null, fallback: null, observed: false }
   }
   return {
     actualEngine: engine,
-    fallback: outputStage.resamplerFallback === true,
+    fallback: outputStage.effectiveResamplerFallback === true,
     observed: true
   }
 }

@@ -51,6 +51,12 @@ export interface PluginExperience {
   /** HTML file relative to the installed version root, e.g. dist/index.html. */
   entry: string
   bridgeVersion: 1 | 2
+  /**
+   * `page` (default) lists the experience in sidebar navigation; `panel` keeps
+   * it out of navigation so the plugin's `titleBarButton` opens it in the
+   * host-owned right-side flyout instead.
+   */
+  launch?: 'page' | 'panel'
 }
 
 export interface PluginExperienceContribution {
@@ -67,6 +73,8 @@ export type PluginExperienceMessage =
   | { id: number; value: unknown }
   | { id: number; error: string }
   | { event: 'player' | 'queue' | 'lyrics' | 'library'; value: unknown }
+  /** Live event pushed by this plugin's own background code (requires the `network` permission). */
+  | { event: 'plugin'; value: { event: string; value: unknown } }
 
 export type TwilightPluginStatus = 'installed' | 'enabled' | 'disabled' | 'invalid' | 'failed'
 export type TwilightPluginSource = 'directory' | 'tep' | 'bundled' | 'index'
@@ -220,6 +228,11 @@ export interface TwilightPlayerApi {
   stop(): Promise<void>
   next(): Promise<void>
   previous(): Promise<void>
+  /** Replace the queue with local-library track ids and start at `startIndex` (requires `player:control`). */
+  playTracks(ids: string[], startIndex?: number): Promise<void>
+  setVolume(volume: number): Promise<void>
+  seek(position: number): Promise<void>
+  setPlayMode(mode: 'sequential' | 'listLoop' | 'repeat' | 'shuffle'): Promise<void>
 }
 
 export type TwilightMediaProviderCapability =
@@ -302,6 +315,81 @@ export interface AlbumSummary {
   /** Provider-reported explicit-content flag; omitted when unavailable. */
   isExplicit?: boolean
 }
+
+/** Optional, bounded identity evidence; independent of playback Track[] and text metadata.
+ * Keep in sync with src/shared/musicPlatformAlbum.ts. No paths, URLs or credentials. */
+/** Field permissions are capped by the host deployment's reviewed policy. */
+export interface MetadataUsage {
+  display: boolean
+  cache: boolean
+  crossSource: boolean
+  export: boolean
+  expiresAt?: number
+}
+export interface PlatformEntityMetadata {
+  schemaVersion: 1
+  provider: string
+  kind: 'artist' | 'release'
+  id: string
+  name: string
+  texts: Array<{
+    field: 'description' | 'introduction'
+    value: string
+    language: string
+    url: string
+    revision: string
+    attribution: string
+    license: string
+    licenseUrl: string
+    usage?: MetadataUsage
+  }>
+  /** Private resource URLs; Core projects approved images to session handles. */
+  artwork?: Array<{
+    resource: string
+    url: string
+    revision: string
+    attribution: string
+    license: string
+    licenseUrl: string
+    usage?: MetadataUsage
+  }>
+}
+export type PlatformMetadataResult =
+  | { status: 'ok'; metadata: PlatformEntityMetadata }
+  | { status: 'not_found' | 'not_provided' | 'unsupported' }
+
+export interface PlatformAlbumIdentity {
+  schemaVersion: 1
+  provider: string
+  id: string
+  title: string
+  artists: Array<{ name: string; id?: string }>
+  /** Independent service-reported total, null when unknown. Never tracks.length. */
+  trackCount: number | null
+  /** Entire track set retrieved; does not imply all comparison fields are known. */
+  complete: boolean
+  tracks: Array<{
+    id: string
+    title: string
+    artists: Array<{ name: string; id?: string }>
+    /** Original precision in seconds, null when unavailable. */
+    durationSeconds: number | null
+    /** Actual ordinals; never inferred from array order or defaulted to 1. */
+    disc: number | null
+    position: number | null
+    isrcs: string[]
+  }>
+}
+
+export interface PlatformRecordingIdentity {
+  id: string
+  title: string
+  artists: Array<{ id: string | null; name: string; aliases?: string[] }>
+  durationSeconds: number | null
+  album: { id: string; title: string } | null
+}
+export interface PlatformRecordingPage { items: PlatformRecordingIdentity[]; total: number | null }
+export interface PlatformArtistIdentity { id: string; name: string; aliases: string[] }
 
 /** Public music charts, including the provider's compact song previews. */
 export interface ToplistSummary extends PlaylistSummary {
@@ -455,7 +543,7 @@ export interface TwilightMediaProviderRegistration {
     limit?: number,
     offset?: number,
     context?: TwilightProviderRequestContext
-  ): Promise<{ items: AlbumSummary[]; total: number }>
+  ): Promise<{ items: AlbumSummary[]; total: number; incomplete?: boolean }>
   searchPlaylists?(
     keywords: string,
     limit?: number,
@@ -624,6 +712,17 @@ export interface TwilightMediaProviderRegistration {
     artistId: string | number,
     context?: TwilightProviderRequestContext
   ): Promise<string>
+  /** Optional native-ID text details; up to 8 texts of 20,000 characters.
+   * Use und for unspecified language. Source links contain no credentials.
+   * Omitted usage needs host deployment approval, not an inferred license. */
+  fetchArtistMetadata?(
+    artistId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformMetadataResult>
+  fetchAlbumMetadata?(
+    albumId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformMetadataResult>
   fetchArtistFollowState?(
     artistId: string | number,
     context?: TwilightProviderRequestContext
@@ -632,6 +731,23 @@ export interface TwilightMediaProviderRegistration {
     albumId: string | number,
     context?: TwilightProviderRequestContext
   ): Promise<Track[]>
+  /** Optional identity capability (max 64 tracks/credits). Larger or partial sets
+   * must set complete=false. Missing names/credits stay empty; ordinals stay null. */
+  searchRecordingIdentities?(
+    query: string,
+    limit: number,
+    offset: number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformRecordingPage>
+  /** Names and aliases must belong to this exact provider artist ID. */
+  fetchArtistIdentity?(
+    artistId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformArtistIdentity>
+  fetchAlbumIdentity?(
+    albumId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformAlbumIdentity>
   fetchArtistPlaylists?(
     artistId: string | number,
     context?: TwilightProviderRequestContext
@@ -750,6 +866,8 @@ export type TwilightUiContributionKind =
   | 'settingsPanel'
   | 'localSidebarItem'
   | 'streamingHome'
+  /** Titlebar icon button (left of appearance); opens the plugin's panel experience in a host flyout. */
+  | 'titleBarButton'
 
 export interface TwilightUiContribution {
   id: string
@@ -865,11 +983,18 @@ export interface TwilightThemeModesV2 {
   }
   player?: {
     layout?: 'standard' | 'full-cover' | 'lyrics-focus' | 'split' | 'minimal'
+    backdrop?: 'follow' | 'cover-blur' | 'fluid' | 'solid' | 'image'
     controls?: 'standard' | 'pro'
     titleAlign?: 'left' | 'center'
+    lyricsAlign?: 'follow' | 'left' | 'center' | 'right'
+    lyricHighlight?: 'minimal' | 'surface' | 'glow'
+    timeStyle?: 'pill' | 'minimal' | 'glass'
+    stageAlign?: 'center' | 'top' | 'bottom'
     progress?: 'line' | 'ring' | 'solid' | 'spectrum'
   }
   artwork?: {
+    frame?: 'borderless' | 'subtle-ring' | 'glass-frame' | 'vinyl' | 'polaroid'
+    spin?: 'off' | 'on'
     transition?: 'fade' | 'slide' | 'none'
     shadow?: 'on' | 'off'
   }
@@ -1115,6 +1240,85 @@ export interface TwilightLibraryApi {
       paths: string[]
     }>
   }): Promise<void>
+  /** Paged/filtered local-library query (requires `library:read`). */
+  queryTracks(query?: TwilightLibraryQuery): Promise<unknown>
+  /** Full track payloads by id, including bpm/replayGain/format metadata (requires `library:read`). */
+  getTracksByIds(ids: string[]): Promise<unknown>
+  /** Optimistic-lock metadata patches; returns the refreshed page (requires `library:write`). */
+  patchTracks(
+    patches: Array<{ id: string; expectedVersion: number; patch: Record<string, unknown> }>
+  ): Promise<unknown>
+  /** Cover art bytes as a data URL, or null (requires `library:read`). */
+  getCover(trackId: string): Promise<string | null>
+  /** Local playlist summaries (requires `library:read`). */
+  listPlaylists(): Promise<unknown>
+  createPlaylist(name: string): Promise<unknown>
+  addTracksToPlaylist(playlistId: string, trackIds: string[]): Promise<unknown>
+  removeTracksFromPlaylist(playlistId: string, trackIds: string[]): Promise<unknown>
+}
+
+/** Subset of the host library query surface accepted from plugin code. */
+export interface TwilightLibraryQuery {
+  search?: string
+  searchFileName?: boolean
+  artist?: string
+  albumId?: string
+  genre?: string
+  ids?: string[]
+  sort?:
+    | 'title'
+    | 'artist'
+    | 'album'
+    | 'format'
+    | 'trackNumber'
+    | 'duration'
+    | 'sampleRate'
+    | 'addedAt'
+    | 'recentlyAdded'
+    | 'lastPlayed'
+    | 'insertion'
+    | 'unifiedSearch'
+  direction?: 'asc' | 'desc'
+  offset?: number
+  limit?: number
+  filters?: {
+    lossless?: boolean
+    dsd?: boolean
+    sampleRate?: number
+    bitDepth?: number
+    folder?: string
+    provider?: string
+  }
+}
+
+/** Application settings read/write (requires `app:settings`). */
+export interface TwilightAppSettingsApi {
+  get(): Promise<unknown>
+  update(patch: Record<string, unknown>): Promise<unknown>
+}
+
+/** Host window capabilities (requires `app:settings`). */
+export interface TwilightHostApi {
+  /** Compressed JPEG data URL of the main window, or null when unavailable. */
+  captureScreenshot(): Promise<string | null>
+}
+
+export interface TwilightExperienceInvocationContext {
+  /** Aborted when the caller times out, the panel unloads a cancellable request, or the plugin stops. */
+  signal: AbortSignal
+}
+
+/**
+ * Relay between this plugin's experience iframe and its background code. The
+ * iframe sandbox has no network access; requests arriving here run in the
+ * plugin's utility process with proxy-aware fetch and private storage.
+ */
+export interface TwilightExperienceApi {
+  onRequest(
+    handler: (request: unknown, context: TwilightExperienceInvocationContext) => unknown
+  ): () => void
+  /** Push a live event to the mounted experience iframe (dropped while unmounted). */
+  emit(event: string, value: unknown): void
 }
 
 export interface TwilightApi {
@@ -1127,8 +1331,14 @@ export interface TwilightApi {
   overlay?: TwilightOverlayApi
   /** Optional host-owned secure QR flow for the Qishui provider. */
   qishuiAuth?: TwilightQishuiAuthApi
-  /** Local playlist import (requires `library:write`). */
+  /** Local library read/write and playlist import. */
   library?: TwilightLibraryApi
+  /** Application settings read/write (requires `app:settings`). */
+  appSettings?: TwilightAppSettingsApi
+  /** Host window capabilities such as screenshots (requires `app:settings`). */
+  host?: TwilightHostApi
+  /** Experience iframe ↔ background code relay. */
+  experience?: TwilightExperienceApi
 }
 
 export type Activate = (context: TwilightPluginContext) => void | Promise<void>

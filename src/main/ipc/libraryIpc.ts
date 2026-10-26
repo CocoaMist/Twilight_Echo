@@ -1,5 +1,7 @@
+import { trashLocalFileWithRetry } from '../security/localTrash.ts'
+export { trashLocalFileWithRetry } from '../security/localTrash.ts'
 import { IPC } from '../../shared/ipcChannels.ts'
-import { app, shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { createTagWriteIpcHandlers } from '../library/tagWriteIpc.ts'
@@ -526,8 +528,6 @@ function invalidateWarmedMusicLibrary(): void {
   warmedMusicLibrary = null
 }
 
-const TRASH_RETRY_DELAYS_MS = [0, 75, 200, 500, 1_000] as const
-
 export async function prepareAudioFilesForRemoval(filePaths: string[]): Promise<void> {
   const uniquePaths = Array.from(new Set(filePaths.filter(Boolean)))
   if (uniquePaths.length === 0) return
@@ -593,24 +593,6 @@ export async function prepareAudioFilesForRemoval(filePaths: string[]): Promise<
       error instanceof Error ? error.message : String(error)
     )
   }
-}
-
-export async function trashLocalFileWithRetry(filePath: string): Promise<void> {
-  if (process.platform !== 'win32') {
-    await shell.trashItem(filePath)
-    return
-  }
-  let lastError: unknown
-  for (const delayMs of TRASH_RETRY_DELAYS_MS) {
-    if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
-    try {
-      await shell.trashItem(filePath)
-      return
-    } catch (error) {
-      lastError = error
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
 function normalizeRemovalPath(filePath: string): string {

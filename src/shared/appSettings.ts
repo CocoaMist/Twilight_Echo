@@ -211,6 +211,7 @@ export interface AppSettings {
   downloadFolder: string
   genreSeparators: string
   watchLibrary: boolean
+  musicIdentification: import('./musicIdentificationSchedule.ts').MusicIdentificationSettings
   /** When true, empty local/provider lyrics may fall back to LRCLIB online search. */
   onlineLyricsFallback: boolean
   smtcEnabled: boolean
@@ -254,6 +255,8 @@ export interface AppSettings {
   dspPinnedSceneId: string | null
   headphoneCompensation: HeadphoneCompensationSettings
   audioEqPresets: AudioEqPreset[]
+  /** Null until the one-time browser preference import has been applied. */
+  audioEqAutoPreamp: import('./equalizerPreferences.ts').EqualizerAutoPreamp | null
   desktopLyrics: DesktopLyricsSettings
   miniPlayer: MiniPlayerSettings
   proxyMode: ProxyMode

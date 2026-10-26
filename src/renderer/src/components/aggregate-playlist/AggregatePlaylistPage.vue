@@ -5,12 +5,11 @@ import CreateAggregatePlaylistDialog from './CreateAggregatePlaylistDialog.vue'
 import CoverImg from '../CoverImg.vue'
 import ThemeIcon from '../ThemeIcon.vue'
 import LibraryPager from '../song-list/LibraryPager.vue'
-import { createLibraryStorageState } from '../../stores/library/libraryStorageState'
 import { createLibraryAggregatePlaylist } from '../../stores/library/libraryAggregatePlaylist'
-import { getMusicVersions, musicVersionRevision } from '../../stores/musicVersions'
-import { toSourceVariant } from '../../utils/logicalTrackModel'
+import { musicVersionRevision } from '../../stores/musicVersions'
 import type { LibraryPlaylistSourceSummary } from '../../../../shared/libraryDatabase'
-import type { Playlist } from '../../stores/library/musicStoreTypes'
+import type { CorePlaylistDescriptor as Playlist } from '../../../../shared/corePlaylists'
+import { useCoreLibraryApi } from '../../stores/library/coreLibraryApi'
 import { formatDuration } from '../song-list/formatDuration'
 import { useSongListVirtualScroll } from '../song-list/useSongListVirtualScroll'
 import { useSongListGridRendering } from '../song-list/useSongListGridRendering'
@@ -21,13 +20,7 @@ import { useMusicStore } from '../../stores/useMusicStore'
 import { usePlayerStore } from '../../stores/usePlayerStore'
 import { useProviderStore } from '../../stores/useProviderStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
-import {
-  buildAggregateRows,
-  collectAggregateSources,
-  resolveAggregateQueue,
-  toggleHiddenSource,
-  type AggregateRow
-} from '../../utils/aggregatePlaylistView.ts'
+import { toggleHiddenSource } from '../../utils/aggregatePlaylistView.ts'
 import type { Track } from '../../types/music'
 
 const props = withDefaults(
@@ -54,11 +47,11 @@ const {
   setPlaylistPinned,
   setPlaylistHiddenSources,
   setPlaylistVariantPreference,
-  getPlaylistTracksById,
   removeTracksFromPlaylistById
 } = useMusicStore()
+const musicStore = useMusicStore()
 const playerStore = usePlayerStore()
-const { currentTrack, playTrack } = playerStore
+const { currentTrack } = playerStore
 const settingsStore = useSettingsStore()
 const providerStore = useProviderStore()
 
@@ -71,7 +64,6 @@ watch(
   }
 )
 const searchQuery = ref('')
-const openVariantMenuFor = ref<string | null>(null)
 const pendingDeleteId = ref<string | null>(null)
 const showCreateDialog = ref(false)
 const actionError = ref('')
@@ -84,45 +76,26 @@ const activePlaylist = computed(
 watch(activePlaylist, (playlist) => {
   if (activePlaylistId.value && !playlist) activePlaylistId.value = null
 })
-const storage = createLibraryStorageState({
-  getStorageMode: () => window.api.library.getStorageMode()
-})
-const database = createLibraryAggregatePlaylist({
-  syncPlaylistView: (request) => window.api.library.database.syncPlaylistView(request),
-  queryTracks: (query) => window.api.library.database.queryTracks(query),
-  queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query),
-  getMetadata: () => window.api.library.database.getMetadata()
-})
+const database = createLibraryAggregatePlaylist(useCoreLibraryApi())
 const databasePage = database.pageState,
   databaseSources = database.sourceState,
   databaseVariants = database.variantState,
   databaseCards = database.cardState
 const databaseMenu = database.menu,
   databaseAction = database.action
-const databaseEnabled = computed(() => props.active && storage.mode.value === 'sqlite')
-const databasePending = computed(
-  () =>
-    props.active && ((storage.mode.value === null && storage.loading.value) || database.busy.value)
-)
-const databaseError = computed(() => storage.error.value || database.error.value)
-watch(
-  () => props.active,
-  (active) => {
-    if (active) void storage.load()
-  },
-  { immediate: true }
-)
+const databaseEnabled = computed(() => props.active)
+const databasePending = computed(() => props.active && database.busy.value)
+const databaseError = database.error
 watch(
   () => ({
     enabled: databaseEnabled.value,
     playlist: activePlaylist.value,
     playlists: aggregatePlaylists.value,
     search: searchQuery.value,
-    revision: musicVersionRevision.value,
+    revision: musicStore.playlistsRevision.value,
     hidden: activePlaylist.value?.hiddenSources,
-    preferences: activePlaylist.value?.variantPreferences
   }),
-  (value) => database.setInput({ ...value, versions: getMusicVersions().tracks.versions }),
+  (value) => database.setInput(value),
   { immediate: true, flush: 'sync' }
 )
 watch(
@@ -130,116 +103,57 @@ watch(
   database.refreshQueries,
   { flush: 'sync' }
 )
-let unsubscribeLibrary: (() => void) | undefined
-onMounted(() => {
-  unsubscribeLibrary = window.api.library.onChanged((change) => {
-    if (databaseEnabled.value)
-      database.invalidate(
-        change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
-      )
-  })
+watch(musicStore.libraryRevision, (revision) => {
+  if (databaseEnabled.value) database.invalidate(revision)
 })
-onUnmounted(() => {
-  unsubscribeLibrary?.()
-  database.dispose()
-})
+watch(musicVersionRevision, () => database.invalidate())
+onUnmounted(() => database.dispose())
 function retryDatabase(): void {
-  if (storage.mode.value === null) void storage.load()
-  else database.retry()
+  database.retry()
 }
 type PlaylistCard = Pick<Playlist, 'id' | 'name' | 'cover' | 'pinnedAt'> & {
   trackCount?: number
-  trackIds?: string[]
   sourceSummary?: LibraryPlaylistSourceSummary
 }
 const playlistPins = computed(
   () => new Map(aggregatePlaylists.value.map((playlist) => [playlist.id, playlist.pinnedAt]))
 )
 const gridPlaylists = computed<PlaylistCard[]>(() => {
-  if (storage.mode.value === 'json') return aggregatePlaylists.value
   return database.cardPages.value.flatMap((page) =>
     page.items.map((item) => ({ ...item, pinnedAt: playlistPins.value.get(item.id) }))
   )
 })
 
-const activeTracks = computed<Track[]>(() =>
-  props.active && storage.mode.value === 'json' && activePlaylist.value
-    ? getPlaylistTracksById(activePlaylist.value.id)
-    : []
-)
-
-const rows = computed<AggregateRow[]>(() => {
-  const playlist = activePlaylist.value
-  if (!playlist) return []
-  return buildAggregateRows({
-    tracks: activeTracks.value,
-    hiddenSources: playlist.hiddenSources,
-    variantPreferences: playlist.variantPreferences
-  })
-})
-
-const searchedRows = computed<AggregateRow[]>(() => {
-  const keyword = searchQuery.value.trim().toLowerCase()
-  if (!keyword) return rows.value
-  return rows.value.filter((row) =>
-    `${row.title} ${row.artist} ${row.album}`.toLowerCase().includes(keyword)
-  )
-})
-
 /** 虚拟滚动跑在"每行当前选定音源"上，行数据再按 trackId 映射回来。 */
-const displayTracks = computed<Track[]>(() =>
-  databaseEnabled.value
-    ? (database.pages.value.flatMap((page) => page.tracks) as unknown as Track[])
-    : searchedRows.value.map((row) => row.selectedVariant.track)
-)
-const playableTracks = computed<Track[]>(() => resolveAggregateQueue(searchedRows.value))
-const rowByTrackId = computed(() => {
-  const map = new Map<string, AggregateRow>()
-  for (const row of searchedRows.value) map.set(row.selectedVariant.track.id, row)
-  return map
-})
+const displayTracks = computed<Track[]>(() => database.pages.value.flatMap((page) => page.tracks))
 
-const sourceFilters = computed(() =>
-  databaseEnabled.value
-    ? (databaseSources.value.page?.aggregate?.sources ?? [])
-    : activePlaylist.value
-      ? collectAggregateSources(activeTracks.value, activePlaylist.value.hiddenSources ?? [])
-      : []
-)
+const sourceFilters = computed(() => databaseSources.value.page?.aggregate?.sources ?? [])
 
 const detailStatsText = computed(() => {
-  if (storage.mode.value !== 'json' && !databasePage.value.page) return '正在读取聚合歌单…'
-  const visible = databaseEnabled.value
-    ? (databasePage.value.page?.aggregate?.rowCount ?? 0)
-    : rows.value.length
-  const total = databaseEnabled.value
-    ? (databasePage.value.page?.aggregate?.memberCount ?? 0)
-    : activeTracks.value.length
-  const sourceCount = databaseEnabled.value
-    ? databaseSources.value.total === null
+  if (!databasePage.value.page) return '正在读取聚合歌单…'
+  const visible = databasePage.value.page.aggregate?.rowCount ?? 0
+  const total = databasePage.value.page.aggregate?.memberCount ?? 0
+  const sourceCount =
+    databaseSources.value.total === null
       ? null
       : Math.max(
           0,
           (databaseSources.value.total ?? 0) -
             new Set(activePlaylist.value?.hiddenSources ?? []).size
         )
-    : sourceFilters.value.filter((item) => !item.hidden).length
   const parts = [`${visible} 首`]
   if (total !== visible) parts.push(`已隐藏 ${total - visible} 首`)
   if (sourceCount !== null) parts.push(`${sourceCount} 个音源`)
   return parts.join(' · ')
 })
 
-const tableTrackCount = computed(() =>
-  databaseEnabled.value ? (databasePage.value.total ?? 0) : displayTracks.value.length
-)
+const tableTrackCount = computed(() => databasePage.value.total ?? 0)
 const showGrid = computed(() => !activePlaylist.value)
 const {
   containerRef,
   tbodyRef,
   rowHeight,
   visibleRange,
-  visibleTracks: legacyVisibleTracks,
   totalHeight,
   paddingTop,
   onScroll,
@@ -250,11 +164,8 @@ const {
 } = useSongListVirtualScroll({
   displayTracks,
   itemCount: tableTrackCount,
-  restoreReady: computed(
-    () =>
-      storage.mode.value === 'json' ||
-      (databaseEnabled.value &&
-        (showGrid.value ? databaseCards.value.total !== null : databasePage.value.total !== null))
+  restoreReady: computed(() =>
+    showGrid.value ? databaseCards.value.total !== null : databasePage.value.total !== null
   ),
   viewKey: computed(() =>
     JSON.stringify([
@@ -263,7 +174,7 @@ const {
       activePlaylistId.value,
       searchQuery.value,
       activePlaylist.value?.hiddenSources,
-      activePlaylist.value?.variantPreferences
+      musicStore.playlistsRevision.value
     ])
   ),
   resetSources: [],
@@ -271,13 +182,10 @@ const {
   debouncedSearchQuery: searchQuery
 })
 const visibleTracks = computed(() =>
-  databaseEnabled.value
-    ? Array.from(
-        { length: visibleRange.value.end - visibleRange.value.start },
-        (_, index) =>
-          database.trackAt(visibleRange.value.start + index) as unknown as Track | undefined
-      )
-    : legacyVisibleTracks.value
+  Array.from(
+    { length: visibleRange.value.end - visibleRange.value.start },
+    (_, index) => database.trackAt(visibleRange.value.start + index)
+  )
 )
 watch(
   [visibleRange, databaseEnabled, () => databasePage.value.total],
@@ -372,10 +280,7 @@ function playlistSourceSummary(playlist: PlaylistCard): string {
       ? `${label} · 另 ${summary.additionalProviders} 个音源`
       : label
   }
-  if (storage.mode.value !== 'json') return ''
-  const sources = collectAggregateSources(getPlaylistTracksById(playlist.id))
-  if (sources.length === 0) return ''
-  return sources.map((item) => `${sourceLabel(item.source)} ${item.count}`).join(' · ')
+  return ''
 }
 
 // ─── 网格操作 ──────────────────────────────────────────────────────────────
@@ -389,7 +294,6 @@ function openPlaylist(playlistId: string): void {
 function backToGrid(): void {
   if (props.returnFromDetail) props.returnFromDetail()
   else activePlaylistId.value = null
-  openVariantMenuFor.value = null
   database.closeVariants()
 }
 
@@ -400,13 +304,13 @@ useBackHandler(
   '返回聚合歌单列表'
 )
 
-function togglePinned(playlistId: string, pinned: boolean, event: Event): void {
+async function togglePinned(playlistId: string, pinned: boolean, event: Event): Promise<void> {
   event.stopPropagation()
-  setPlaylistPinned(playlistId, !pinned)
+  await setPlaylistPinned(playlistId, !pinned)
 }
 
 /** 删除很难撤销，所以要点两次：第一下把按钮切成确认态。 */
-function requestDelete(playlistId: string, event: Event): void {
+async function requestDelete(playlistId: string, event: Event): Promise<void> {
   event.stopPropagation()
   if (pendingDeleteId.value !== playlistId) {
     pendingDeleteId.value = playlistId
@@ -414,7 +318,7 @@ function requestDelete(playlistId: string, event: Event): void {
   }
   pendingDeleteId.value = null
   if (activePlaylistId.value === playlistId) activePlaylistId.value = null
-  deletePlaylist(playlistId)
+  await deletePlaylist(playlistId)
 }
 
 function openCreateDialog(): void {
@@ -426,56 +330,39 @@ function closeCreateDialog(): void {
 }
 
 // ─── 详情操作 ──────────────────────────────────────────────────────────────
-function toggleSourceVisibility(source: string): void {
+async function toggleSourceVisibility(source: string): Promise<void> {
   const playlist = activePlaylist.value
   if (!props.active || !playlist) return
-  if (
-    storage.mode.value !== 'json' &&
-    (!databaseEnabled.value || databaseSources.value.total === null)
-  )
-    return
+  if (databaseSources.value.total === null) return
   const next = toggleHiddenSource(playlist.hiddenSources ?? [], source)
   // 全部音源都隐藏等于一个空歌单，拦下来并说明原因。
-  if (
-    new Set(next).size >=
-    (databaseEnabled.value ? (databaseSources.value.total ?? 0) : sourceFilters.value.length)
-  ) {
+  if (new Set(next).size >= (databaseSources.value.total ?? 0)) {
     actionError.value = '至少要保留一个显示的音源'
     return
   }
   actionError.value = ''
-  setPlaylistHiddenSources(playlist.id, next)
+  await setPlaylistHiddenSources(playlist.id, next)
 }
 
 function rowFor(track: Track) {
-  if (databaseEnabled.value) {
-    const row = database.rowFor(track)?.meta
-    return row ? { ...row, selectedVariant: { source: track.source ?? 'local' } } : undefined
-  }
-  const row = rowByTrackId.value.get(track.id)
-  return row ? { ...row, visibleVariantCount: row.visibleVariants.length } : undefined
+  const row = database.rowFor(track)?.meta
+  return row ? { ...row, selectedVariant: { source: track.source ?? 'local' } } : undefined
 }
 
 function toggleVariantMenu(track: Track, event: Event): void {
   event.stopPropagation()
-  if (databaseEnabled.value) {
-    database.openVariants(track)
-    return
-  }
-  const anchorTrackId = rowFor(track)?.anchorTrackId
-  if (!anchorTrackId) return
-  openVariantMenuFor.value = openVariantMenuFor.value === anchorTrackId ? null : anchorTrackId
+  database.openVariants(track)
 }
 
-function chooseVariant(track: Track, source: string, event: Event): void {
+async function chooseVariant(track: Track, source: string, event: Event): Promise<void> {
   event.stopPropagation()
   const playlist = activePlaylist.value
-  openVariantMenuFor.value = null
+  database.closeVariants()
   const row = rowFor(track)
   if (!playlist || !row) return
   database.closeVariants()
   // 再点当前音源就是取消这一行的显式选择，回到默认优先级。
-  setPlaylistVariantPreference(
+  await setPlaylistVariantPreference(
     playlist.id,
     row.anchorTrackId,
     row.selectedVariant.source === source && row.variantPinned ? null : source
@@ -483,7 +370,6 @@ function chooseVariant(track: Track, source: string, event: Event): void {
 }
 
 function closeOverlays(): void {
-  openVariantMenuFor.value = null
   database.closeVariants()
   pendingDeleteId.value = null
 }
@@ -500,20 +386,11 @@ onUnmounted(() => {
 
 function playRow(track: Track): void {
   if (!props.active) return
-  if (databaseEnabled.value) {
-    const query = database.playbackQuery(track)
-    if (query)
-      void playerStore.playLibraryQuery(query, track.id, {
-        onQueryFailure: (error) => database.recoverPlayback(query.playlistView!, error)
-      })
-    return
-  }
-  if (storage.mode.value !== 'json') return
-  if (rowFor(track)?.preferenceUnavailable) {
-    actionError.value = '偏好来源未载入，请通过来源菜单明确选择，或在歌曲信息中修改偏好'
-    return
-  }
-  playTrack(track, playableTracks.value)
+  const query = database.playbackQuery(track)
+  if (query)
+    void playerStore.playLibraryQuery(query, track.id, {
+      onQueryFailure: (error) => database.recoverPlayback(query.playlistView!, error)
+    })
 }
 
 function onRowClick(track: Track): void {
@@ -532,49 +409,33 @@ function onRowKeydown(track: Track, event: KeyboardEvent): void {
 
 async function removeRow(track: Track, event: Event): Promise<void> {
   event.stopPropagation()
-  const playlist = activePlaylist.value
-  if (!props.active || !playlist) return
-  if (databaseEnabled.value) {
-    const result = await database.removalIds(track)
-    if (result) removeTracksFromPlaylistById(result.playlistId, result.ids)
-    return
-  }
-  if (storage.mode.value !== 'json') return
-  const row = rowByTrackId.value.get(track.id)
-  if (!row) return
-  // 一行代表一段录音，移除时把它的所有音源一起从歌单里拿掉。
-  removeTracksFromPlaylistById(
-    playlist.id,
-    row.allVariants.map((variant) => variant.track.id)
-  )
+  if (!props.active || !activePlaylist.value) return
+  const result = await database.removalIds(track)
+  if (result) await removeTracksFromPlaylistById(result.playlistId, result.ids)
 }
 
 function rowNumber(index: number): number {
   return visibleRange.value.start + index + 1
 }
 function variantMenuOpen(track: Track): boolean {
-  return databaseEnabled.value
-    ? databaseMenu.value?.rowId === database.rowFor(track)?.meta.rowId &&
-        databaseMenu.value?.revision === database.rowFor(track)?.page.revision
-    : openVariantMenuFor.value === rowFor(track)?.anchorTrackId
+  return (
+    databaseMenu.value?.rowId === database.rowFor(track)?.meta.rowId &&
+    databaseMenu.value?.revision === database.rowFor(track)?.page.revision
+  )
 }
-function rowVariants(track: Track) {
-  return databaseEnabled.value
-    ? ((databaseVariants.value.page?.tracks as unknown as Track[]) ?? []).map((track) =>
-        toSourceVariant({ track })
-      )
-    : (rowByTrackId.value.get(track.id)?.visibleVariants ?? [])
+function rowVariants() {
+  return (databaseVariants.value.page?.tracks ?? []).map((track) => ({
+    source: track.source ?? 'local',
+    track
+  }))
 }
 function playAll(): void {
   if (!props.active) return
-  if (databaseEnabled.value) {
-    const query = database.playbackQuery()
-    if (query)
-      void playerStore.playLibraryQuery(query, undefined, {
-        onQueryFailure: (error) => database.recoverPlayback(query.playlistView!, error)
-      })
-  } else if (storage.mode.value === 'json' && playableTracks.value[0])
-    playTrack(playableTracks.value[0], playableTracks.value)
+  const query = database.playbackQuery()
+  if (query)
+    void playerStore.playLibraryQuery(query, undefined, {
+      onQueryFailure: (error) => database.recoverPlayback(query.playlistView!, error)
+    })
 }
 </script>
 
@@ -604,7 +465,7 @@ function playAll(): void {
       <p v-else-if="databasePending" class="aggregate-notice" role="status">正在读取聚合歌单…</p>
       <div ref="containerRef" class="aggregate-grid-scroller" @scroll="onScroll">
         <div
-          v-if="databaseCards.total !== null || storage.mode.value === 'json'"
+          v-if="databaseCards.total !== null"
           class="aggregate-grid card-grid"
         >
           <div
@@ -665,7 +526,7 @@ function playAll(): void {
                 {{ playlist.name }}
               </div>
               <div class="aggregate-card-meta">
-                {{ playlist.trackCount ?? playlist.trackIds?.length ?? 0 }} 首
+                {{ playlist.trackCount ?? 0 }} 首
               </div>
               <div class="aggregate-card-sources">
                 {{ playlistSourceSummary(playlist) || '\u00a0' }}
@@ -862,9 +723,8 @@ function playAll(): void {
                 </td>
                 <td class="col-cover">
                   <CoverImg
-                    :cover="track.coverSmall || track.cover"
-                    :cover-source="track.coverSmallSource || track.coverSource"
                     :identity="track.id"
+                    :core-track-id="track.id"
                     class="aggregate-row-cover"
                     alt=""
                     loading="lazy"
@@ -900,7 +760,7 @@ function playAll(): void {
                     </button>
                     <div v-if="variantMenuOpen(track)" class="aggregate-variant-menu" @click.stop>
                       <button
-                        v-for="(variant, variantIndex) in rowVariants(track)"
+                        v-for="(variant, variantIndex) in rowVariants()"
                         :key="`${variant.track.id}:${variantIndex}`"
                         type="button"
                         class="aggregate-variant-option"
@@ -912,7 +772,16 @@ function playAll(): void {
                       >
                         <i :class="sourceIcon(variant.source)"></i>
                         <span>{{ sourceLabel(variant.source) }}</span>
-                        <span v-if="variant.lossless" class="aggregate-variant-tag">无损</span>
+                        <span
+                          v-if="
+                            variant.track.format &&
+                            ['flac', 'alac', 'wav', 'ape', 'aiff', 'dsf', 'dff'].includes(
+                              variant.track.format.toLowerCase()
+                            )
+                          "
+                          class="aggregate-variant-tag"
+                          >无损</span
+                        >
                         <i
                           v-if="variant.source === rowFor(track)!.selectedVariant.source"
                           class="pi pi-check aggregate-variant-check"
@@ -960,9 +829,7 @@ function playAll(): void {
           class="aggregate-empty"
         >
           {{
-            (databaseEnabled
-              ? (databasePage.page?.aggregate?.memberCount ?? 0)
-              : activeTracks.length) === 0
+            (databasePage.page?.aggregate?.memberCount ?? 0) === 0
               ? '这个聚合歌单还是空的。在本地或流媒体页右键歌曲，选“添加到聚合歌单”。'
               : '当前筛选下没有可显示的歌曲，试试取消隐藏某个音源。'
           }}

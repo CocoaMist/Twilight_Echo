@@ -8,80 +8,14 @@ import type {
 } from '../../../../shared/libraryDatabase.ts'
 import { createLibraryPlaylistView } from './libraryPlaylistView.ts'
 import { createLibraryTrackPages } from './libraryTrackPages.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { coreLibraryPage } from '../coreTestFixtures.ts'
+import type { CoreLibraryPage } from '../../../../shared/coreViews.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 import type { Playlist } from './musicStoreTypes.ts'
 import { toPlaylistTrackSnapshot } from './musicStoreData.ts'
-import { reconcileImportEntries } from '../../../../shared/externalPlaylist.ts'
 
 const preferences = { revision: 1, versions: [] }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
-
-test('ordinary and imported uploads inspect only one member window before the first append', async (t) => {
-  for (const imported of [false, true]) {
-    await t.test(imported ? 'imported members' : 'ordinary members', async () => {
-      const trackIds = Array.from({ length: 605 }, (_, index) => String(index))
-      let inspected = 0,
-        count = 0
-      const sizes: number[] = []
-      const playlist: Playlist = { id: 'bounded', name: 'Bounded', createdAt: '', trackIds }
-      if (imported) {
-        let serial = 0
-        const entries = reconcileImportEntries(
-          [],
-          trackIds.map((title) => ({ title })),
-          () => String(serial++)
-        )
-        playlist.imported = {
-          version: 1,
-          source: { kind: 'file', label: 'Import' },
-          entries: new Proxy(entries, {
-            get(target, key, receiver) {
-              if (typeof key === 'string' && /^\d+$/.test(key)) inspected++
-              return Reflect.get(target, key, receiver)
-            }
-          }),
-          complete: true,
-          importedAt: '',
-          generation: 'one',
-          membershipRevision: 0
-        }
-      } else {
-        playlist.trackSnapshots = new Proxy({}, {
-          get() {
-            inspected++
-            return undefined
-          }
-        })
-      }
-      const owner = createLibraryPlaylistView({
-        syncPlaylistView: async (request) => {
-          if (request.kind === 'begin' || request.kind === 'drop')
-            return { id: request.id, sequence: 0, count: 0, committed: false }
-          if (request.kind === 'append') {
-            if (!sizes.length) assert.equal(inspected, 200)
-            sizes.push(request.entries.length)
-            count += request.entries.length
-          }
-          return {
-            id: request.id,
-            sequence: request.sequence,
-            count,
-            committed: request.kind === 'commit'
-          }
-        }
-      }, () => 'bounded-view')
-      try {
-        await owner.setPlaylist(playlist, preferences)
-        assert.equal(owner.state.value.error, '')
-        assert.deepEqual(sizes, [200, 200, 200, 5])
-        assert.equal(inspected, 605)
-      } finally {
-        await owner.dispose()
-      }
-    })
-  }
-})
-
 function fixture(t: TestContext) {
   const db = new LibraryDatabase(':memory:')
   db.replaceDocument({
@@ -200,6 +134,58 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
+
+test('imported membership is projected one batch at a time and stops on supersession', async () => {
+  const projected = new Set<number>()
+  const entries = Array.from({ length: 20_000 }, (_, index) => ({
+    entryId: `entry:${index}`, position: index, revision: 0,
+    resolution: { state: 'pending' as const },
+    get original() {
+      projected.add(index)
+      return { title: `Song ${index}`, artist: 'Artist' }
+    }
+  }))
+  const blocked = deferred<LibraryPlaylistViewSyncResult>()
+  let count = 0, serial = 0
+  let firstAppend: Extract<LibraryPlaylistViewSync, { kind: 'append' }> | undefined
+  const owner = createLibraryPlaylistView({
+    syncPlaylistView: async request => {
+      if (request.kind === 'begin') count = 0
+      if (request.kind === 'append') {
+        count += request.entries.length
+        if (!firstAppend) {
+          firstAppend = request
+          return blocked.promise
+        }
+      }
+      return {
+        id: request.id, sequence: 'sequence' in request ? request.sequence : 0,
+        count: request.kind === 'drop' ? 0 : count, committed: request.kind === 'commit'
+      }
+    }
+  }, () => `view-${++serial}`)
+  try {
+    const upload = owner.setPlaylist({
+      id: 'import', trackIds: [], imported: {
+        version: 1, entries, source: { kind: 'file', label: 'fixture' },
+        generation: 'one', membershipRevision: 0, importedAt: '', complete: true
+      }
+    }, preferences)
+    await tick()
+    assert.ok(firstAppend)
+    assert.equal(firstAppend.entries.length, 200)
+    assert.equal(projected.size, 200, 'later records must not be projected ahead of transport')
+    const replacement = owner.setPlaylist({ id: 'replacement', trackIds: ['new'] }, preferences)
+    blocked.resolve({ id: firstAppend.id, sequence: firstAppend.sequence, count: 200, committed: false })
+    await Promise.all([upload, replacement])
+    assert.equal(projected.size, 200, 'superseded imported membership is never projected')
+    assert.equal(owner.state.value.id, 'view-2')
+    assert.equal(owner.state.value.error, '')
+  } finally {
+    if (firstAppend) blocked.resolve({ id: firstAppend.id, sequence: firstAppend.sequence, count: 200, committed: false })
+    await owner.dispose()
+  }
+})
 test('supersession keeps one RPC in flight and never publishes an old or uncertain commit', async () => {
   const pending: Array<
     { request: LibraryPlaylistViewSync } & ReturnType<
@@ -279,11 +265,11 @@ test('a lost commit reply is dropped, not replayed; explicit retry allocates a f
 
 test('page windows follow a rebuilt owner and keep late old reads out of the new playlist', async (t) => {
   const { db, playlist, owner } = fixture(t)
-  const late = deferred<ReturnType<LibraryDatabase['queryTracks']>>()
+  const late = deferred<CoreLibraryPage>()
   let first = true
   const pages = createLibraryTrackPages({
     queryTracks: async (query) => {
-      const page = db.queryTracks(query)
+      const page = coreLibraryPage(db.queryTracks(query))
       if (first) {
         first = false
         return late.promise
@@ -308,7 +294,7 @@ test('page windows follow a rebuilt owner and keep late old reads out of the new
   await owner.setPlaylist({ ...playlist, trackIds: ['ncm:7'] }, preferences)
   for (let i = 0; i < 30 && pages.state.value.loading; i++) await tick()
   assert.equal(pages.state.value.page?.tracks[0].id, 'ncm:7')
-  late.resolve(oldPage)
+  late.resolve(coreLibraryPage(oldPage))
   await tick()
   assert.equal(pages.state.value.page?.total, 1)
   assert.equal(pages.cacheState.cachedPages, 1)

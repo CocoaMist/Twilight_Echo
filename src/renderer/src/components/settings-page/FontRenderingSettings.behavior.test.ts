@@ -117,7 +117,7 @@ window.api={settings:{onChanged:()=>()=>{},get:async()=>snapshot(),update:async 
  if(failSave)throw new Error('测试保存失败')
  if(releaseSave!==null)await new Promise(resolve=>{releaseSave=resolve})
  writes.push(patch);confirmed={...confirmed,...patch};return snapshot()
-}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
+}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}},core:{onMessage:()=>()=>{},onStatus:()=>()=>{}}}
 createApp({setup(){return()=>h('section',{class:'fixture-panel settings-preview-page',style:{position:'relative',inset:'auto',height:'auto'}},[
  h('h1','外观 · 文字渲染'),h('p','保留背景与模糊效果，选择适合你的文字显示。'),h(FontRenderingSettings),
  h('div',{class:'fixture-text'},['夜航星 · Twilight Echo · 0123456789',h('small','本地音乐  /  我的收藏  /  设置'),h('i',{class:'pi pi-check','aria-hidden':'true'})]),

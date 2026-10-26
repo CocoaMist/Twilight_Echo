@@ -11,7 +11,8 @@ import type {
 import { LIBRARY_SCAN_DATABASE_METHODS } from '../../shared/libraryDatabase.ts'
 
 const methods = new Set(LIBRARY_SCAN_DATABASE_METHODS)
-export class LibraryScanInterruptedError extends Error {}
+import { LibraryScanInterruptedError } from '../../shared/coreScan.ts'
+export { LibraryScanInterruptedError } from '../../shared/coreScan.ts'
 export type DatabaseScanProgressListener = (
   progress: LibraryScanProgressSnapshot,
   phase: 'checking' | 'parsing' | 'committing'
@@ -26,6 +27,7 @@ export class LibraryDatabaseScanSession {
   private readonly calls = new Set<Promise<void>>()
   private timer: NodeJS.Timeout | null = null
   private paused = false
+  private cacheSuspended = false
   private stopped = false
   readonly jobId: string
   private readonly database: LibraryScanDatabaseApi
@@ -63,7 +65,7 @@ export class LibraryDatabaseScanSession {
   private touch(): void {
     this.clearTimer()
     // Backpressure and deliberate pauses are not metadata timeouts.
-    if (this.stopped || this.paused || this.calls.size) return
+    if (this.stopped || this.paused || this.cacheSuspended || this.calls.size) return
     this.timer = setTimeout(
       () =>
         this.fail(
@@ -133,6 +135,10 @@ export class LibraryDatabaseScanSession {
   pause(): void {
     this.paused = true
     this.clearTimer()
+  }
+  setCacheSuspended(suspended: boolean): void {
+    this.cacheSuspended = suspended
+    this.touch()
   }
   resume(): void {
     this.paused = false

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
 import {
   DSD_OUTPUT_MODE_OPTIONS,
@@ -18,6 +19,7 @@ import {
   stereoImageIsActive,
   type DspDitherMode,
   type DspOutputStageConfig,
+  type DspOutputStageStatus,
   type DspResamplerQuality,
   type DspStereoImageConfig
 } from '../../../../shared/dspGraph.ts'
@@ -34,8 +36,8 @@ import type {
 } from '../../types/settings'
 import type { LyricSource, Track } from '../../types/music'
 import type { PlaybackInfo } from '../../../../shared/audioEngineTypes.ts'
-import type { DlnaDeviceInfo } from '../../../../shared/remoteControl.ts'
-import type { PlaybackBookmark } from '../../../../shared/playbackBookmarks.ts'
+import type { CoreCastDevice } from '../../../../shared/coreCast.ts'
+import type { CoreBookmark } from '../../../../shared/coreBookmarks.ts'
 import type { LyricLayerSourceSelection } from '../../../../shared/lyricsManagement.ts'
 import LyricsManagerPanel from './LyricsManagerPanel.vue'
 import LyricsAppearanceCustomizer from '../LyricsAppearanceCustomizer.vue'
@@ -61,6 +63,7 @@ const props = defineProps<{
   audioProcessing: AudioProcessingSettings
   audioOutputConfig: OutputConfig
   dspOutputStage: DspOutputStageConfig
+  dspOutputStageStatus?: DspOutputStageStatus | null
   dspStereoImage: DspStereoImageConfig
   dspActive?: boolean
   actualSampleRate?: number
@@ -110,11 +113,11 @@ const props = defineProps<{
   sleepTimerStatus?: string
   sleepTimerDefaultMinutes?: number
   castTargetName?: string | null
-  castDevices?: DlnaDeviceInfo[]
+  castDevices?: CoreCastDevice[]
   castBusy?: boolean
   castError?: string
   canCastCurrentTrack?: boolean
-  bookmarks?: PlaybackBookmark[]
+  bookmarks?: CoreBookmark[]
   renamingBookmarkId?: string | null
   renameDraft?: string
   formatTime?: (seconds: number) => string
@@ -164,8 +167,8 @@ const emit = defineEmits<{
   castToDevice: [usn: string]
   stopCast: []
   addBookmark: []
-  jumpBookmark: [bookmark: PlaybackBookmark]
-  startRenameBookmark: [bookmark: PlaybackBookmark]
+  jumpBookmark: [bookmark: CoreBookmark]
+  startRenameBookmark: [bookmark: CoreBookmark]
   commitRenameBookmark: []
   updateRenameDraft: [value: string]
   cancelRenameBookmark: []
@@ -370,9 +373,9 @@ const actualSampleRateLabel = computed(() => {
 
 const outputStageHint = computed(() => {
   if (!outputStageActive.value) {
-    return `目标 Device · 实际 ${actualSampleRateLabel.value} · 无强制重采样`
+    return `目标 Device · 实际 ${actualSampleRateLabel.value} · ${describeResampler(props.dspOutputStage.resamplerQuality, props.dspOutputStageStatus)}`
   }
-  return `目标 ${targetSampleRateLabel.value} · 实际 ${actualSampleRateLabel.value} · SRC ${props.dspOutputStage.resamplerQuality} · dither ${props.dspOutputStage.dither}（采样率锁会关闭 bit-perfect）`
+  return `目标 ${targetSampleRateLabel.value} · 实际 ${actualSampleRateLabel.value} · ${describeResampler(props.dspOutputStage.resamplerQuality, props.dspOutputStageStatus)} · dither ${props.dspOutputStage.dither}（采样率锁会关闭 bit-perfect）`
 })
 
 const stereoImageActive = computed(() => stereoImageIsActive(props.dspStereoImage))
@@ -417,7 +420,6 @@ const sourceQuality = computed(() => {
   const format = (
     props.sourceInfo?.codec ||
     track.format ||
-    track.fileName?.split('.').pop() ||
     'PCM'
   ).toUpperCase()
   const rate = sampleRate >= 1000 ? `${Math.round(sampleRate / 100) / 10} kHz` : '—'
@@ -427,7 +429,7 @@ const sourceQuality = computed(() => {
 
   let badge = 'Standard'
   let tone: StatusTone = 'muted'
-  if (/\b(dsf|dff|dsd|sacd)\b/i.test(`${format} ${track.fileName || ''}`)) {
+  if (/\b(dsf|dff|dsd|sacd)\b/i.test(`${format} ${track.format || ''}`)) {
     badge = 'DSD'
     tone = 'success'
   } else if (sampleRate >= 88200 || bitDepth >= 24) {
@@ -584,7 +586,7 @@ const deckRateValue = computed(() => {
 const deckTrackLine = computed(() => {
   const track = props.currentTrack
   if (!track) return 'NO SIGNAL'
-  const title = track.title?.trim() || track.fileName || 'Unknown'
+  const title = track.title?.trim() || 'Unknown'
   const artist = track.artist?.trim()
   return artist ? `${title} — ${artist}` : title
 })
@@ -1521,24 +1523,22 @@ const deckAccentVars = computed(() => {
                 未发现投送设备（DLNA / Chromecast）。请确认设备在线且本机已开启远程控制服务。
               </p>
               <ul v-else class="deck-cast-list">
-                <li v-for="device in castDeviceList" :key="device.usn">
+                <li v-for="device in castDeviceList" :key="device.id">
                   <button
                     type="button"
                     class="deck-cast-item"
                     :disabled="
-                      castBusy ||
-                      !canCastCurrentTrack ||
-                      (device.protocol !== 'chromecast' && !device.avTransportUrl)
+                      castBusy || !canCastCurrentTrack
                     "
-                    @click="emit('castToDevice', device.usn)"
+                    @click="emit('castToDevice', device.id)"
                   >
                     <i class="ph ph-broadcast"></i>
-                    <span class="deck-cast-name">{{ device.friendlyName }}</span>
+                    <span class="deck-cast-name">{{ device.name }}</span>
                     <span class="deck-cast-meta">
                       {{
                         device.protocol === 'chromecast'
                           ? 'Chromecast'
-                          : device.manufacturer || device.modelName || 'DLNA'
+                          : device.manufacturer || device.model || 'DLNA'
                       }}
                     </span>
                   </button>

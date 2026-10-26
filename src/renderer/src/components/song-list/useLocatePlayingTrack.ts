@@ -9,7 +9,7 @@ export function useLocatePlayingTrack(options: {
   tbodyRef: Ref<HTMLElement | null>
   displayTracks: Readonly<Ref<Track[]>>
   libraryTracks?: Readonly<Ref<Track[]>>
-  currentTrack: Readonly<Ref<Track | null>>
+  currentTrack: Readonly<Ref<Pick<Track, 'id'> | null>>
   enabled: Readonly<Ref<boolean>>
   rowHeight: number
   playingRowSelector?: string

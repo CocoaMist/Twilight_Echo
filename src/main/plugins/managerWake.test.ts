@@ -16,7 +16,7 @@ import {
 import { resolveProviderIdempotencyKey } from './rpcCoordinator.ts'
 import type { TwilightMediaProviderRegistration, TwilightPluginDescriptor } from './types.ts'
 
-const source = readFileSync(new URL('./manager.ts', import.meta.url), 'utf8').replaceAll(
+const source = readFileSync(new URL('../../core/plugins/manager.ts', import.meta.url), 'utf8').replaceAll(
   '\r\n',
   '\n'
 )
@@ -104,6 +104,7 @@ function createWakeHarness(): {
     paths: { versionRoot: '/test/plugin', dataDir: '/test/data' }
   } as TwilightPluginDescriptor
   const manager = Object.assign(Object.create(Manager.prototype) as WakeTestManager, {
+    platform: { launchHost: () => { forks++; return child } },
     running: new Map(),
     hibernated: new Map<string, Snapshot>([
       [

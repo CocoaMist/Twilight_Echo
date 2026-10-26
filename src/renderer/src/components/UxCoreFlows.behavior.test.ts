@@ -40,9 +40,9 @@ test('import preservation, search pagination, native keyboard, download focus, r
           load(id) {
             if (id === '\0ux-import-boundary')
               return 'export const useMusicStore = () => window.auditMusic'
-            return id === '\0ux-audio-boundary'
-              ? 'export const usePlayerStore = () => ({playTrack(){},playTrackFromPosition(){}})'
-              : null
+            if (id === '\0ux-audio-boundary')
+              return 'export const usePlayerStore = () => ({playTrack(){},playTrackFromPosition(){},currentTrack:{value:null}})'
+            return null
           }
         },
         vue()

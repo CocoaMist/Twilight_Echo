@@ -36,6 +36,14 @@ test('playback diagnostics expose the active PCM provider implementation', () =>
   )
 })
 
+test('playback diagnostics expose ASIO helper underrun rate and warn above 1%', () => {
+  assert.match(source, /const outputUnderrunRatePercent = computed<number \| null>\(\(\) => \{/)
+  assert.match(source, /diagnostics\?\.asioHelperCallbackCount \?\? 0/)
+  assert.match(source, /if \(rate === null \|\| rate <= 1\) return ''/)
+  assert.match(source, /t\('diagnostics\.panel\.underrunRateWarning'/)
+  assert.match(source, /class="diagnostic-reason-fix diagnostic-underrun-warning"/)
+})
+
 test('released output replaces playback proof and the HiFi occupancy label', () => {
   const playerBar = readFileSync(new URL('../PlayerBar.vue', import.meta.url), 'utf8')
   const sidebar = readFileSync(new URL('../player-bar/HiFiSidebar.vue', import.meta.url), 'utf8')
@@ -45,17 +53,6 @@ test('released output replaces playback proof and the HiFi occupancy label', () 
 })
 
 test('production AutoMix modes, stem installation and playback policy survive settings reload and component reopen', async () => {
-  const playerSource = readFileSync(
-    new URL('../../stores/usePlayerStore.ts', import.meta.url),
-    'utf8'
-  )
-  const watcher = playerSource.match(
-    /watch\(\r?\n  \(\) => appSettings\.value\?\.audioOutputConfig,[\s\S]*?\r?\n\)/
-  )?.[0]
-  const processing = playerSource.match(
-    /const defaultAudioProcessing: AudioProcessingSettings = ([\s\S]*?)\r?\nconst audioProcessing/
-  )?.[1]
-  assert.ok(watcher && processing, 'actual player configuration watcher and defaults are required')
   const directory = await mkdtemp(join(tmpdir(), 'twilight-playback-policy-'))
   try {
     await writeFile(join(directory, 'entry.ts'), policyRuntime)
@@ -72,17 +69,17 @@ test('production AutoMix modes, stem installation and playback policy survive se
             if (/\/useSettingsStore$/.test(id)) return '\0policy-settings'
             if (/\/usePlayerStore$/.test(id)) return '\0policy-player'
             if (/\/useAudioOutputDspStore$/.test(id)) return '\0policy-dsp'
+            if (/\/coreConnection\.ts$/.test(id)) return '\0policy-core'
             if (id.endsWith('/AudioDeviceProfilesPanel.vue')) return '\0policy-profiles'
             return null
           },
           load(id) {
             if (id === '\0policy-state')
               return policyState
-                .replace('/* ACTUAL_WATCHER */', watcher!)
-                .replace('/* ACTUAL_PROCESSING */', processing!)
             if (id === '\0policy-settings') return "export {useSettingsStore} from 'policy-state'"
             if (id === '\0policy-player') return "export {usePlayerStore} from 'policy-state'"
             if (id === '\0policy-dsp') return "export {useAudioOutputDspStore} from 'policy-state'"
+            if (id === '\0policy-core') return "export {useCoreConnection} from 'policy-state'"
             if (id === '\0policy-profiles') return 'export default {render:()=>null}'
             return null
           }
@@ -93,6 +90,7 @@ test('production AutoMix modes, stem installation and playback policy survive se
         alias: {
           '@renderer': resolve('src/renderer/src'),
           '@shared': resolve('src/shared'),
+          '@core': resolve('src/core'),
           vue: require.resolve('vue/dist/vue.esm-bundler.js'),
           pinia: resolve(require.resolve('pinia'), '../dist/pinia.mjs')
         }
@@ -123,11 +121,17 @@ test('production AutoMix modes, stem installation and playback policy survive se
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
-      windowsHide: true,
-      timeout: 60_000,
-      env
-    })
+    const result = await promisify(execFile)(
+      require('electron'),
+      // Electron 43.7 crashes at sandbox startup on some Windows builds; the
+      // project's other Electron runners already disable it for this reason.
+      ['--no-sandbox', join(directory, 'runner.cjs')],
+      {
+        windowsHide: true,
+        timeout: 60_000,
+        env
+      }
+    )
     assert.match(result.stdout, /PLAYBACK_POLICY_OK/)
     console.log(result.stdout.trim())
   } finally {
@@ -141,21 +145,23 @@ const policyState = `
 import {ref,watch} from 'vue'
 import {defineStore} from 'pinia'
 import {normalizeOutputConfig} from '@shared/audioOutputConfig.ts'
-import {createAudioOutputController} from '@renderer/stores/player/audioOutputController.ts'
+import {DEFAULT_DSP_OUTPUT_STAGE} from '@shared/dspGraph.ts'
+import {DEFAULT_AUDIO_PROCESSING} from '@core/audio/audioEngineHelpers.ts'
 export const persisted=ref(normalizeOutputConfig({pcmToDsdMode:'dsd128',dsdMutePreRollFrames:1024}))
 export const engine=ref({...persisted.value})
 export const appSettings=ref({autoMixMode:'off',autoMixStemMode:'auto',autoMixStemDevice:'auto',autoMixStemCacheMiB:512,audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
 export const stemCapabilities=ref({status:'missing',cpu:false,gpu:false,packs:[]})
 export const rejectSettings=ref(false)
 export const audioOutputConfig=ref(normalizeOutputConfig())
-/* ACTUAL_WATCHER */
-const audioProcessing=ref(/* ACTUAL_PROCESSING */)
+watch(()=>appSettings.value.audioOutputConfig,value=>{audioOutputConfig.value=normalizeOutputConfig(value)},{immediate:true})
+const audioProcessing=ref(structuredClone(DEFAULT_AUDIO_PROCESSING))
 const exclusiveMode=ref(false)
 const audioOutputConfigApplyStatus=ref({state:'idle',requestedRevision:0,appliedRevision:0,failedRevision:0,error:''})
-const controller=createAudioOutputController({exclusiveMode,audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,dspOutputStage:ref({}),dspStereoImage:ref({}),getAudioEngineApi:()=>({setOutputConfig:async config=>{engine.value=normalizeOutputConfig(config);persisted.value={...engine.value};return {...engine.value}},getOutputConfigApplyStatus:async()=>({state:'applied',requestedRevision:1,appliedRevision:1,failedRevision:0,error:''})}),setAudioEngineError:()=>{},refreshPlaybackInfo:async()=>{},scheduleCrossfadeIfNeeded:()=>{}})
-export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
+const controller={setAudioOutputConfig:async patch=>{engine.value=normalizeOutputConfig({...audioOutputConfig.value,...patch});persisted.value={...engine.value};audioOutputConfig.value={...engine.value};appSettings.value={...appSettings.value,audioOutputConfig:{...engine.value}}},setAudioProcessing:async patch=>{audioProcessing.value={...audioProcessing.value,...patch}},toggleExclusiveMode:async()=>{},setAudioOutput:async()=>{},setAudioDevice:async()=>{},toggleGapless:async()=>{}}
+export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,dspOutputStage:ref(structuredClone(DEFAULT_DSP_OUTPUT_STAGE)),dspGraphStatus:ref(null),playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
 export const useSettingsStore=()=>({settings:appSettings,updateSettings:async patch=>{if(rejectSettings.value)throw Error('settings failure');appSettings.value={...appSettings.value,...patch}}})
 export const usePlayerStore=()=>({volume:ref(.7),setVolume:()=>{},setUnityVolume:()=>{}})
+export const useCoreConnection=()=>({query:(...args)=>window.policyCore.query(...args),command:(...args)=>window.policyCore.command(...args)})
 export const reload=()=>{appSettings.value={...appSettings.value,audioOutputConfig:JSON.parse(JSON.stringify(persisted.value))}}
 `
 
@@ -170,12 +176,21 @@ const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimat
 window.runPolicyTests=async()=>{
  setLanguagePreference('zh-CN')
  let detectionCalls=0
- let installStatus={phase:'idle',completedBytes:0,totalBytes:0},installResult={phase:'cancelled',completedBytes:0,totalBytes:0},finishInstall,holdInstall=false
- window.api={audioEngine:{
-  getAutoMixStemCapabilities:async()=>{detectionCalls++;return JSON.parse(JSON.stringify(stemCapabilities.value))},
-  getAutoMixStemInstallStatus:async()=>({...installStatus}),
-  installAutoMixStemPack:async(...args)=>{expect(args.length===0,'renderer must not pass filesystem paths');if(holdInstall){installStatus={phase:'extracting',completedBytes:50,totalBytes:100,fileName:'pack.zip'};return new Promise(resolve=>{finishInstall=resolve})}installStatus={...installResult};return {...installStatus}},
-  cancelAutoMixStemInstall:async()=>{installStatus={phase:'cancelled',completedBytes:0,totalBytes:0};finishInstall?.({...installStatus});return {...installStatus}}
+ let installStatus={phase:'idle',completedBytes:0,totalBytes:0},installResult={phase:'cancelled',completedBytes:0,totalBytes:0},finishInstall=()=>{},holdInstall=false
+ window.policyCore={query:async name=>{
+  if(name==='automix.capabilities'){detectionCalls++;return JSON.parse(JSON.stringify(stemCapabilities.value))}
+  if(name==='automix.install.status')return {...installStatus}
+  throw Error('Unexpected Core query '+name)
+ },command:async(name,input)=>{
+  if(name==='automix.install.start'){
+   expect(Object.keys(input).length===1&&typeof input.enableAfterInstall==='boolean','install intent must be sent to Core without filesystem paths')
+   const complete=status=>{installStatus={...status};if(status.phase==='ready')appSettings.value={...appSettings.value,...(input.enableAfterInstall?{autoMixStemMode:'auto',autoMixStemDevice:'auto'}:{autoMixStemMode:'off'})}}
+   if(holdInstall){installStatus={phase:'extracting',completedBytes:50,totalBytes:100,fileName:'pack.zip'};finishInstall=complete;return {...installStatus}}
+   installStatus={...installResult};if(installStatus.phase==='ready')complete(installStatus);return {...installStatus}
+  }
+  expect(Object.keys(input).length===0,'renderer must not pass filesystem paths')
+  if(name==='automix.install.cancel'){installStatus={phase:'cancelled',completedBytes:0,totalBytes:0};finishInstall(installStatus);return {...installStatus}}
+  throw Error('Unexpected Core command '+name)
  }}
  const open=ref(true)
  const app=createApp({render:()=>open.value?h(PlaybackSettingsSection):null})
@@ -256,7 +271,7 @@ window.runPolicyTests=async()=>{
  await chooseInstall()
  stemCapabilities.value={status:'ready',cpu:true,gpu:true,packs:[{directory:'installed',cpu:true,gpu:true,gpuName:'Installed GPU'}]}
  installStatus={phase:'ready',completedBytes:100,totalBytes:100,capabilities:{cpu:true,gpu:true}}
- finishInstall({...installStatus});await settle()
+ finishInstall({...installStatus});await new Promise(resolve=>setTimeout(resolve,450));await settle()
  expect(document.body.textContent.includes('安装完成')&&!stemDevice().querySelector('option[value="gpu"]').disabled,'successful install must refresh GPU / CPU choices immediately')
  expect(JSON.stringify(appSettings.value)===savedPreferences,'installer must preserve mode/device/enable choices')
  holdInstall=false;installResult={...installStatus}

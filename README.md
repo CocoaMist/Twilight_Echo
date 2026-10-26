@@ -293,7 +293,7 @@ macOS 与 Linux 可使用 `shasum -a 256 <文件名>` 或 `sha256sum -c <文件�
 - **共享与独占**：WASAPI Shared（共享）经过 Windows 系统混音；Exclusive（独占）可在设备允许时进行格式直通。日常播放无需开启独占。
 - **DSD**：Native DSD、DoP 与 SACD ISO 的实际播放模式取决于设备、驱动和发布包。WASAPI 与 CoreAudio 没有平台级 native DSD 通道，会使用 DoP 或 PCM 回退；Linux 仅在兼容的 ALSA `hw:` 设备上尝试 native DSD。DSD / 直通播放会绕过部分 DSP，这是预期行为。
 - **ASIO 与 VST3**：Windows x64 的 ASIO 兼容层仍属实验性，真实设备支持尚未验证；VST3 的实际运行与设备兼容性同样尚未完成验证。请结合发布包能力清单与应用中的输出诊断判断。
-- **重采样与转换**：PCM SRC 支持 SWR；SoXR 随构建可选，当前仍属未验证能力。实验性 PCM→DSD64/128/256 由 CPU 执行，不代表完整高品质 SDM；当前不提供 CUDA SDM。
+- **重采样与转换**：PCM SRC 支持 SWR；SoXR 随构建可选。SoX 档位是请求配置，实际是否使用 SoX、回退到 SWR，或本引擎没有进行重采样，请查看 DSP「输出与性能」或输出诊断中的 SRC 状态。旧引擎没有提供运行时证据时会显示「未验证」；设备或系统混音器仍可能另行转换。实验性 PCM→DSD64/128/256 由 CPU 执行，不代表完整高品质 SDM；当前不提供 CUDA SDM。
 - **原样输出与混音**：EQ、DSP 和 AutoMix 可能改变输出样本。需要 bit-perfect 时，应关闭会改变信号的处理，并以播放时的 HiFi 状态和原因说明为准；AutoMix 分轨可使用 GPU，不代表核心音频链路提供 CUDA 加速。
 
 更详细的能力状态见[发布能力说明](./docs/release-capability-status.md)，实际发布包以随附的 `audio-capabilities.json` 与 `release-capability-status.json` 为准。

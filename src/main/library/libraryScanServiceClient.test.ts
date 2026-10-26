@@ -31,6 +31,117 @@ const scanRequest: LocalLibraryWorkerScanRequest = {
   coverCacheDir: 'C:\\Covers'
 }
 
+test('cover maintenance waits for worker ACK, preserves user pause and suppresses metadata watchdogs', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = new ManualUtilityProcess()
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'scan',
+    scanWatchdogMs: 100,
+    launch: () => child
+  })
+  t.after(() => client.destroy())
+  const scan = client.scanDatabase(
+    'db',
+    'C:/covers',
+    {} as Parameters<typeof client.scanDatabase>[2]
+  )
+  const rejected = assert.rejects(scan, /stopped/)
+  child.emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  client.pause('db')
+  let cleared = false,
+    finish!: () => void
+  const clearing = client.maintainCoverCache(async () => {
+    cleared = true
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  const suspended = child.messages.at(-1) as { requestId: string; kind: string }
+  assert.equal(suspended.kind, 'cache-suspend')
+  assert.equal(cleared, false)
+  child.emit('message', { kind: 'cache-ready', requestId: suspended.requestId, state: 'suspended' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(cleared, true)
+  t.mock.timers.tick(500)
+  assert.equal(child.killCount, 0)
+  finish()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(child.messages.at(-1), { kind: 'cache-resume', requestId: suspended.requestId })
+  child.emit('message', { kind: 'cache-ready', requestId: suspended.requestId, state: 'running' })
+  await clearing
+  t.mock.timers.tick(500)
+  assert.equal(child.killCount, 0)
+  assert.equal(child.messages.filter((m: any) => m.kind === 'resume').length, 0)
+  client.destroy()
+  await rejected
+})
+
+test('cover maintenance with no worker excludes new scan startup and releases on failure', async (t) => {
+  const child = new ManualUtilityProcess()
+  let launches = 0,
+    finish!: () => void
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'scan',
+    launch: () => {
+      launches++
+      return child
+    }
+  })
+  t.after(() => client.destroy())
+  const clearing = client.maintainCoverCache(async () => {
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    throw new Error('removal failed')
+  })
+  const failed = assert.rejects(clearing, /removal failed/)
+  const scanning = client.scan('next', scanRequest)
+  const stopped = assert.rejects(scanning, /stopped/)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(launches, 0)
+  finish()
+  await failed
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(launches, 1)
+  child.emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal((child.messages.at(-1) as any).kind, 'scan')
+  client.destroy()
+  await stopped
+})
+
+test('missing cover suspend acknowledgement never grants permission to delete', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = new ManualUtilityProcess()
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'scan',
+    startupTimeoutMs: 100,
+    launch: () => child
+  })
+  t.after(() => client.destroy())
+  const scan = client.scan('job', scanRequest)
+  const stopped = assert.rejects(scan, /stopped/)
+  child.emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  let cleared = false
+  const clearing = client.maintainCoverCache(async () => {
+    cleared = true
+  })
+  const failed = assert.rejects(clearing, /acknowledgement timed out/)
+  await new Promise((resolve) => setImmediate(resolve))
+  const id = (child.messages.at(-1) as any).requestId
+  t.mock.timers.tick(110)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(child.messages.at(-1), { kind: 'cache-resume', requestId: id })
+  child.emit('message', { kind: 'cache-ready', requestId: id, state: 'running' })
+  await failed
+  assert.equal(cleared, false)
+  client.destroy()
+  await stopped
+})
+
 test('database pause during worker startup is delivered after the scan request and suspends its watchdog', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const child = new ManualUtilityProcess()

@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { coreSnapshot } from '../stores/coreTestFixtures.ts'
+import { disposeCoreConnection } from '../stores/coreConnection.ts'
+
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+Object.defineProperty(globalThis, 'window', { configurable: true, value: { api: { core: {
+  onMessage: () => () => {}, onStatus: () => () => {},
+  connect: async () => ({ ok: true, value: { connectionId: 'recent', snapshot: coreSnapshot({ versionsRevision: 0 }) } }),
+  request: async () => ({ ok: true, value: { revision: 0, total: 0, offset: 0, items: [] } }),
+  cancel: async () => ({ ok: true, value: undefined }),
+  disconnect: async () => ({ ok: true, value: undefined })
+} } } })
+test.after(() => {
+  disposeCoreConnection()
+  if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+  else Reflect.deleteProperty(globalThis, 'window')
+})
 
 const {
   createUnifiedRecentTrackResolver,

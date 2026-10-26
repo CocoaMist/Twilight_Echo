@@ -6,12 +6,14 @@ import vm from 'node:vm'
 import { compileTemplate, parse } from '@vue/compiler-sfc'
 import { computed, effectScope, ref, shallowRef, toRaw } from 'vue'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
-import { enrichLocalTrackMetadata } from '../../utils/musicMetadataMatching.ts'
-import { libraryDirectoriesForFiles } from '../../utils/libraryScanDirectories.ts'
+import { CoreMetadataService } from '../../../../core/library/metadataService.ts'
+import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
 import { filterLocalGridItems } from '../../utils/localLibrarySearch.ts'
 import { libraryTrackQuery } from '../../utils/libraryTrackQuery.ts'
 import { createDefaultLibraryViewState } from '../../utils/libraryViewPreferences.ts'
 import { LIBRARY_MAX_PAGE_SIZE } from '../../../../shared/libraryDatabase.ts'
+import { LIBRARY_PAGE_SIZE } from '../../../../shared/libraryDatabase.ts'
+import { addSelectionRange } from '../../../../shared/librarySelectionRanges.ts'
 import { normalizeLibraryPath } from '../../../../shared/libraryIdentity.ts'
 import { toPlaylistTrackSnapshot } from '../../stores/library/musicStoreData.ts'
 import { useTrackMultiSelect } from './useTrackMultiSelect.ts'
@@ -114,13 +116,14 @@ function fixture() {
     },
     databasePageState: shallowRef({
       requestedPage: 2,
-      page: { versions: { 420: 1 }, offset: 400, revision: 7 }
+      page: { versions: { 420: 1 }, offset: 400, revision: 7, tracks: [track], definitionIds: ['old-id'] }
     }),
     visibleRange: ref({ start: 404, end: 426 }),
     isAlbumDetail: ref(false),
     prepareLocalTracksForRemoval: async (...args) => calls.push(['prepare', ...clone(args)]),
     notifyLocalTracksUnavailable: (...args) => calls.push(['unavailable', ...clone(args)]),
     window: {
+      alert: (message) => calls.push(['alert', message]),
       api: {
         library: {
           database: {
@@ -137,7 +140,76 @@ function fixture() {
         }
       }
     },
-    repairMessage: ref('')
+    // The migrated reads go through the Core library api; the fake backend
+    // stays on the window.api stubs so tests keep asserting request payloads.
+    libraryApi: {
+      queryTracks: async (query) => context.window.api.library.database.queryTracks(query)
+    },
+    libraryTrack,
+    repairMessage: ref(''),
+    // The migrated removal path talks to Core: a selection lease plus one
+    // library.remove command. Tests override context.selectionRows and
+    // context.libraryRemoval to shape the fake backend.
+    selectionRows: [{ track, definitionId: track.id, version: 1, instance: 17 }],
+    selectionTotal: 100000,
+    selectionApi: {
+      open: async (request) => {
+        calls.push(['selection-open', clone(request)])
+        return {
+          id: 'sel-1',
+          revision: 7,
+          total: context.selectionTotal,
+          selectedCount: context.selectionRows.length,
+          localTrackCount: context.selectionRows.length,
+          fileCount: context.selectionRows.length
+        }
+      },
+      page: async (id, cursor, projection) => {
+        const size = projection === 'files' ? LIBRARY_MAX_PAGE_SIZE : LIBRARY_PAGE_SIZE
+        const rows = context.selectionRows.slice(cursor ?? 0, (cursor ?? 0) + size)
+        return {
+          revision: 7,
+          total: context.selectionRows.length,
+          rows,
+          nextCursor: (cursor ?? 0) + rows.length < context.selectionRows.length ? (cursor ?? 0) + rows.length : null
+        }
+      },
+      close: async () => calls.push(['selection-close'])
+    },
+    libraryRemoval: async (payload) => {
+      calls.push(['library-remove', clone(payload)])
+      return {
+        revision: 10,
+        // Core dedupes removals by physical file: CUE rows sharing one file
+        // are one removed track in the reply.
+        removedTrackIds: [
+          ...new Map(
+            context.selectionRows.map((row) => [normalizeLibraryPath(row.track.filePath), row])
+          ).values()
+        ].map((row) => row.track.id),
+        removedFileCount: new Set(
+          context.selectionRows.map((row) => normalizeLibraryPath(row.track.filePath))
+        ).size,
+        failures: []
+      }
+    },
+    core: {
+      command: async (name, payload, signal) => {
+        if (name === 'library.remove') return context.libraryRemoval(payload)
+        if (name === 'library.selection.close') return null
+        if (name === 'metadata.apply')
+          return context.metadataService.apply(payload.token, payload.index, signal)
+        throw new Error('unexpected core command ' + name)
+      },
+      query: async (name, payload) => {
+        if (name === 'metadata.candidates')
+          return context.metadataService.find(payload.id, payload.version)
+        throw new Error('unexpected core query ' + name)
+      }
+    },
+    refreshLibraryIndex: async () => {
+      calls.push(['refreshLibraryIndex'])
+    }
   })
   install(context, [
     'databasePageForTrack',
@@ -146,6 +218,7 @@ function fixture() {
     'tableTrackKey',
     'playlistDefinitionTrack',
     'snapshotSelectedTableTrack',
+    'trackVersion',
     'playTableTrack',
     'playAllTracks',
     'shufflePlayTracks',
@@ -155,17 +228,35 @@ function fixture() {
     'removeDatabaseSelectionFiles',
     'handleMetadataRematch'
   ])
+  // Mirror the production database-mode entry: positions become Core
+  // selection ranges, the lease carries the selectionId used by the removal
+  // command, and a real AbortSignal flows through (production functions call
+  // signal.throwIfAborted()). Evicted rows resolve through the retained
+  // selectedTableRows metadata, exactly like production captureActionSource.
   context.removeDatabaseFiles = async (selected, mode) => {
-    const lease = await createSongListActionSource({
-      rows: selected.map((track) => ({
-        track,
-        definitionId: track.id,
-        version: context.selectedTableRows.get(track)?.version ?? 1,
-        instance: 17
-      }))
-    }).open()
+    let ranges = []
+    for (const item of selected) {
+      const position = context.positionsFor
+        ? context.positionsFor(item)
+        : (context.selectedTableRows.get(toRaw(item))?.position ??
+          context.tableRowPositions.value.get(toRaw(item)))
+      assert.ok(position !== undefined, 'selection position missing')
+      ranges = addSelectionRange(ranges, position, position + 1)
+    }
+    const source = createSongListActionSource({
+      api: context.selectionApi,
+      request: {
+        query: {
+          ...JSON.parse(JSON.stringify(context.databaseQuery.value)),
+          contentRevision: context.databasePageState.value.page?.revision ?? 0
+        },
+        total: context.selectionTotal,
+        ranges
+      }
+    })
+    const lease = await source.open()
     try {
-      await context.removeDatabaseSelectionFiles(lease, mode, { aborted: false })
+      await context.removeDatabaseSelectionFiles(lease, mode, new AbortController().signal)
     } finally {
       await lease.close()
     }
@@ -199,7 +290,7 @@ test('page row, play-all, shuffle and bookmarks use the complete query, never th
   assert.deepEqual(commands[3][3], { positionSeconds: 12.5 })
 })
 
-test('cross-page file removal uses bounded unique-file batches and stops on an unknown later outcome', async () => {
+test('cross-page removal sends one Core command per selection; CUE duplicates share one position and unknown outcomes are not replayed', async () => {
   const f = fixture()
   const selected = Array.from({ length: 2100 }, (_, index) => ({
     ...f.track,
@@ -207,44 +298,54 @@ test('cross-page file removal uses bounded unique-file batches and stops on an u
     filePath: `D:/Music/${index}.flac`
   }))
   selected.push({ ...selected[0], id: 'cue-duplicate', filePath: 'd:\\music\\0.flac' })
+  // Positions drive the Core selection ranges: the CUE duplicate resolves to
+  // the same physical row as its source occurrence.
+  f.context.positionsFor = (item) => Number(item.filePath.match(/(\d+)\.flac/)[1])
   let attempts = 0
-  f.context.window.api.library.database.removeFiles = async (request) => {
+  f.context.libraryRemoval = async (payload) => {
     attempts++
-    assert.ok(request.items.length <= LIBRARY_MAX_PAGE_SIZE)
+    f.calls.push(['library-remove', clone(payload)])
+    assert.deepEqual(Object.keys(payload), ['selectionId', 'mode'])
     return {
-      mode: request.mode,
-      metadata: { revision: 10 + attempts },
-      removedTrackIds: request.items.map((track) => track.id),
-      removedFilePaths: request.items.map((track) => track.filePath),
+      revision: 10 + attempts,
+      // Core removes physical files: CUE rows sharing d:/music/0.flac are one
+      // removed track in the reply.
+      removedTrackIds: [
+        ...new Map(selected.map((track) => [normalizeLibraryPath(track.filePath), track])).values()
+      ].map((track) => track.id),
+      removedFileCount: 2100,
       failures: []
     }
   }
   await f.context.removeDatabaseFiles(selected, 'trash')
-  assert.equal(attempts, 11)
-  assert.equal(
-    f.calls.filter((call) => call[0] === 'unavailable').reduce((n, call) => n + call[2].length, 0),
-    2100,
-    'CUE/duplicate occurrences share one physical operation'
+  assert.equal(attempts, 1, 'one command covers the whole selection')
+  const open = f.calls.find((call) => call[0] === 'selection-open')
+  assert.deepEqual(open[1].ranges, [[0, 2100]], 'adjacent rows merge into one range')
+  assert.equal(f.context.repairMessage.value, '移到回收站 2100 首')
+  assert.deepEqual(
+    f.calls.map((call) => call[0]),
+    ['selection-open', 'library-remove', 'refresh', 'selection-close'],
+    'the lease closes in a finally after the successful view invalidation'
   )
-  assert.equal(f.calls.filter((call) => call[0] === 'prepare').length, 11)
-  assert.equal(f.calls.filter((call) => call[0] === 'unavailable').length, 11)
+  assert.deepEqual(
+    f.calls.find((call) => call[0] === 'refresh'),
+    ['refresh', 11],
+    'the view invalidates with the revision from the removal reply'
+  )
   attempts = 0
-  f.context.window.api.library.database.removeFiles = async (request) => {
-    if (++attempts === 2) throw new Error('reply lost')
-    return {
-      mode: request.mode,
-      metadata: { revision: 20 },
-      failures: [],
-      removedTrackIds: request.items.map((track) => track.id),
-      removedFilePaths: request.items.map((track) => track.filePath)
-    }
+  f.context.libraryRemoval = async () => {
+    attempts++
+    throw new Error('reply lost')
   }
-  await assert.rejects(
-    f.context.removeDatabaseFiles(selected, 'library'),
-    /已确认移除 200 首.*reply lost/
+  await assert.rejects(f.context.removeDatabaseFiles(selected, 'library'), /reply lost/)
+  assert.equal(attempts, 1, 'an unknown outcome is never automatically replayed')
+  assert.ok(
+    !f.calls.some(
+      (call) =>
+        call[0] === 'refresh' && call !== f.calls.find((c) => c[0] === 'refresh' && c[1] === 11)
+    ),
+    'a failed removal must not invalidate the view'
   )
-  assert.equal(attempts, 2, 'neither replay the unknown batch nor start later batches')
-  assert.deepEqual(f.calls.at(-1), ['refresh', undefined])
 })
 
 function selectionFixture(t) {
@@ -289,6 +390,10 @@ test('production selection bindings retain compact CUE occurrence identity off-p
   f.context.tableEntryIds.value = new Map([[first, '0']])
   f.context.tableRowPositions.value = new Map([[first, 400]])
   f.context.tableTracks.value = [first]
+  f.context.databasePageState.value = {
+    requestedPage: 2,
+    page: { versions: { 420: 1 }, offset: 400, revision: 7, tracks: [first], definitionIds: ['old-id'] }
+  }
   f.multi.toggle('view:0', 0)
   f.context.databasePageState.value = { requestedPage: 3, page: null }
   f.context.tableEntryIds.value = new Map()
@@ -300,23 +405,27 @@ test('production selection bindings retain compact CUE occurrence identity off-p
   f.context.databaseWindowPages.value = [{ offset: 600 }]
   f.context.databasePageState.value = {
     requestedPage: 3,
-    page: { offset: 600, revision: 7, versions: { 420: 1 } }
+    page: { offset: 600, revision: 7, versions: { 420: 1 }, tracks: [duplicate], definitionIds: ['old-duplicate'] }
   }
   f.context.tableTracks.value = [duplicate]
   f.multi.toggle('view:5', 0)
   const selected = f.multi.getSelectedTracks()
   assert.equal(selected.length, 2)
-  assert.deepEqual(selected.map(f.context.tableTrackKey), ['view:0', 'view:5'])
+  assert.deepEqual(
+    selected.map(f.context.tableTrackKey),
+    ['view:0', 'view:5'],
+    'keys=' + JSON.stringify(selected.map(f.context.tableTrackKey)) + ' entries=' + JSON.stringify([...f.context.tableEntryIds.value.keys()].map(() => 'obj')) + ' playlist=' + JSON.stringify(f.context.databasePlaylistState.value)
+  )
   assert.deepEqual(
     selected.map((track) => f.context.playlistDefinitionTrack(ref(track).value).id),
     ['old-id', 'old-duplicate']
   )
   assert.ok(selected.every((track) => track.id === '420'))
   for (const track of selected) {
-    assert.equal(track.lyrics, null)
-    assert.equal(track.translatedLyrics, undefined)
-    assert.equal(track.bpmAnalysis, undefined)
-    assert.equal(track.custom, undefined)
+    // The migrated boundary keeps SongList off playlist snapshot records
+    // (SongListSelectionActions forbids toPlaylistTrackSnapshot): retained
+    // selected rows are the row payload minus embedded cover data, while the
+    // CUE occurrence identity above is what off-page actions still read.
     assert.equal(track.cover, null)
     assert.equal(track.coverSmall, undefined)
     assert.deepEqual(clone(track.cueRange), { startSeconds: 10, endSeconds: 30 })
@@ -357,37 +466,35 @@ test('locate checks SQL even when the current song is not loaded; continuous row
   assert.equal(f.context.trackListNumber({ ...f.track, trackNumber: 9 }, 2), 9)
 })
 
-test('page deletion submits selected identities without any full-library snapshot, and releases the renderer before trash', async () => {
+test('page deletion sends one selection-scoped Core command and updates the view only on success', async () => {
   const f = fixture()
   await f.context.removeDatabaseFiles([f.track], 'trash')
-  assert.equal(f.calls[0][0], 'prepare')
-  assert.deepEqual(f.calls[1], [
-    'remove',
-    {
-      mode: 'trash',
-      items: [
-        {
-          id: '420',
-          filePath: f.track.filePath,
-          title: f.track.title,
-          artist: f.track.artist,
-          expectedVersion: 1,
-          expectedInstance: 17
-        }
-      ]
-    }
-  ])
-  assert.deepEqual(f.calls[2], ['unavailable', ['420', '421'], [f.track.filePath]])
-  assert.deepEqual(f.calls[3], ['refresh', 10])
-  f.context.window.api.library.database.removeFiles = async () => {
+  const open = f.calls.find((call) => call[0] === 'selection-open')
+  assert.deepEqual(open[1].ranges, [[400, 401]], 'the selection carries row positions, never row payloads')
+  assert.deepEqual(f.calls.find((call) => call[0] === 'library-remove')[1], {
+    selectionId: 'sel-1',
+    mode: 'trash'
+  })
+  assert.equal(f.context.repairMessage.value, '移到回收站 1 首')
+  assert.deepEqual(
+    f.calls.map((call) => call[0]),
+    ['selection-open', 'library-remove', 'refresh', 'selection-close'],
+    'selection-open → library-remove → refresh(revision) → selection-close in a finally'
+  )
+  assert.deepEqual(f.calls.find((call) => call[0] === 'refresh'), ['refresh', 10])
+  f.context.libraryRemoval = async () => {
     throw new Error('reply lost')
   }
   await assert.rejects(f.context.removeDatabaseFiles([f.track], 'library'), /reply lost/)
-  assert.deepEqual(f.calls.at(-1), ['refresh', undefined])
   assert.equal(
-    f.calls.filter((call) => call[0] === 'remove').length,
+    f.calls.filter((call) => call[0] === 'library-remove').length,
     1,
     'unknown outcome must not be automatically replayed'
+  )
+  assert.equal(
+    f.calls.filter((call) => call[0] === 'refresh').length,
+    1,
+    'a failed removal must not invalidate the view'
   )
 })
 
@@ -409,25 +516,30 @@ test('metadata matching patches only changed fields with the selected version an
     album: '新专辑',
     lyrics: '词'
   }
-  Object.assign(f.context, {
-    syncPluginProviders: async () => {},
-    searchMetadataTracks: async () => [provider],
-    buildMetadataMatchCandidates: () => [
-      { track: provider, confidence: 'high', score: 100, sourceLabel: 'Provider' }
-    ],
-    enrichLocalTrackMetadata,
-    settingsStore: {
-      settings: ref({ cachePolicy: { metadata: true, lyrics: true, cover: true } })
+  // The migrated rematch path asks Core for version-fenced candidates and
+  // applies one by token; Core owns the patch shape and the conflict fence.
+  const patches = []
+  let tokens = 0
+  f.context.metadataService = new CoreMetadataService({
+    database: {
+      queryTracks: (query) => db.queryTracks(query),
+      getTracksByIds: (ids) => db.getTracksByIds(ids),
+      patchTracks: async (entries) => {
+        patches.push(clone(entries))
+        return db.patchTracks(entries)
+      }
     },
-    applyTrackMetadataMatch() {
-      throw new Error('legacy full-library save')
+    provider: { searchSongs: async () => ({ items: [provider] }) },
+    available: () => true,
+    policy: () => ({ metadata: true, lyrics: true, cover: true }),
+    now: () => 0,
+    newId: () => 'candidate-' + ++tokens,
+    changed: () => {},
+    libraryChanged: () => {},
+    failed: (error) => {
+      throw error
     }
   })
-  const patches = []
-  f.context.window.api.library.database.patchTracks = async (entries) => {
-    patches.push(clone(entries))
-    return db.patchTracks(entries)
-  }
   await f.context.handleMetadataRematch(f.track)
   assert.equal(patches[0][0].expectedVersion, 1)
   assert.equal(patches[0][0].patch.filePath, undefined)
@@ -435,7 +547,8 @@ test('metadata matching patches only changed fields with the selected version an
   assert.equal(db.getTracksByIds(['420']).tracks[0].artist, '周杰伦')
   assert.deepEqual(db.getTracksByIds(['420']).tracks[0].custom, { keep: true })
   await f.context.handleMetadataRematch(f.track)
-  assert.match(f.context.repairMessage.value, /changed concurrently/)
+  assert.match(f.context.repairMessage.value, /曲目已变化/)
+  assert.equal(patches.length, 1, 'a rejected rematch never dispatches a second patch')
   assert.equal(db.getTracksByIds(['420']).versions['420'], 2)
 })
 
@@ -443,8 +556,22 @@ test('a continuous cross-page window uses each row occurrence and version, inclu
   const f = fixture()
   const secondary = { ...f.track, id: '421', title: 'Secondary' }
   const pages = [
-    { offset: 0, revision: 7, tracks: [f.track], entryIds: ['0'], versions: { 420: 1 } },
-    { offset: 200, revision: 7, tracks: [secondary], entryIds: ['5'], versions: { 421: 9 } }
+    {
+      offset: 0,
+      revision: 7,
+      tracks: [f.track],
+      entryIds: ['0'],
+      definitionIds: ['old-id'],
+      versions: { 420: 1 }
+    },
+    {
+      offset: 200,
+      revision: 7,
+      tracks: [secondary],
+      entryIds: ['5'],
+      definitionIds: ['old-secondary'],
+      versions: { 421: 9 }
+    }
   ]
   f.context.databaseWindowPages.value = pages
   f.context.databasePages.pageForTrack = (track) =>
@@ -468,18 +595,31 @@ test('a continuous cross-page window uses each row occurrence and version, inclu
     '421',
     {}
   ])
-  Object.assign(f.context, {
-    syncPluginProviders: async () => {},
-    searchMetadataTracks: async () => [{ ...secondary, artist: 'Updated' }],
-    buildMetadataMatchCandidates: (_track, candidates) => [{ track: candidates[0] }],
-    enrichLocalTrackMetadata,
-    settingsStore: { settings: ref({ cachePolicy: { metadata: true } }) }
-  })
+  // The edit path asks Core for version-fenced candidates; Core re-reads the
+  // authoritative record and fences the patch on the secondary row version.
   const patches = []
-  f.context.window.api.library.database.patchTracks = async (entries) => {
-    patches.push(clone(entries))
-    return { updated: ['421'] }
-  }
+  let tokens = 0
+  const secondaryRecord = { ...secondary }
+  f.context.metadataService = new CoreMetadataService({
+    database: {
+      queryTracks: async () => ({ tracks: [secondaryRecord], versions: { 421: 9 }, total: 1 }),
+      getTracksByIds: async () => ({ tracks: [secondaryRecord], versions: { 421: 9 }, total: 1 }),
+      patchTracks: async (entries) => {
+        patches.push(clone(entries))
+        return { updated: ['421'] }
+      }
+    },
+    provider: { searchSongs: async () => ({ items: [{ ...secondary, artist: 'Updated' }] }) },
+    available: () => true,
+    policy: () => ({ metadata: true, lyrics: true, cover: true }),
+    now: () => 0,
+    newId: () => 'candidate-' + ++tokens,
+    changed: () => {},
+    libraryChanged: () => {},
+    failed: (error) => {
+      throw error
+    }
+  })
   await f.context.handleMetadataRematch(ref(secondary).value)
   assert.equal(patches[0][0].id, '421')
   assert.equal(
@@ -495,89 +635,62 @@ test('an evicted explicit selection retains its removal version rather than auth
   f.context.tableTracks.value = []
   f.context.databasePageState.value = { page: null }
   await f.context.removeDatabaseFiles([selected], 'library')
-  const sent = f.calls.find((call) => call[0] === 'remove')[1].items[0]
-  assert.equal(sent.expectedVersion, 1)
-  assert.equal(sent.id, f.track.id)
+  const open = f.calls.find((call) => call[0] === 'selection-open')
+  assert.deepEqual(open[1].ranges, [[400, 401]], 'the evicted snapshot retains its position')
+  const sent = f.calls.find((call) => call[0] === 'library-remove')[1]
+  assert.deepEqual(
+    Object.keys(sent),
+    ['selectionId', 'mode'],
+    'the command authorizes the retained selection lease, never a client-side metadata snapshot'
+  )
+  assert.deepEqual(clone(f.context.selectedTableRows.get(selected)), {
+    key: '420',
+    definitionId: '420',
+    version: 1,
+    position: 400
+  })
 })
 
-function tagFixture(mode = 'sqlite') {
+function tagFixture() {
   const f = fixture()
+  // The migrated tag write path owns no directory scan: Core performs the
+  // affected-directory reindex (covered core-side); the renderer refreshes the
+  // library index and reports, and the pending recheck notice is retired state.
   Object.assign(f.context, {
-    libraryStorage: { mode: ref(mode), error: ref('mode read failed'), load: async () => {} },
     pendingTagRecheckPaths: ref([]),
-    tagRecheckPending: ref(false),
-    libraryDirectoriesForFiles,
-    scanLibraryDirectories: async (request) => {
-      f.calls.push(['scoped', clone(request)])
-      return { state: 'completed' }
-    },
-    applyLocalTagWrite: (...args) => {
-      f.calls.push(['legacy-tags', ...clone(args)])
-      return 2
-    }
+    tagRecheckPending: ref(false)
   })
-  vm.runInContext('let tagRecheckGeneration = 0', f.context)
   install(f.context, ['applyTagManagerWrite', 'recheckWrittenTags'])
   return f
 }
 
-test('tag writes check only affected parent directories and never unexclude or start a whole-library scan', async () => {
+test('tag writes refresh the Core library index and never touch legacy write or scan seams', async () => {
   const f = tagFixture()
-  await f.context.applyTagManagerWrite(
-    ['D:/Music/a/one.wav', 'D:/Music/a/two.wav', 'D:/Music/b/three.wav'],
-    { title: 'Edited' }
-  )
-  assert.deepEqual(f.calls, [
-    ['scoped', { directories: ['D:/Music/a', 'D:/Music/b'], reason: 'tags' }]
-  ])
+  await f.context.applyTagManagerWrite(['420', '421'], { title: 'Edited' })
+  assert.deepEqual(f.calls, [['refreshLibraryIndex']])
   assert.equal(f.context.pendingTagRecheckPaths.value.length, 0)
-  assert.equal(f.context.repairMessage.value, '标签检查已完成')
+  assert.equal(f.context.repairMessage.value, '标签已更新')
 })
 
-test('a second tag write during a check stays pending; explicit retry checks all affected directories', async () => {
+test('an explicit tag recheck refreshes the index again and clears the pending recheck paths', async () => {
   const f = tagFixture()
-  let release
-  f.context.scanLibraryDirectories = (request) => {
-    f.calls.push(['scoped', clone(request)])
-    return new Promise((resolve) => {
-      release = resolve
-    })
-  }
-  const first = f.context.applyTagManagerWrite(['D:/Music/a/one.wav'], { title: 'One' })
-  await Promise.resolve()
-  await f.context.applyTagManagerWrite(['D:/Music/b/two.wav'], { title: 'Two' })
-  release({ state: 'completed' })
-  await first
-  assert.equal(f.context.pendingTagRecheckPaths.value.length, 2)
-  assert.equal(f.context.tagRecheckPending.value, false)
-  f.context.scanLibraryDirectories = async (request) => {
-    f.calls.push(['retry', clone(request)])
-    return { state: 'completed' }
-  }
+  f.context.pendingTagRecheckPaths.value = ['D:/Music/a/one.wav', 'D:/Music/b/two.wav']
   await f.context.recheckWrittenTags()
-  assert.deepEqual(f.calls.at(-1), [
-    'retry',
-    { directories: ['D:/Music/a', 'D:/Music/b'], reason: 'tags' }
-  ])
+  assert.deepEqual(f.calls, [['refreshLibraryIndex']])
   assert.equal(f.context.pendingTagRecheckPaths.value.length, 0)
 })
 
-test('tag recheck admission failures keep an explicit retry, and discovery failure never selects the JSON write path', async () => {
+test('a failed tag index refresh rejects the write without legacy write fallbacks', async () => {
   const f = tagFixture()
-  f.context.scanLibraryDirectories = async () => {
+  f.context.refreshLibraryIndex = async () => {
+    f.calls.push(['refreshLibraryIndex'])
     throw new Error('曲库扫描正在运行')
   }
-  await f.context.applyTagManagerWrite(['D:/Music/a/one.wav'], { title: 'One' })
-  assert.match(f.context.repairMessage.value, /扫描正在运行.*当前扫描结束后重试/)
-  assert.equal(f.context.pendingTagRecheckPaths.value.length, 1)
-  assert.equal(f.context.tagRecheckPending.value, false)
-  const unknown = tagFixture(null)
-  await unknown.context.applyTagManagerWrite(['D:/Music/a/one.wav'], { title: 'One' })
-  assert.deepEqual(unknown.calls, [])
-  assert.match(unknown.context.repairMessage.value, /无法确认曲库存储/)
-  const legacy = tagFixture('json')
-  await legacy.context.applyTagManagerWrite(['D:/Music/a/one.wav'], { title: 'One' })
-  assert.deepEqual(legacy.calls, [['legacy-tags', ['D:/Music/a/one.wav'], { title: 'One' }]])
+  await assert.rejects(
+    f.context.applyTagManagerWrite(['420'], { title: 'One' }),
+    /曲库扫描正在运行/
+  )
+  assert.deepEqual(f.calls, [['refreshLibraryIndex']])
 })
 
 test('database collection grids consume summaries without touching compatibility collections or re-filtering missing members', () => {
@@ -764,6 +877,19 @@ test('playlist playback freezes the full query and selects the exact occurrence;
     [f.track, '0'],
     [duplicate, '5']
   ])
+  // The loaded page carries both occurrences with their entry/definition ids,
+  // so playback and edits resolve the exact row, not the first row sharing an id.
+  f.context.databasePageState.value = {
+    requestedPage: 2,
+    page: {
+      versions: { 420: 1 },
+      offset: 400,
+      revision: 7,
+      tracks: [f.track, duplicate],
+      entryIds: ['0', '5'],
+      definitionIds: ['old-id', 'old-duplicate']
+    }
+  }
   f.context.databasePlaylistState.value = { id: 'view' }
   f.context.databaseQuery.value = { playlistView: 'view', sort: 'playlist' }
   f.context.currentPlaylist.value = {

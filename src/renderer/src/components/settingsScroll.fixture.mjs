@@ -139,7 +139,10 @@ window.runSettingsScrollTests = async () => {
           })
         : null
   })
-  app.mount('#app')
+  app.config.errorHandler = (error) => {
+  console.error(error && error.stack ? error.stack : error)
+}
+app.mount('#app')
   await settle()
   const page = document.querySelector('.settings-preview-page')
   const sections = [...page.querySelectorAll('.preview-section')]

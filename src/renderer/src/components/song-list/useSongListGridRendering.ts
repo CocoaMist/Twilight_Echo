@@ -191,7 +191,7 @@ export function useSongListGridRendering<T extends GridItem = GridItem>({
     const columns = template.split(/\s+/).filter(Boolean).length
     if (columns > 0) gridColumns.value = columns
     const firstCard = grid.querySelector<HTMLElement>(
-      '.artist-card, .album-card, .playlist-card, .aggregate-card'
+      '.artist-card, .album-card, .genre-card, .playlist-card, .aggregate-card'
     )
     if (
       typeof ResizeObserver !== 'undefined' &&

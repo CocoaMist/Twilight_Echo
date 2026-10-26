@@ -14,6 +14,7 @@ import {
   type LibraryQueuePage,
   type LibraryQueueSnapshot
 } from '../../../../shared/libraryDatabase.ts'
+import type { CoreQueuePage } from '../../../../shared/coreViews.ts'
 import {
   getPlaybackQueueWindow,
   getPlaybackQueueScrollTopForIndex,
@@ -55,7 +56,7 @@ export function libraryQueueScrollGeometry(
 export function useLibraryQueueViewport(options: {
   snapshot: Readonly<Ref<LibraryQueueSnapshot | null>>
   contentRevision: Readonly<Ref<number>>
-  readPage: (page: number) => Promise<LibraryQueuePage | null>
+  readPage: (page: number) => Promise<LibraryQueuePage | CoreQueuePage | null>
 }) {
   const containerRef = ref<HTMLElement | null>(null)
   const scrollTop = ref(0),
@@ -144,12 +145,12 @@ export function useLibraryQueueViewport(options: {
             pages.value = new Map()
           }
           if (!desiredPages.value.includes(page)) return
-          const rows: LibraryQueueRow[] = result.items.map((item) => ({
+          const rows: LibraryQueueRow[] = result.items.map((item): LibraryQueueRow => ({
             index: item.position,
             queueEntryId: item.queueEntryId,
             id: item.track?.id ?? '',
             title: item.track
-              ? String(item.track.title ?? item.track.fileName ?? item.track.id)
+              ? String(item.track.title ?? ('fileName' in item.track ? item.track.fileName : null) ?? item.track.id)
               : '曲目已从曲库移除',
             artist: item.track ? String(item.track.artist ?? '未知艺术家') : '可从队列移除',
             cover: typeof item.track?.cover === 'string' ? item.track.cover : null,
@@ -182,7 +183,11 @@ export function useLibraryQueueViewport(options: {
   }
 
   function updateViewport(): void {
-    viewportHeight.value = containerRef.value?.clientHeight || 324
+    const container = containerRef.value
+    if (!container) return
+    const style = getComputedStyle(container)
+    viewportHeight.value =
+      container.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
   }
 
   function onScroll(event: Event): void {

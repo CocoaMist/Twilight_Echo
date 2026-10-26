@@ -29,6 +29,7 @@ const fields = [
   'coverSmallSource',
   'coverSource',
   'source',
+  'sourceSelection',
   'ncmSongId',
   'networkSource',
   'audioFingerprint',

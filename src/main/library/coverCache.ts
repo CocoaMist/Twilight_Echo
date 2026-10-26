@@ -141,6 +141,7 @@ export function getCoverCacheContentType(fileName: string): string {
 /** Extract cover from image buffer, resize, save to disk cache. Returns cover:// handle.
  *  Also generates a tiny pre-blurred version for background use. */
 export function cacheCoverFromBuffer(data: Buffer): string | null {
+  if (coverMaintenance) return null
   try {
     const img = nativeImage.createFromBuffer(data)
     if (img.isEmpty()) return null
@@ -195,6 +196,25 @@ export function resizeCoverImageBytes(
 
 const MAX_NORMALIZED_COVER_HANDLES = 4096
 const normalizedCoverHandles = new Map<string, Promise<string>>()
+const normalizingCovers = new Set<Promise<string>>()
+let coverMaintenance: Promise<void> | null = null
+
+export async function maintainCoverCache<T>(action: () => Promise<T>): Promise<T> {
+  if (coverMaintenance) throw new Error('Cover maintenance is already running')
+  let release!: () => void
+  coverMaintenance = new Promise((resolve) => {
+    release = resolve
+  })
+  normalizedCoverHandles.clear()
+  try {
+    await Promise.allSettled([...normalizingCovers])
+    return await action()
+  } finally {
+    normalizedCoverHandles.clear()
+    coverMaintenance = null
+    release()
+  }
+}
 
 /**
  * The scan worker has no nativeImage, so it writes embedded/folder art at its
@@ -204,9 +224,12 @@ const normalizedCoverHandles = new Map<string, Promise<string>>()
  * memoized so albums sharing one picture decode it once.
  */
 export function normalizeCachedCoverHandle(handle: string): Promise<string> {
+  if (coverMaintenance) return coverMaintenance.then(() => normalizeCachedCoverHandle(handle))
   const memoized = normalizedCoverHandles.get(handle)
   if (memoized) return memoized
   const pending = normalizeCachedCoverHandleUncached(handle).catch(() => handle)
+  normalizingCovers.add(pending)
+  void pending.then(() => normalizingCovers.delete(pending))
   normalizedCoverHandles.delete(handle)
   normalizedCoverHandles.set(handle, pending)
   while (normalizedCoverHandles.size > MAX_NORMALIZED_COVER_HANDLES) {

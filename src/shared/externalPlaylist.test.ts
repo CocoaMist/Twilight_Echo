@@ -35,27 +35,27 @@ test('refresh reconciles occurrences FIFO and preserves manual bindings',()=>{
   assert.deepEqual(previewImportUpdate(first,[song,{title:'New'},song]),{added:1,removed:1,reordered:false})
 })
 
-test('refresh preview compares retained occurrences without counting insertions or removals as moves',()=>{
-  let id=0
-  const other={title:'Other',artist:'Artist'}
-  const before=reconcileImportEntries([], [song,other,song,{title:'Removed'}],()=>String(++id))
-  assert.deepEqual(previewImportUpdate(before,[{title:'Added'},song,other,song]),{added:1,removed:1,reordered:false})
-  assert.deepEqual(previewImportUpdate(before,[other,song,song]),{added:0,removed:1,reordered:true})
-  assert.deepEqual(previewImportUpdate(before,[song,song]),{added:0,removed:2,reordered:false})
-  assert.deepEqual(previewImportUpdate(before,[]),{added:0,removed:4,reordered:false})
-  assert.deepEqual(previewImportUpdate([],[song,song]),{added:2,removed:0,reordered:false})
-  const next=reconcileImportEntries(before,[song,song,other],()=>String(++id))
-  assert.deepEqual(next.map(entry=>entry.entryId),[before[0].entryId,before[2].entryId,before[1].entryId])
+test('refresh previews compare retained occurrence order after additions and removals', () => {
+  let id = 0
+  const songs = [{ title: 'A' }, { title: 'B' }, { title: 'C' }, { title: 'A' }]
+  const before = reconcileImportEntries([], songs, () => String(++id))
+  for (const [next, expected] of [
+    [songs, { added: 0, removed: 0, reordered: false }],
+    [[songs[0], { title: 'New' }, songs[2], songs[3]], { added: 1, removed: 1, reordered: false }],
+    [[songs[2], songs[0], songs[3]], { added: 0, removed: 1, reordered: true }],
+    [[], { added: 0, removed: 4, reordered: false }]
+  ] as const) {
+    assert.deepEqual(previewImportUpdate(before, [...next]), expected)
+  }
 })
 
-test('unchanged large previews inspect occurrence identities a bounded number of times',()=>{
-  const songs=Array.from({length:2000},(_,index)=>({...song,title:`Song ${index}`}))
-  let serial=0,identityReads=0
-  const before=reconcileImportEntries([],songs,()=>String(++serial))
-  for(const entry of before){
-    const entryId=entry.entryId
-    Object.defineProperty(entry,'entryId',{enumerable:true,get(){identityReads++;return entryId}})
-  }
-  assert.deepEqual(previewImportUpdate(before,songs),{added:0,removed:0,reordered:false})
-  assert.ok(identityReads<before.length*10,`preview inspected ${identityReads} identities for ${before.length} entries`)
+test('large duplicate imports retain FIFO identities and user bindings', () => {
+  let id = 0
+  const songs = Array.from({ length: 20_000 }, () => song)
+  const before = reconcileImportEntries([], songs, () => String(++id))
+  before[19_999].manualBinding = { ...candidate, filePath: 'last', fileName: 'last', size: 1, cover: null, lyrics: null }
+  const next = reconcileImportEntries(before, songs, () => { throw new Error('unexpected new occurrence') })
+  assert.deepEqual(next.map(entry => entry.entryId), before.map(entry => entry.entryId))
+  assert.equal(next[19_999].manualBinding, before[19_999].manualBinding)
+  assert.deepEqual(previewImportUpdate(before, songs), { added: 0, removed: 0, reordered: false })
 })

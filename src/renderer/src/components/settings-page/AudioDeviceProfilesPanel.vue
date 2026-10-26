@@ -6,6 +6,8 @@ import type {
 } from '../../../../shared/audioDeviceProfiles.ts'
 import { matchAudioDeviceProfile } from '../../../../shared/audioDeviceProfiles.ts'
 import AudioDeviceProfileEditor from '@renderer/components/settings-page/AudioDeviceProfileEditor.vue'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
+import type { CoreAudioProfileEdit } from '../../../../shared/coreAudio.ts'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 
 defineProps<{ compact?: boolean }>()
@@ -26,6 +28,17 @@ watch(
 const deleteTarget = ref('')
 const createButton = ref<HTMLButtonElement | null>(null)
 const outputStore = useAudioOutputDspStore()
+const core = useCoreConnection()
+let profileRevision = 0
+async function readProfiles() {
+  const state = await core.query('audio.profiles', {})
+  profileRevision = state.revision
+  return state.profiles
+}
+async function editProfiles(edit: CoreAudioProfileEdit['edit']) {
+  await core.command('audio.profiles.edit', { revision: profileRevision, edit })
+  return readProfiles()
+}
 let readSequence = 0
 let actionSequence = 0
 let unsubscribe: (() => void) | undefined
@@ -33,7 +46,7 @@ let unsubscribe: (() => void) | undefined
 async function refresh(): Promise<void> {
   const sequence = ++readSequence
   try {
-    const state = await window.api.audioEngine.getDeviceProfiles()
+    const state = await readProfiles()
     if (sequence === readSequence) snapshot.value = state
   } catch (reason) {
     if (sequence === readSequence) error.value = String(reason)
@@ -41,7 +54,7 @@ async function refresh(): Promise<void> {
 }
 
 onMounted(() => {
-  unsubscribe = window.api.audioEngine.onDeviceProfilesChanged(() => void refresh())
+  unsubscribe = watch(() => core.state.value?.audioRevision, () => void refresh())
   void refresh()
 })
 onUnmounted(() => {
@@ -97,18 +110,18 @@ function save(): void {
   if (!draft.value) return
   const profile = JSON.parse(JSON.stringify(draft.value)) as AudioDeviceProfile
   void run(
-    () => window.api.audioEngine.saveDeviceProfile(profile),
+    () => editProfiles({ kind: 'save', profile }),
     '档案已保存，选择应用后生效',
     true
   )
 }
 
 function apply(profile: AudioDeviceProfile): void {
-  void run(() => window.api.audioEngine.applyDeviceProfile(profile.id), `已应用 ${profile.name}`)
+  void run(() => editProfiles({ kind: 'apply', id: profile.id }), `已应用 ${profile.name}`)
 }
 
 function remove(profile: AudioDeviceProfile): void {
-  void run(() => window.api.audioEngine.deleteDeviceProfile(profile.id), '档案已删除')
+  void run(() => editProfiles({ kind: 'remove', id: profile.id }), '档案已删除')
   deleteTarget.value = ''
 }
 

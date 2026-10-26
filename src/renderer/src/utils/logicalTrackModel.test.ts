@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
+import { getTrackSource } from '../../../shared/trackSourceIdentity.ts'
 
-const { buildLogicalTracks, canShareTrackIdentity, getTrackSource } = (await import(
-  new URL('./logicalTrackModel.ts', import.meta.url).href
-)) as typeof import('./logicalTrackModel')
+const { buildLogicalTracks, canShareTrackIdentity } = createLogicalTrackModel(() => undefined)
 
 function track(overrides: Partial<Track> & Pick<Track, 'id' | 'title' | 'artist'>): Track {
   return {

@@ -99,6 +99,31 @@ export const nodeCatalog: Array<{
 
 export const channelLayouts: DspChannelLayout[] = ['mono', 'stereo', '5.1', '7.1']
 
+export const dspNodeCategories = ['均衡与校正', '动态处理', '声场与路由', '插件与监测'] as const
+export type DspNodeCategory = (typeof dspNodeCategories)[number]
+
+/** Groups processors by what they do to the signal, for pickers and inspectors. */
+export function dspNodeCategory(type: DspNodeType): DspNodeCategory {
+  if (['equalizer', 'dynamicEqualizer', 'convolver'].includes(type)) return '均衡与校正'
+  if (
+    [
+      'replayGain',
+      'gate',
+      'compressor',
+      'multibandCompressor',
+      'truePeakLimiter',
+      'loudnessContour'
+    ].includes(type)
+  )
+    return '动态处理'
+  if (['nativePlugin', 'vst3Plugin', 'meter'].includes(type)) return '插件与监测'
+  return '声场与路由'
+}
+
+export function nodeIcon(type: DspNodeType): string {
+  return nodeCatalog.find((item) => item.type === type)?.icon ?? 'pi pi-box'
+}
+
 export const dspNodeDescriptions: Record<DspNodeType, string> = {
   replayGain: '响度标准化 · 平衡不同曲目的音量',
   equalizer: '参数均衡 · 精细调整频率与音色',

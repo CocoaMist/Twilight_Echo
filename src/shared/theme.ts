@@ -187,9 +187,16 @@ export type ThemeLibraryDensity = 'comfortable' | 'compact'
 export type ThemeLibrarySelection = 'fill' | 'stroke'
 export type ThemeLibraryTitleOverlay = 'off' | 'on'
 export type ThemePlayerLayout = 'standard' | 'full-cover' | 'lyrics-focus' | 'split' | 'minimal'
+export type ThemePlayerBackdrop = 'follow' | 'cover-blur' | 'fluid' | 'solid' | 'image'
 export type ThemePlayerControls = 'standard' | 'pro'
 export type ThemePlayerTitleAlign = 'left' | 'center'
+export type ThemePlayerLyricsAlign = 'follow' | 'left' | 'center' | 'right'
+export type ThemePlayerLyricHighlight = 'minimal' | 'surface' | 'glow'
+export type ThemePlayerTimeStyle = 'pill' | 'minimal' | 'glass'
+export type ThemePlayerStageAlign = 'center' | 'top' | 'bottom'
 export type ThemePlayerProgressStyle = 'line' | 'ring' | 'solid' | 'spectrum'
+export type ThemeArtworkFrame = 'borderless' | 'subtle-ring' | 'glass-frame' | 'vinyl' | 'polaroid'
+export type ThemeArtworkSpin = 'off' | 'on'
 export type ThemeArtworkTransition = 'fade' | 'slide' | 'none'
 export type ThemeArtworkShadow = 'on' | 'off'
 export type ThemeEqualizerPanelStyle = 'neutral' | 'tinted' | 'glass'
@@ -243,11 +250,18 @@ export interface ThemeModes {
   }
   player?: {
     layout?: ThemePlayerLayout
+    backdrop?: ThemePlayerBackdrop
     controls?: ThemePlayerControls
     titleAlign?: ThemePlayerTitleAlign
+    lyricsAlign?: ThemePlayerLyricsAlign
+    lyricHighlight?: ThemePlayerLyricHighlight
+    timeStyle?: ThemePlayerTimeStyle
+    stageAlign?: ThemePlayerStageAlign
     progress?: ThemePlayerProgressStyle
   }
   artwork?: {
+    frame?: ThemeArtworkFrame
+    spin?: ThemeArtworkSpin
     transition?: ThemeArtworkTransition
     shadow?: ThemeArtworkShadow
   }
@@ -751,8 +765,28 @@ export function normalizeThemeModes(value: unknown): ThemeModes {
       'split',
       'minimal'
     ])
+    assignModeOption(player, 'backdrop', value.player.backdrop, [
+      'follow',
+      'cover-blur',
+      'fluid',
+      'solid',
+      'image'
+    ])
     assignModeOption(player, 'controls', value.player.controls, ['standard', 'pro'])
     assignModeOption(player, 'titleAlign', value.player.titleAlign, ['left', 'center'])
+    assignModeOption(player, 'lyricsAlign', value.player.lyricsAlign, [
+      'follow',
+      'left',
+      'center',
+      'right'
+    ])
+    assignModeOption(player, 'lyricHighlight', value.player.lyricHighlight, [
+      'minimal',
+      'surface',
+      'glow'
+    ])
+    assignModeOption(player, 'timeStyle', value.player.timeStyle, ['pill', 'minimal', 'glass'])
+    assignModeOption(player, 'stageAlign', value.player.stageAlign, ['center', 'top', 'bottom'])
     assignModeOption(player, 'progress', value.player.progress, [
       'line',
       'ring',
@@ -763,6 +797,14 @@ export function normalizeThemeModes(value: unknown): ThemeModes {
   }
   if (isRecord(value.artwork)) {
     const artwork: NonNullable<ThemeModes['artwork']> = {}
+    assignModeOption(artwork, 'frame', value.artwork.frame, [
+      'borderless',
+      'subtle-ring',
+      'glass-frame',
+      'vinyl',
+      'polaroid'
+    ])
+    assignModeOption(artwork, 'spin', value.artwork.spin, ['off', 'on'])
     assignModeOption(artwork, 'transition', value.artwork.transition, ['fade', 'slide', 'none'])
     assignModeOption(artwork, 'shadow', value.artwork.shadow, ['on', 'off'])
     if (Object.keys(artwork).length > 0) result.artwork = artwork

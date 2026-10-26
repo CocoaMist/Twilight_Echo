@@ -1,10 +1,8 @@
 /**
  * 播放进度采样策略（纯函数，便于单测）。
  *
- * 原生音频引擎可用时（nativePlaybackActive / 委托队列）由原生 time-pos
- * 驱动进度；兜底播放（HTMLAudio）时原生时钟与 <audio> timeupdate 双源竞争，
- * 会把真实采样误判为“倒带”而拒绝，最终进度冻结。因此兜底模式一律忽略原生
- * time-pos，只信任 <audio> timeupdate。
+ * 当前原生播放或委托队列使用原生 time-pos。未激活的本机引擎采样不能
+ * 覆盖冷恢复的暂停进度或外部投放设备的时钟。
  */
 export function shouldApplyNativeTimePosition(state: {
   nativePlaybackActive: boolean

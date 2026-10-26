@@ -50,7 +50,7 @@ export function useDspEditorWindow(onChange: (detached: boolean) => void) {
           background: var(--te-app-bg, #202024);
         }
         .dsp-editor-document body::before, .dsp-editor-document body::after { display: none; }
-        .dsp-editor-document .audio-workspace { height: 100dvh; padding: 24px 24px 0; }
+        .dsp-editor-document .audio-workspace { height: 100dvh; }
       `
       const sync = (): void => {
         if (opened.closed) return

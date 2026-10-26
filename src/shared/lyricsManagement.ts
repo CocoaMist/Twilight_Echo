@@ -1,5 +1,5 @@
 /**
- * Renderer-owned lyric choices live outside the library index so scanning a
+ * User lyric choices live outside the library index so scanning a
  * folder can never discard a user's timing correction or hand-edited text.
  */
 export type LyricSourcePreference = 'auto' | 'local' | 'provider' | 'amll' | 'manual'

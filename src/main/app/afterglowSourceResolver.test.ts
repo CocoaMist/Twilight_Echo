@@ -6,6 +6,17 @@ import {
 } from './afterglowSourceResolver.ts'
 import { protectProviderMedia, RemoteMediaGrantService } from '../security/remoteMediaGrants.ts'
 
+test('legacy Afterglow keeps accepting an already-resolved network cache path until the owner cutover', async () => {
+  assert.deepEqual(
+    await createAfterglowSourceResolver().resolve({
+      id: 'cached',
+      source: 'network',
+      filePath: 'D:/Cache/cached.flac'
+    }),
+    { source: 'D:/Cache/cached.flac', expiresAt: null }
+  )
+})
+
 test('local queue entries resolve without touching a provider', async () => {
   let calls = 0
   const resolver = createAfterglowSourceResolver({

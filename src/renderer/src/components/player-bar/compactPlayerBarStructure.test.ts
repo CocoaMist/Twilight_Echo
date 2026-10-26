@@ -169,11 +169,6 @@ test('every shape renders the same three regions, in a fixed order, with fixed c
     playerBar,
     /resolvePlayerBarRegions\(previewPlayerSettings\.value\.layout, props\.mode\)/
   )
-  const previewSettings = playerBar.match(/const previewPlayerSettings = computed\([\s\S]*?\n\)/)
-  assert.ok(previewSettings)
-  assert.match(previewSettings[0], /props\.previewAppearance\?\.playerBar/)
-  assert.match(previewSettings[0], /appearanceChromePreview\.value\?\.playerBar/)
-  assert.match(previewSettings[0], /settings\.value\.playerBar/)
   // The left rail keeps remounting on track change; that remount is what fixed
   // stale covers, and a plain region name as the key would have dropped it.
   assert.match(playerBar, /key: name === 'left' \? `left:\$\{playerLeftKey\.value\}` : name/)

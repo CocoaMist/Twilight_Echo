@@ -2,7 +2,7 @@ import type {
   LibraryDatabaseApi,
   LibraryCollectionPage
 } from '../../../../shared/libraryDatabase.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import type {
   LibrarySearchSnapshot,
   UnifiedLocalSearchPage
@@ -18,7 +18,7 @@ import {
 } from '../../utils/localStreamingSearch.ts'
 import { getTrackSearchBlob, normalizeSearchText } from '../../utils/localLibrarySearch.ts'
 import { searchUnifiedLocalPage, toSearchItem } from '../../utils/unifiedSearchSources.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 
 const cancelled = () => new DOMException('Search was cancelled', 'AbortError')
 type Operation = {

@@ -117,6 +117,49 @@ test('preview title chrome never reads private login state and live chrome retai
     scope.stop()
   }
 })
+test('preview player never reads the current track favorite and live player retains it', async () => {
+  const source = await readFile(new URL('./PlayerBar.vue', import.meta.url), 'utf8')
+  const bindings = source.slice(
+    source.indexOf('const favoriteButtonVisible ='),
+    source.indexOf('function reportBookmarkError')
+  )
+  const props = reactive({ preview: true })
+  const favorite = ref({ available: true, liked: true, loading: true })
+  let reads = 0
+  const buttons = runInNewContext(
+    `${bindings}\n;({favoriteButtonVisible,favoriteButtonLiked,favoriteButtonLoading,favoriteButtonTitle})`,
+    {
+      props,
+      computed,
+      currentFavorite: {
+        get value() {
+          reads++
+          return favorite.value
+        }
+      }
+    }
+  )
+  const assertPreview = (): void => {
+    assert.equal(buttons.favoriteButtonVisible.value, false)
+    assert.equal(buttons.favoriteButtonLiked.value, false)
+    assert.equal(buttons.favoriteButtonLoading.value, false)
+    assert.equal(buttons.favoriteButtonTitle.value, '喜欢')
+    assert.equal(reads, 0)
+  }
+  assertPreview()
+  props.preview = false
+  assert.equal(buttons.favoriteButtonVisible.value, true)
+  assert.equal(buttons.favoriteButtonLiked.value, true)
+  assert.equal(buttons.favoriteButtonLoading.value, true)
+  assert.equal(buttons.favoriteButtonTitle.value, '取消喜欢')
+  favorite.value = { available: false, liked: false, loading: false }
+  assert.equal(buttons.favoriteButtonVisible.value, false)
+  assert.equal(buttons.favoriteButtonLiked.value, false)
+  assert.equal(buttons.favoriteButtonLoading.value, false)
+  props.preview = true
+  reads = 0
+  assertPreview()
+})
 test('real window preview preserves controls, isolated drafts, hidden work and one contextual camera', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-window-preview-'))
   try {
@@ -179,7 +222,7 @@ test('real window preview preserves controls, isolated drafts, hidden work and o
           resolveId(source) {
             if (source === '/icon.png') return resolve('resources/icon.png')
             if (
-              /\/(useSettingsStore|useMusicStore|usePlayerStore|useThemeStore|useListeningStatsStore|useAudioOutputDspStore|useNcmStore|useAppNoticeStore|playbackBookmarks|lyricsManagement)(?:\.ts)?$/.test(
+              /\/(useSettingsStore|useMusicStore|usePlayerStore|useThemeStore|useListeningStatsStore|useAudioOutputDspStore|useNcmStore|useAppNoticeStore|playbackBookmarks|lyricsManagement|coreConnection)(?:\.ts)?$/.test(
                 source
               ) ||
               /\/extensions\/registry(?:\.ts)?$/.test(source)
@@ -581,7 +624,8 @@ const previewViewReady=(host,layered)=>{
 };
 const waitForPreviewView=(host,message,layered=preview.value.layeredView)=>waitFor(()=>previewViewReady(host,layered),message);
 const noExpandedNavigationHotspot=host=>!host.querySelector('[aria-label="调整侧边栏材质"]')||host.querySelector('[aria-label="调整侧边栏材质"]').getBoundingClientRect().width<=80;
-const actualElements=(scope,selector)=>[...scope.querySelectorAll(selector)].filter(element=>element.ownerDocument.defaultView.getComputedStyle(element).display!=='none'&&!element.closest('[data-appearance-material-context]')&&(!element.closest('[data-appearance-surface-key]')||element.closest('[data-appearance-detail]')));
+const actualDisplay=element=>element.ownerDocument.defaultView.getComputedStyle(element).display!=='none'&&!element.closest('[data-appearance-material-context]')&&(!element.closest('[data-appearance-surface-key]')||element.closest('[data-appearance-detail]'));
+const actualElements=(scope,selector)=>[...scope.querySelectorAll(selector)].filter(actualDisplay);
 const actualElement=(scope,selector)=>actualElements(scope,selector)[0];
 const moduleSelectors={navigation:'.side-menu',material:'.app-shell-title .title-bar','player-bar':'.player-bar',card:'.online-hero, .feature-card, .online-playlist',background:'.app-shell-content'};
 const backgroundPaint=(scope,doc)=>Object.fromEntries(['.appearance-window-background','.app-background-image','.app-background-dim','.app-shell-content','.main-content','.online-home'].map(selector=>{const element=actualElement(scope,selector),paint=doc.defaultView.getComputedStyle(element);return [selector,{color:paint.backgroundColor,image:paint.backgroundImage,opacity:paint.opacity,filter:paint.filter}]}));
@@ -609,13 +653,16 @@ const uniformCamera=host=>{
  return scale;
 };
 const faithfulGlyphs=(doc,scope=doc)=>{
- const title=actualElement(scope,'.app-shell-title .title-bar'),paint=element=>doc.defaultView.getComputedStyle(element),slots=['navigation.menu','navigation.person','navigation.appearance','navigation.settings'];
- for(const slot of slots){const icon=actualElement(title,'[data-theme-icon-slot="'+slot+'"]'),glyphs=icon?actualElements(icon,'.theme-icon-glyph').filter(glyph=>paint(glyph).display!=='none'):[];expect(glyphs.length===1,'title bar loses its real icon or paints duplicate icon families: '+slot);const glyph=glyphs[0],content=doc.defaultView.getComputedStyle(glyph,'::before').content,font=paint(glyph).fontFamily;expect(glyph.getBoundingClientRect().width>0&&/Phosphor/i.test(font)&&doc.fonts.check('16px '+font)&&!['none','normal','""',"''"].includes(content),'title icon has no loaded glyph: '+slot);}
- const windowControls=actualElements(title,'.title-bar-window-controls svg');expect(windowControls.length===3&&windowControls.every(icon=>icon.querySelector('path,rect')),'window minimize, maximize or close icons are simplified away');expect(actualElements(title,'.title-bar-window-controls button').every(button=>button.disabled),'preview window actions remain enabled');
+ // Lifted 3D controls live in separate ancestry branches, not the first title wrapper.
+ const paint=element=>doc.defaultView.getComputedStyle(element),slots=['navigation.menu','navigation.person','navigation.appearance','navigation.settings'];
+ for(const slot of slots){const icons=actualElements(scope,'.app-shell-title .title-bar [data-theme-icon-slot="'+slot+'"]');expect(icons.length===1,'title bar loses or duplicates its real icon: '+slot);const glyphs=actualElements(icons[0],'.theme-icon-glyph');expect(glyphs.length===1,'title bar loses its real icon or paints duplicate icon families: '+slot);const glyph=glyphs[0],content=doc.defaultView.getComputedStyle(glyph,'::before').content,font=paint(glyph).fontFamily;expect(glyph.getBoundingClientRect().width>0&&/Phosphor/i.test(font)&&doc.fonts.check('16px '+font)&&!['none','normal','""',"''"].includes(content),'title icon has no loaded glyph: '+slot);}
+ const windowControls=actualElements(scope,'.app-shell-title .title-bar-window-controls svg');expect(windowControls.length===3&&windowControls.every(icon=>icon.querySelector('path,rect')),'window minimize, maximize or close icons are simplified away');expect(actualElements(scope,'.app-shell-title .title-bar-window-controls button').every(button=>button.disabled),'preview window actions remain enabled');
  const sidebar=actualElement(scope,'.side-menu'),navigationSlots={'主页':'navigation.home','搜索':'navigation.search','流媒体音乐':'navigation.streaming','音乐库':'navigation.songs','最近播放':'navigation.recent','插件市场':'navigation.plugin'};
  for(const row of navigationItems(scope)){const label=row.getAttribute('aria-label'),icon=row.querySelector('[data-theme-icon-slot="'+navigationSlots[label]+'"]');expect(icon,'sidebar entry loses its actual icon: '+label);if(sidebar.getBoundingClientRect().width>0){const glyphs=[...icon.querySelectorAll('.theme-icon-glyph')].filter(glyph=>paint(glyph).display!=='none');expect(glyphs.length===1&&glyphs[0].getBoundingClientRect().width>0,'expanded sidebar icon is not rendered: '+label);}}
- const regions=actualElements(scope,'[data-te-playbar-region]');expect(JSON.stringify(regions.map(region=>region.dataset.tePlaybarRegion))===JSON.stringify(['left','center','right']),'player does not retain its three actual layout regions');
- const controls=regions.flatMap(placedControls);expect(new Set(controls.map(control=>control.id)).size===controls.length,'player duplicates a placed control');
+ const regions=actualElements(scope,'[data-te-playbar-region]');expect(JSON.stringify([...new Set(regions.map(region=>region.dataset.tePlaybarRegion))])===JSON.stringify(['left','center','right']),'player does not retain its three actual layout regions');
+ // Lifted buttons retain layout ancestors for CSS; those branches are not additional placed controls.
+ const controls=regions.flatMap(placedControls).filter(control=>actualDisplay(control.element)&&!control.element.hasAttribute('data-appearance-detail-branch'));expect(new Set(controls.map(control=>control.id)).size===controls.length,'player duplicates a placed control');
+ const native=doc.querySelector('body > .appearance-preview-scene');expect(JSON.stringify(controls.map(control=>control.id).sort())===JSON.stringify([...native.querySelectorAll('[data-te-playbar-region]')].flatMap(placedControls).map(control=>control.id).sort()),'projected player loses a native placed control');
  for(const {id,element:control} of controls){
   if(id==='cover')expect(control.querySelector('.player-cover'),'real player artwork is missing');
   else if(id==='trackInfo')expect(control.textContent.includes('夜空中的旋律')&&control.textContent.includes('示例歌手'),'real player title or artist information missing');
@@ -1205,13 +1252,16 @@ window.fixture={
   }finally{Object.assign(draft,snapshot);root.style.cssText=sourceStyle;window.previewSettings.value.playerBar.mode=sourceMode;themeEditing.value=sourceEditing;tone.value=sourceTone;focused.value='overview';await settle();}
  },
  async navigationStates(){
-  const host=document.querySelector('.appearance-window-preview'),doc=host.querySelector('iframe').contentDocument,originalExpanded=preview.value.navigationExpanded,draftSnapshot=JSON.stringify(draft);
+  const host=document.querySelector('.appearance-window-preview'),doc=host.querySelector('iframe').contentDocument,originalExpanded=preview.value.navigationExpanded,originalLayered=preview.value.layeredView,draftSnapshot=JSON.stringify(draft);
   const fitNavigation=()=>{const hit=host.querySelector('[aria-label="调整侧边栏材质"]'),a=hit.getBoundingClientRect(),b=host.getBoundingClientRect(),source=doc.querySelector('.side-menu').getBoundingClientRect(),scale=Number(host.dataset.cameraScale);expect(Math.abs(a.width-source.width*scale)<0.1&&Math.abs(a.height-source.height*scale)<0.1,'navigation state leaves stale painted geometry');expect(a.left>=b.left&&a.top>=b.top&&a.right<=b.right+0.01&&a.bottom<=b.bottom+0.01,'navigation state is cropped');};
   try{
    document.documentElement.dataset.teMotion='off';focused.value='overview';if(!preview.value.navigationExpanded)preview.value.toggleNavigation();await settle();const expanded=sourceGeometry(doc);expect(expanded.navigation.width>72&&['主页','搜索','流媒体音乐','音乐库','最近播放'].every(label=>doc.querySelector('.side-menu').innerText.includes(label)),'expanded navigation loses its real width or labels');
    preview.value.toggleNavigation();await settle();const collapsed=sourceGeometry(doc);expect(preview.value.navigationExpanded===false&&collapsed.navigation.width===0&&collapsed.navigation.height===0&&doc.defaultView.getComputedStyle(doc.querySelector('[data-preview-module="navigation"]')).display==='none','collapsed navigation remains visible');expect(noExpandedNavigationHotspot(host),'collapsed navigation retains an interactive hotspot');expect(Math.abs(collapsed.background.left-expanded.background.left)<0.1&&Math.abs(collapsed.background.width-expanded.background.width)<0.1,'preview navigation overrides the real stable content shell');realScene(doc);sourceLayout(doc);focused.value='navigation';await settle();expect(noExpandedNavigationHotspot(host),'focusing the hidden module restores a ghost hotspot');focused.value='overview';await settle();
-   preview.value.toggleNavigation();focused.value='navigation';await settle();expect(preview.value.navigationExpanded===true,'navigation does not expand again');unchangedGeometry(doc,expanded,'expanded navigation does not restore source layout');fitNavigation();expect(JSON.stringify(draft)===draftSnapshot,'navigation preview state changes the appearance draft');
-  }finally{if(preview.value.navigationExpanded!==originalExpanded)preview.value.toggleNavigation();focused.value='overview';await settle();}
+   preview.value.toggleNavigation();focused.value='navigation';await settle();expect(preview.value.navigationExpanded===true,'navigation does not expand again');unchangedGeometry(doc,expanded,'expanded navigation does not restore source layout');fitNavigation();
+   focused.value='overview';preview.value.setLayeredView(true);await settle();await waitForPreviewView(host,'navigation fixture did not enter 3D',true);expect(host.querySelector('[data-region="navigation"]'),'expanded 3D sidebar has no click region');
+   preview.value.toggleNavigation();await settle();await waitFor(()=>sourceGeometry(doc).navigation.width===0&&!host.querySelector('[data-region="navigation"]'),'collapsed 3D sidebar retains a stale clone click region');
+   preview.value.toggleNavigation();await settle();await waitFor(()=>sourceGeometry(doc).navigation.width===expanded.navigation.width&&!!host.querySelector('[data-region="navigation"]'),'3D sidebar does not restore its real geometry and click region');expect(JSON.stringify(draft)===draftSnapshot,'navigation preview state changes the appearance draft');
+  }finally{preview.value.setLayeredView(originalLayered);if(preview.value.navigationExpanded!==originalExpanded)preview.value.toggleNavigation();focused.value='overview';await settle();}
  },
  async imagePalette(){
   const host=document.querySelector('.appearance-window-preview'),doc=host.querySelector('iframe').contentDocument,snapshot=cloneAppearance(draft),originalTone=tone.value,originalEditing=themeEditing.value,originalExpanded=preview.value.navigationExpanded;let automaticCases=0;

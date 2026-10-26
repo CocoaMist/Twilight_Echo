@@ -286,9 +286,11 @@ bool resamplerQualityUsesSoxr(DspResamplerQuality quality) {
   return quality == DspResamplerQuality::SoxrHq || quality == DspResamplerQuality::SoxrVhq;
 }
 
-// Honest status: engine actually in effect for the requested quality tier.
+// Engine availability for this requested tier. Per-stream observations are
+// added by AudioPipeline; a process-wide probe alone cannot prove conversion.
 const char* resamplerEngineName(DspResamplerQuality quality) {
   if (!resamplerQualityUsesSoxr(quality)) return "swr";
+  if (soxrRuntimeAvailability() == SoxrRuntimeState::Unknown) return "unknown";
   return soxrRuntimeAvailability() == SoxrRuntimeState::Unavailable ? "swr" : "soxr";
 }
 
@@ -303,6 +305,50 @@ const char* ditherModeName(DspDitherMode mode) {
     case DspDitherMode::Off:
     default:
       return "off";
+  }
+}
+
+DspResamplerPhase parseResamplerPhase(const std::string& value) {
+  const std::string normalized = toLower(value);
+  if (normalized == "minimum") return DspResamplerPhase::Minimum;
+  if (normalized == "linear-smooth" || normalized == "linearsmooth") return DspResamplerPhase::LinearSmooth;
+  if (normalized == "minimum-smooth" || normalized == "minimumsmooth") return DspResamplerPhase::MinimumSmooth;
+  return DspResamplerPhase::Linear;
+}
+
+const char* resamplerPhaseName(DspResamplerPhase phase) {
+  switch (phase) {
+    case DspResamplerPhase::Minimum:
+      return "minimum";
+    case DspResamplerPhase::LinearSmooth:
+      return "linear-smooth";
+    case DspResamplerPhase::MinimumSmooth:
+      return "minimum-smooth";
+    case DspResamplerPhase::Linear:
+    default:
+      return "linear";
+  }
+}
+
+DspTargetSampleRateMode parseTargetSampleRateMode(const std::string& value) {
+  const std::string normalized = toLower(value);
+  if (normalized == "fixed") return DspTargetSampleRateMode::Fixed;
+  if (normalized == "max-pcm" || normalized == "maxpcm") return DspTargetSampleRateMode::MaxPcm;
+  if (normalized == "power-of-2" || normalized == "powerof2") return DspTargetSampleRateMode::PowerOf2;
+  return DspTargetSampleRateMode::Device;
+}
+
+const char* targetSampleRateModeName(DspTargetSampleRateMode mode) {
+  switch (mode) {
+    case DspTargetSampleRateMode::Fixed:
+      return "fixed";
+    case DspTargetSampleRateMode::MaxPcm:
+      return "max-pcm";
+    case DspTargetSampleRateMode::PowerOf2:
+      return "power-of-2";
+    case DspTargetSampleRateMode::Device:
+    default:
+      return "device";
   }
 }
 
@@ -451,19 +497,33 @@ bool DspChain::configureGraphJson(const std::string& json, std::string* error) {
   next.convolverMatrix.clear();
   next.channelMatrix.clear();
   next.channelStripChannels.clear();
+  next.headroomEnabled = false;
+  next.headroomGainDb = -3.0;
   next.outputTargetSampleRate = 0;
+  next.targetSampleRateMode = DspTargetSampleRateMode::Device;
   next.resamplerQuality = DspResamplerQuality::Native;
+  next.resamplerPhase = DspResamplerPhase::Linear;
   next.ditherMode = DspDitherMode::Off;
   next.outputSafetyClamp = true;
 
   const std::string outputStage = json_utils::fieldObject(root, "outputStage");
   if (!outputStage.empty()) {
+    next.headroomEnabled = extractBoolField(outputStage, "headroomEnabled").value_or(false);
+    next.headroomGainDb = std::clamp(
+        extractNumberField(outputStage, "headroomGainDb").value_or(-3.0), -30.0, 0.0);
     next.outputTargetSampleRate = static_cast<int>(std::clamp(
-        extractNumberField(outputStage, "targetSampleRate").value_or(0.0), 0.0, 384000.0));
+        extractNumberField(outputStage, "targetSampleRate").value_or(0.0), 0.0, 768000.0));
+    next.targetSampleRateMode = parseTargetSampleRateMode(
+        extractStringField(outputStage, "targetSampleRateMode").value_or("device"));
     next.resamplerQuality = parseResamplerQuality(
         extractStringField(outputStage, "resamplerQuality").value_or("native"));
+    next.resamplerPhase = parseResamplerPhase(
+        extractStringField(outputStage, "resamplerPhase").value_or("linear"));
     next.ditherMode = parseDitherMode(extractStringField(outputStage, "dither").value_or("off"));
     next.outputSafetyClamp = extractBoolField(outputStage, "safetyClamp").value_or(true);
+    if (graphProcessingEnabled && next.headroomEnabled && std::abs(next.headroomGainDb) > 0.0001) {
+      next.enabled = true;
+    }
   }
 
   std::vector<GraphNodeRuntime> nodes;
@@ -723,6 +783,13 @@ void DspChain::setTrackContext(const DspTrackContext& context) {
 void DspChain::process(float* samples, size_t frameCount) {
   if (!processingRequired_.load(std::memory_order_relaxed)) return;
   if (!samples || frameCount == 0) return;
+  const size_t totalSamples = frameCount * static_cast<size_t>(std::max(1, format_.channelCount));
+  if (status_.headroomActive) {
+    const double headroomLinear = std::pow(10.0, config_.headroomGainDb / 20.0);
+    for (size_t i = 0; i < totalSamples; ++i) {
+      samples[i] = static_cast<float>(static_cast<double>(samples[i]) * headroomLinear);
+    }
+  }
   // AudioPipeline publishes fully prepared graph instances to the callback;
   // this instance is therefore mutated only by the render thread.
   for (IAudioProcessor* processor : activeProcessors_) {
@@ -730,6 +797,26 @@ void DspChain::process(float* samples, size_t frameCount) {
   }
   if (config_.clipGuard && config_.outputSafetyClamp && status_.dspActive) {
     clampOutput(samples, frameCount);
+  }
+}
+
+void DspChain::processDouble(double* samples, size_t frameCount) {
+  if (!processingRequired_.load(std::memory_order_relaxed)) return;
+  if (!samples || frameCount == 0) return;
+  const size_t totalSamples = frameCount * static_cast<size_t>(std::max(1, format_.channelCount));
+  if (status_.headroomActive) {
+    const double headroomLinear = std::pow(10.0, config_.headroomGainDb / 20.0);
+    for (size_t i = 0; i < totalSamples; ++i) {
+      samples[i] *= headroomLinear;
+    }
+  }
+  for (IAudioProcessor* processor : activeProcessors_) {
+    processor->processDouble(samples, frameCount);
+  }
+  if (config_.clipGuard && config_.outputSafetyClamp && status_.dspActive) {
+    for (size_t i = 0; i < totalSamples; ++i) {
+      samples[i] = std::clamp(samples[i], -1.0, 1.0);
+    }
   }
 }
 
@@ -956,11 +1043,16 @@ std::string DspChain::graphStatusJson() const {
     json << "null";
   }
   json << ",\"actualSampleRate\":" << (format_.sampleRate > 0 ? std::to_string(format_.sampleRate) : "null")
-       << ",\"resamplerQuality\":\"" << resamplerQualityName(config_.resamplerQuality)
+       << ",\"targetSampleRateMode\":\"" << targetSampleRateModeName(config_.targetSampleRateMode)
+       << "\",\"resamplerQuality\":\"" << resamplerQualityName(config_.resamplerQuality)
+       << "\",\"resamplerPhase\":\"" << resamplerPhaseName(config_.resamplerPhase)
        << "\",\"resamplerEngine\":\"" << resamplerEngineName(config_.resamplerQuality)
        << "\",\"resamplerFallback\":" << (soxrFallback ? "true" : "false")
-       << ",\"dither\":\"" << ditherModeName(config_.ditherMode) << "\",\"active\":"
-       << (outputActive ? "true" : "false") << ",\"reason\":\"" << json_utils::escape(outputReason)
+       << ",\"dither\":\"" << ditherModeName(config_.ditherMode)
+       << "\",\"headroomEnabled\":" << (config_.headroomEnabled ? "true" : "false")
+       << ",\"headroomGainDb\":" << config_.headroomGainDb
+       << ",\"active\":"
+       << ((outputActive || status_.headroomActive) ? "true" : "false") << ",\"reason\":\"" << json_utils::escape(outputReason)
        << "\"}}";
   return json.str();
 }
@@ -1010,9 +1102,14 @@ DspConfig DspChain::parseConfigJson(const std::string& json) {
   config.truePeakAttackMs = std::clamp(extractNumberField(json, "truePeakAttackMs").value_or(0.2), 0.1, 1000.0);
   config.truePeakReleaseMs = std::clamp(extractNumberField(json, "truePeakReleaseMs").value_or(80.0), 1.0, 5000.0);
   config.truePeakLookaheadMs = std::clamp(extractNumberField(json, "truePeakLookaheadMs").value_or(1.0), 0.1, 20.0);
+  config.headroomEnabled = extractBoolField(json, "headroomEnabled").value_or(false);
+  config.headroomGainDb = std::clamp(extractNumberField(json, "headroomGainDb").value_or(-3.0), -30.0, 0.0);
   config.outputTargetSampleRate = static_cast<int>(std::clamp(
-      extractNumberField(json, "outputTargetSampleRate").value_or(0.0), 0.0, 384000.0));
+      extractNumberField(json, "outputTargetSampleRate").value_or(0.0), 0.0, 768000.0));
+  config.targetSampleRateMode = parseTargetSampleRateMode(
+      extractStringField(json, "targetSampleRateMode").value_or("device"));
   config.resamplerQuality = parseResamplerQuality(extractStringField(json, "resamplerQuality").value_or("native"));
+  config.resamplerPhase = parseResamplerPhase(extractStringField(json, "resamplerPhase").value_or("linear"));
   config.ditherMode = parseDitherMode(extractStringField(json, "dither").value_or("off"));
   config.outputSafetyClamp = extractBoolField(json, "outputSafetyClamp").value_or(true);
   config.crossfadeSeconds = std::clamp(extractNumberField(json, "crossfadeSeconds").value_or(0.0), 0.0, 12.0);
@@ -1027,6 +1124,8 @@ std::vector<DspEqBand> DspChain::parseEqBandsJson(const std::string& json, EqMod
 }
 
 void DspChain::refreshStatusLocked() {
+  status_.headroomActive = config_.enabled && config_.headroomEnabled && std::abs(config_.headroomGainDb) > 0.0001;
+  status_.headroomGainDb = status_.headroomActive ? config_.headroomGainDb : 0.0;
   status_.replayGainActive = replayGain_ && replayGain_->isActive();
   status_.loudnormActive = status_.replayGainActive && config_.replayGainMode == ReplayGainMode::Loudnorm;
   status_.eqActive = eq_ && eq_->isActive();
@@ -1068,7 +1167,7 @@ void DspChain::refreshStatusLocked() {
   status_.truePeakDb = meter_ ? meter_->truePeakDb() : 0.0;
   status_.correlation = meter_ ? meter_->correlation() : 0.0;
   status_.clipCount = meter_ ? meter_->clipCount() : 0;
-  status_.dspActive = status_.replayGainActive || status_.eqActive || status_.convolverActive ||
+  status_.dspActive = status_.headroomActive || status_.replayGainActive || status_.eqActive || status_.convolverActive ||
                       status_.crossfeedActive || status_.channelMatrixActive || status_.channelStripActive ||
                       status_.bassManagementActive || status_.gateActive || status_.compressorActive ||
                       status_.dynamicEqActive || status_.multibandCompressorActive || status_.stereoFieldActive ||
@@ -1086,7 +1185,7 @@ void DspChain::refreshStatusLocked() {
   } else {
     activeProcessors_ = dsp::collectActiveProcessors(processors_);
   }
-  processingRequired_.store(!activeProcessors_.empty(), std::memory_order_relaxed);
+  processingRequired_.store(!activeProcessors_.empty() || status_.headroomActive, std::memory_order_relaxed);
 }
 
 void DspChain::clampOutput(float* samples, size_t frameCount) {

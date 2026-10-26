@@ -24,12 +24,20 @@ export type DspNodeType =
   | 'meter'
 
 export type DspResamplerQuality = 'native' | 'high' | 'ultra' | 'soxrHq' | 'soxrVhq'
+export type DspResamplerPhase = 'linear' | 'minimum' | 'linear-smooth' | 'minimum-smooth'
+export type DspTargetSampleRateMode = 'device' | 'fixed' | 'max-pcm' | 'power-of-2'
 export type DspDitherMode = 'off' | 'tpdf' | 'highpassTpdf' | 'noiseShaped'
 
 export interface DspOutputStageConfig {
   targetSampleRate: 'device' | number
+  targetSampleRateMode?: DspTargetSampleRateMode
   resamplerQuality: DspResamplerQuality
+  resamplerPhase?: DspResamplerPhase
   dither: DspDitherMode
+  /** Dedicated first-stage headroom attenuation (Roon-style -3 dB default). */
+  headroomEnabled?: boolean
+  /** Headroom gain in dB, clamped to [-30, 0]. Default -3.0 dB when enabled. */
+  headroomGainDb?: number
   /** Applied only to PCM graphs; it never enables PCM fallback by itself. */
   safetyClamp: boolean
 }
@@ -141,12 +149,22 @@ export interface DspMeterSnapshot {
 export interface DspOutputStageStatus {
   targetSampleRate: number | null
   actualSampleRate: number | null
+  targetSampleRateMode?: DspTargetSampleRateMode
+  /** Requested quality; does not prove that sample-rate conversion occurred. */
   resamplerQuality: DspResamplerQuality
-  /** Engine actually in effect ('soxr' or 'swr'); absent on older native builds. */
-  resamplerEngine?: 'swr' | 'soxr'
+  resamplerPhase?: DspResamplerPhase
+  /** Engine availability for the requested tier; not a per-stream observation. */
+  resamplerEngine?: 'swr' | 'soxr' | 'unknown'
+  effectiveResampler?: 'swr' | 'soxr' | 'none' | 'unknown'
+  effectiveResamplerQuality?: DspResamplerQuality | null
+  effectiveResamplerFallback?: boolean
+  /** null/absent means the native build has not supplied an observation. */
+  resampled?: boolean | null
   /** True when a soxr tier was requested but the FFmpeg build lacks libsoxr. */
   resamplerFallback?: boolean
   dither: DspDitherMode
+  headroomEnabled?: boolean
+  headroomGainDb?: number
   active: boolean
   reason: string
 }
@@ -338,6 +356,16 @@ export const DSP_OUTPUT_SAMPLE_RATE_OPTIONS: readonly {
   { value: 192000, label: '192 kHz' }
 ] as const
 
+export const DSP_TARGET_SAMPLE_RATE_MODE_OPTIONS: readonly {
+  value: DspTargetSampleRateMode
+  label: string
+}[] = [
+  { value: 'device', label: '跟随设备 / 锁定频率' },
+  { value: 'fixed', label: '固定目标采样率' },
+  { value: 'max-pcm', label: '最高 PCM 采样率' },
+  { value: 'power-of-2', label: '最高整数倍 (2^n)' }
+] as const
+
 export const DSP_RESAMPLER_QUALITY_OPTIONS: readonly {
   value: DspResamplerQuality
   label: string
@@ -345,8 +373,18 @@ export const DSP_RESAMPLER_QUALITY_OPTIONS: readonly {
   { value: 'native', label: 'Native' },
   { value: 'high', label: 'High' },
   { value: 'ultra', label: 'Ultra' },
-  { value: 'soxrHq', label: 'SoX HQ' },
-  { value: 'soxrVhq', label: 'SoX VHQ (最高)' }
+  { value: 'soxrHq', label: 'SoX HQ（需运行时验证）' },
+  { value: 'soxrVhq', label: 'SoX VHQ（需运行时验证）' }
+] as const
+
+export const DSP_RESAMPLER_PHASE_OPTIONS: readonly {
+  value: DspResamplerPhase
+  label: string
+}[] = [
+  { value: 'linear', label: 'Linear Phase (Precise)' },
+  { value: 'minimum', label: 'Minimum Phase (Precise)' },
+  { value: 'linear-smooth', label: 'Linear Phase (Smooth)' },
+  { value: 'minimum-smooth', label: 'Minimum Phase (Smooth)' }
 ] as const
 
 export const DSP_DITHER_MODE_OPTIONS: readonly {
@@ -415,6 +453,13 @@ export function normalizeDspOutputStage(value: unknown): DspOutputStageConfig {
       : typeof raw.targetSampleRate === 'number' && Number.isFinite(raw.targetSampleRate)
         ? Math.max(8000, Math.min(768000, Math.trunc(raw.targetSampleRate)))
         : DEFAULT_DSP_OUTPUT_STAGE.targetSampleRate
+  const targetSampleRateMode =
+    raw.targetSampleRateMode === 'device' ||
+    raw.targetSampleRateMode === 'fixed' ||
+    raw.targetSampleRateMode === 'max-pcm' ||
+    raw.targetSampleRateMode === 'power-of-2'
+      ? raw.targetSampleRateMode
+      : undefined
   const resamplerQuality =
     raw.resamplerQuality === 'high' ||
     raw.resamplerQuality === 'ultra' ||
@@ -422,14 +467,30 @@ export function normalizeDspOutputStage(value: unknown): DspOutputStageConfig {
     raw.resamplerQuality === 'soxrVhq'
       ? raw.resamplerQuality
       : 'native'
+  const resamplerPhase =
+    raw.resamplerPhase === 'linear' ||
+    raw.resamplerPhase === 'minimum' ||
+    raw.resamplerPhase === 'linear-smooth' ||
+    raw.resamplerPhase === 'minimum-smooth'
+      ? raw.resamplerPhase
+      : undefined
   const dither =
     raw.dither === 'tpdf' || raw.dither === 'highpassTpdf' || raw.dither === 'noiseShaped'
       ? raw.dither
       : 'off'
+  const headroomEnabled = typeof raw.headroomEnabled === 'boolean' ? raw.headroomEnabled : undefined
+  const headroomGainDb =
+    typeof raw.headroomGainDb === 'number' && Number.isFinite(raw.headroomGainDb)
+      ? Math.max(-30, Math.min(0, Math.round(raw.headroomGainDb * 10) / 10))
+      : undefined
   return {
     targetSampleRate,
+    ...(targetSampleRateMode !== undefined ? { targetSampleRateMode } : {}),
     resamplerQuality,
+    ...(resamplerPhase !== undefined ? { resamplerPhase } : {}),
     dither,
+    ...(headroomEnabled !== undefined ? { headroomEnabled } : {}),
+    ...(headroomGainDb !== undefined ? { headroomGainDb } : {}),
     safetyClamp: raw.safetyClamp !== false
   }
 }
@@ -725,14 +786,60 @@ export function graphHasEnabledProcessing(graph: DspGraphConfig): boolean {
   )
 }
 
-/** True when sample-rate lock / SRC / dither will force non-passthrough processing. */
+/** True when sample-rate lock / SRC / headroom / dither will force non-passthrough processing. */
 export function outputStageIsActive(stage: DspOutputStageConfig): boolean {
   const outputStage = normalizeDspOutputStage(stage)
+  const headroomActive =
+    outputStage.headroomEnabled === true &&
+    Math.abs(outputStage.headroomGainDb ?? -3) > TRANSPARENT_GAIN_EPSILON_DB
+  const rateModeActive =
+    outputStage.targetSampleRateMode !== undefined &&
+    outputStage.targetSampleRateMode !== 'device'
   return (
+    headroomActive ||
+    rateModeActive ||
     outputStage.targetSampleRate !== 'device' ||
     outputStage.resamplerQuality !== 'native' ||
     outputStage.dither !== 'off'
   )
+}
+
+/**
+ * Resolve the effective PCM target sample rate given the output stage configuration,
+ * source sample rate, and supported device sample rates.
+ */
+export function resolveEffectiveTargetSampleRate(
+  stage: DspOutputStageConfig,
+  sourceSampleRate: number,
+  supportedRates: readonly number[] = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]
+): 'device' | number {
+  const normalized = normalizeDspOutputStage(stage)
+  const mode = normalized.targetSampleRateMode ?? 'device'
+  const validRates = supportedRates
+    .filter((r) => Number.isFinite(r) && r >= 8000 && r <= 768000)
+    .map((r) => Math.trunc(r))
+    .sort((a, b) => a - b)
+
+  if (mode === 'fixed') {
+    return typeof normalized.targetSampleRate === 'number' ? normalized.targetSampleRate : 'device'
+  }
+  if (mode === 'max-pcm') {
+    return validRates.length > 0 ? validRates[validRates.length - 1] : 192000
+  }
+  if (mode === 'power-of-2' && sourceSampleRate > 0) {
+    const baseRate =
+      sourceSampleRate % 48000 === 0 ? 48000 : sourceSampleRate % 44100 === 0 ? 44100 : sourceSampleRate
+    const candidates = validRates.filter((r) => {
+      if (r < baseRate || r % baseRate !== 0) return false
+      const ratio = r / baseRate
+      return (ratio & (ratio - 1)) === 0
+    })
+    if (candidates.length > 0) {
+      return candidates[candidates.length - 1]
+    }
+    return Math.min(768000, baseRate * 4)
+  }
+  return normalized.targetSampleRate
 }
 
 export function mergeDspOutputStage(

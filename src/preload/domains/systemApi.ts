@@ -90,7 +90,7 @@ export const systemApi = {
     close: (): void => ipcRenderer.send('window:close')
   },
   dialog: {
-    openFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFolder')
+    openFolder: (options?: { deferImport?: boolean }): Promise<string | null> => ipcRenderer.invoke('dialog:openFolder', options)
   },
   shell: {
     showItemInFolder: (filePath: string): Promise<void> =>

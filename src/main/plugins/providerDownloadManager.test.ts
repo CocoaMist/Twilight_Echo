@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-// node --test strip-only mode cannot load this module (TS parameter properties),
-// so the wiring is pinned with source assertions instead — the same convention
-// the renderer store tests use for cross-cutting internals.
-const source = readFileSync(new URL('./providerDownloadManager.ts', import.meta.url), 'utf8')
+// Throttle policy source checks complement the portable runtime tests.
+const source = readFileSync(
+  new URL('../../core/downloads/providerDownloadManager.ts', import.meta.url),
+  'utf8'
+)
 
 function extractMethodBody(name: string): string {
   // Anchor at line start so call sites (`this.receiveFile(`) cannot win.
@@ -50,7 +51,7 @@ test('terminal tasks are retained up to a bounded budget', () => {
   // is created already terminal.
   const patch = extractMethodBody('patch')
   assert.match(patch, /TERMINAL_STATUSES\.has\(patch\.status\)\) this\.pruneTerminalTasks\(\)/)
-  const create = extractMethodBody('create')
+  const create = extractMethodBody('createTask')
   assert.match(create, /TERMINAL_STATUSES\.has\(task\.status\)\) this\.pruneTerminalTasks\(\)/)
 })
 

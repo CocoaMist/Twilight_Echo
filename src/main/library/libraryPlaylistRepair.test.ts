@@ -20,7 +20,7 @@ import type {
   RepairScanCall
 } from '../../shared/localLibraryScan.ts'
 import { findPlaylistRelocations } from '../../renderer/src/utils/playlistLifecycle.ts'
-import type { Track } from '../../renderer/src/types/music.ts'
+import type { TrackData as Track } from '../../shared/track.ts'
 import type { NativeAudioMetadata } from '../../shared/audioEngineTypes.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
+import EntityMetadataPanel from '../music-metadata/EntityMetadataPanel.vue'
+import type { EntityMetadataContext } from '../music-metadata/entityMetadataView.ts'
 import { computed } from 'vue'
 import type { Track, TrackArtistRef } from '../../types/music'
 import TrackArtistLinks from '../TrackArtistLinks.vue'
@@ -44,6 +46,7 @@ const props = withDefaults(
     coverSource?: string | null
     description?: string
     intro?: string
+    metadataTarget?: EntityMetadataContext | null
     icon?: string
     loading?: boolean
     error?: string
@@ -259,7 +262,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
         </div>
 
         <h2 class="stage-title">{{ title }}</h2>
-        <p v-if="intro" class="stage-intro">{{ intro }}</p>
+        <p v-if="intro && !metadataTarget" class="stage-intro">{{ intro }}</p>
 
         <div class="stage-actions">
           <button
@@ -303,6 +306,8 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
         <p v-if="followError" class="stage-follow-error">{{ followError }}</p>
       </div>
     </header>
+
+    <EntityMetadataPanel v-if="metadataTarget" :target="metadataTarget" :fallback-intro="intro" />
 
     <div v-if="tabs.length > 0" class="stage-tabs" role="tablist" aria-label="内容分区">
       <button
