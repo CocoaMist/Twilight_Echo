@@ -1,4 +1,8 @@
-import { createNetworkSourcesManager, type NetworkSourcesManager } from './sourcesManager.ts'
+import {
+  createNetworkSourcesManager,
+  type NetworkDirectoryOption,
+  type NetworkSourcesManager
+} from './sourcesManager.ts'
 import type { NetworkProfileStore } from './profileStore.ts'
 import type { NetworkLibraryIndex } from './networkLibrary.ts'
 import type { NetworkSourceAdapter } from './adapters/types.ts'
@@ -28,11 +32,15 @@ interface Options {
   store: NetworkProfileStore
   library: NetworkLibraryIndex
   getAdapter(protocol: NetworkSourceProfile['protocol']): Promise<NetworkSourceAdapter | null>
-  cacheRoot: string
-  coverCacheRoot: string
+  cacheRoot: NetworkDirectoryOption
+  coverCacheRoot: NetworkDirectoryOption
   newId(): string
   now(): number
   changed(): void
+}
+
+function resolveDirectory(directory: NetworkDirectoryOption): string {
+  return typeof directory === 'function' ? directory() : directory
 }
 type Directory = { profileId: string; path: string; entries: NetworkEntry[] }
 type Job = CoreNetworkState['jobs'][number]
@@ -389,10 +397,10 @@ export class CoreNetworkService {
   }
   async cover(profileId: string, entryId: string): Promise<string | null> {
     await this.entry(profileId, entryId)
-    return readCoverDataUrl(entryId, this.options.coverCacheRoot)
+    return readCoverDataUrl(entryId, resolveDirectory(this.options.coverCacheRoot))
   }
   async cacheInfo(): Promise<{ sizeBytes: number }> {
-    return { sizeBytes: await getDirectorySize(this.options.cacheRoot) }
+    return { sizeBytes: await getDirectorySize(resolveDirectory(this.options.cacheRoot)) }
   }
   clearCache(
     maintainSources: <T>(action: (sources: readonly string[]) => Promise<T>) => Promise<T>,
@@ -403,7 +411,7 @@ export class CoreNetworkService {
         maintainSources(async (sources) => {
           await drain()
           signal?.throwIfAborted()
-          await clearUnpinnedCache(this.options.cacheRoot, sources, signal)
+          await clearUnpinnedCache(resolveDirectory(this.options.cacheRoot), sources, signal)
           return this.cacheInfo()
         }),
       signal

@@ -23,7 +23,7 @@ test('lyric internals never import the compatibility facade or reverse their dep
     if (name === 'lyrics.ts') continue
     for (const specifier of collectImports(path.join(utils, name))) {
       const target = resolveImportTarget(path.join(utils, name), specifier)
-      if (!target) continue
+      if (!target || path.dirname(target) !== utils) continue
       const dependency = path.basename(target)
       if (dependency in layers)
         assert.ok(layers[dependency] < layer, `${name} must not depend on ${dependency}`)
@@ -104,7 +104,10 @@ function collectImports(file) {
 }
 
 function isTestFile(file) {
-  return /\.(?:test|spec)\.[^.]+$/.test(file)
+  return (
+    /\.(?:test|spec)\.[^.]+$/.test(file) ||
+    /(?:^|[\\/])[^\\/]*(?:TestRenderer|TestFixture)\.[^.]+$/.test(file)
+  )
 }
 
 function resolveImportTarget(file, specifier) {

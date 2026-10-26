@@ -699,8 +699,8 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
   let networkEnvironment:
     | Promise<CorePlatformOperations['network.environment']['output']>
     | undefined
-  // Cache roots change on restart, as in the existing settings contract.
-  const musicCacheRoot = config.musicCachePath || settings.read().musicCachePath
+  const musicCacheRoot = (): string =>
+    settings.read().musicCachePath || config.musicCachePath || join(config.root, 'music-cache')
   const network = new CoreNetworkService({
     store: createNetworkProfileStore({
       filePath: join(config.root, 'network-sources', 'profiles.json'),
@@ -714,8 +714,8 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     library: createNetworkLibrary({
       filePath: join(config.root, 'network-sources', 'library.json')
     }),
-    cacheRoot: join(musicCacheRoot, 'network-cache'),
-    coverCacheRoot: join(musicCacheRoot, 'cover-cache'),
+    cacheRoot: () => join(musicCacheRoot(), 'network-cache'),
+    coverCacheRoot: () => join(musicCacheRoot(), 'cover-cache'),
     newId: randomUUID,
     now: Date.now,
     changed: () => application?.changed(),
@@ -1126,7 +1126,7 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
   if (config.plugins) {
     ncm = createNcmApiRuntime()
     ncmCache = createNcmCache({
-      root: () => musicCacheRoot,
+      root: () => musicCacheRoot(),
       maintainSources: (action) =>
         autoMix.maintain(() =>
           sourceResources.maintain(async () => {
@@ -1948,12 +1948,12 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
       maintainScanner: (action) => scanner.maintainCoverCache(action),
       clearFiles: (sources, signal) =>
         clearCoreMusicCache(
-          musicCacheRoot,
+          musicCacheRoot(),
           [...sources, ...sourceResources.protectedSources()],
           signal
         ),
       clearPlatform: (signal) => platform!.callJoined('cache.clearPlatform', {}, signal),
-      info: async () => ({ sizeBytes: await getManagedMusicCacheSize(musicCacheRoot) }),
+      info: async () => ({ sizeBytes: await getManagedMusicCacheSize(musicCacheRoot()) }),
       clearNetwork: (signal) =>
         network.clearCache(
           (action) =>

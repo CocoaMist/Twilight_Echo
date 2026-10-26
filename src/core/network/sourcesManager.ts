@@ -56,10 +56,16 @@ const SCAN_LIMITS = {
   maxEntries: 5000
 }
 
+export type NetworkDirectoryOption = string | (() => string)
+
+function resolveDirectory(directory: NetworkDirectoryOption): string {
+  return typeof directory === 'function' ? directory() : directory
+}
+
 export function createNetworkSourcesManager(deps: {
   store: NetworkProfileStore
-  cacheRoot: string
-  coverCacheRoot: string
+  cacheRoot: NetworkDirectoryOption
+  coverCacheRoot: NetworkDirectoryOption
   getAdapter: (protocol: NetworkSourceProfile['protocol']) => Promise<NetworkSourceAdapter | null>
   library: NetworkLibraryIndex
   commit?<T>(profileId: string, action: () => Promise<T>, signal?: AbortSignal): Promise<T>
@@ -150,7 +156,7 @@ export function createNetworkSourcesManager(deps: {
         const cacheFilePath = await downloadEntryToCache({
           session,
           entry: cacheEntry,
-          cacheRoot,
+          cacheRoot: resolveDirectory(cacheRoot),
           signal
         })
         return { kind: 'local-cache', cacheFilePath, displayName: entry.name }
@@ -206,8 +212,8 @@ export function createNetworkSourcesManager(deps: {
           const enriched = await enrichNetworkEntry({
             session,
             entry,
-            cacheRoot,
-            coverCacheRoot,
+            cacheRoot: resolveDirectory(cacheRoot),
+            coverCacheRoot: resolveDirectory(coverCacheRoot),
             signal
           })
           if (enriched.metadata) {

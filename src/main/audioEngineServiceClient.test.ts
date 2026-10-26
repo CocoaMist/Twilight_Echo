@@ -750,7 +750,8 @@ test('successful volume replies cancel the watchdog after a status timeout', asy
   }
 })
 
-test('concurrent status timeouts share one probe and stale pongs cannot rescue a replacement', async () => {
+test('concurrent status timeouts share one probe and stale pongs cannot rescue a replacement', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
   const children: ManualUtilityProcess[] = []
   const binding = new AudioEngineServiceBinding({
     serviceEntry: 'audioEngineService.js',
@@ -767,25 +768,56 @@ test('concurrent status timeouts share one probe and stale pongs cannot rescue a
     }
   })
   try {
-    await Promise.all([
+    const timeouts = Promise.all([
       assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/),
       assert.rejects(binding.callAsync('GetVisualizationData', ['{}']), /音频服务调用超时/)
     ])
+    context.mock.timers.tick(10)
+    await timeouts
     const probes = children[0].messages.filter(
       (message) => (message as { kind: string }).kind === 'ping'
     )
     assert.equal(probes.length, 1)
     children[0].emit('message', { kind: 'pong', requestId: 'unrelated-probe' })
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    context.mock.timers.tick(9)
+    assert.equal(children[0].killCount, 0)
+    context.mock.timers.tick(1)
     assert.equal(children[0].killCount, 1)
+    // Restart backoff begins when the watchdog runs. A loaded event loop can
+    // run a fixed wall-clock wait before this newly scheduled timer is due.
+    assert.equal(children.length, 1)
+    context.mock.timers.tick(4)
+    assert.equal(children.length, 1)
+    context.mock.timers.tick(1)
     assert.equal(children.length, 2)
-    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+
+    const replacementTimeout = assert.rejects(
+      binding.callAsync('GetPlaybackInfo', []),
+      /音频服务调用超时/
+    )
+    context.mock.timers.tick(10)
+    await replacementTimeout
+    const replacementProbes = children[1].messages.filter(
+      (message) => (message as { kind: string }).kind === 'ping'
+    ) as Array<{ requestId: string }>
+    assert.equal(replacementProbes.length, 1)
+    assert.notEqual(replacementProbes[0].requestId, (probes[0] as { requestId: string }).requestId)
     children[0].emit('message', {
       kind: 'pong',
       requestId: (probes[0] as { requestId: string }).requestId
     })
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    children[1].emit('message', {
+      kind: 'pong',
+      requestId: (probes[0] as { requestId: string }).requestId
+    })
+    context.mock.timers.tick(9)
+    assert.equal(children[1].killCount, 0)
+    context.mock.timers.tick(1)
     assert.equal(children[1].killCount, 1)
+    assert.equal(children.length, 2)
+    context.mock.timers.tick(9)
+    assert.equal(children.length, 2)
+    context.mock.timers.tick(1)
     assert.equal(children.length, 3)
   } finally {
     binding.destroy()

@@ -1,16 +1,165 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 
 const httpServerSource = readFileSync(
   new URL('../../core/cast/httpServer.ts', import.meta.url),
   'utf8'
 )
 const remoteIpcSource = readFileSync(new URL('./remoteIpc.ts', import.meta.url), 'utf8')
-const playerStoreSource = readFileSync(
-  new URL('../../renderer/src/stores/usePlayerStore.ts', import.meta.url),
+const coreSessionSource = readFileSync(
+  new URL('../../core/playback/session.ts', import.meta.url),
   'utf8'
 )
+const corePlayerStoreSource = readFileSync(
+  new URL('../../renderer/src/stores/player/corePlayerStore.ts', import.meta.url),
+  'utf8'
+)
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+function castIpcFixture(holdNewLoad = false) {
+  const events: string[] = []
+  const stopEntered = deferred()
+  const stopRelease = deferred()
+  const loadEntered = deferred()
+  const loadRelease = deferred()
+  type Handler = (...args: unknown[]) => Promise<unknown>
+  const handlers = new Map<string, Handler>()
+  const devices = ['old', 'new'].map((usn) => ({
+    usn,
+    friendlyName: usn,
+    avTransportUrl: usn,
+    renderingControlUrl: usn
+  }))
+  class Server {
+    async start() {}
+    async stop() {}
+    isMediaOnly() {
+      return false
+    }
+    issueMediaUrl() {
+      return 'http://media.invalid/token'
+    }
+  }
+  const dependencies: Record<string, unknown> = {
+    electron: {
+      ipcMain: { handle: (name: string, callback: Handler) => handlers.set(name, callback) }
+    },
+    'node:crypto': {},
+    '../../core/cast/policy.ts': { isPrivateOrLoopbackHost: () => false },
+    '../security/electronSecurity.ts': { assertTrustedIpcSender() {} },
+    '../security/ipcValidation.ts': { normalizeIpcString: (value: string) => value },
+    '../security/localPaths.ts': { resolveAuthorizedAudioFile: async (path: string) => path },
+    '../security/remoteMediaGrants.ts': {},
+    '../core/runtime.ts': {
+      runtime: {
+        appSettings: { remoteControlEnabled: true },
+        mainWindow: { isDestroyed: () => false, webContents: { once() {}, send() {}, id: 1 } }
+      }
+    },
+    '../../shared/remoteControl.ts': {},
+    '../app/AfterglowModeService.ts': { isAfterglowModeActive: () => false },
+    '../../shared/afterglowMode.ts': {},
+    './httpServer.ts': { RemoteHttpServer: Server },
+    './dlnaClient.ts': {
+      discoverDlnaDevices: async () => devices,
+      dlnaSetAvTransportUri: async (device: string) => {
+        events.push(`load:${device}`)
+        if (holdNewLoad && device === 'new') {
+          loadEntered.resolve()
+          await loadRelease.promise
+        }
+      },
+      dlnaPlay: async (device: string) => {
+        events.push(`play:${device}`)
+      },
+      dlnaPause: async (device: string) => {
+        events.push(`pause:${device}`)
+      },
+      dlnaSeek: async (device: string, seconds: number) => {
+        events.push(`seek:${device}:${seconds}`)
+      },
+      dlnaSetVolume: async () => {},
+      dlnaStop: async (device: string) => {
+        events.push(`stop:${device}:start`)
+        stopEntered.resolve()
+        await stopRelease.promise
+        events.push(`stop:${device}:commit`)
+      }
+    },
+    './chromecastClient.ts': { discoverChromecastDevices: async () => [] },
+    './didl.ts': { buildDidlLiteMetadata: () => '' },
+    '../app/settingsRuntime.ts': {}
+  }
+  const exports: { setupRemoteIpc?: () => void } = {}
+  runInNewContext(
+    ts.transpileModule(remoteIpcSource, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+    }).outputText,
+    {
+      exports,
+      require: (id: string) => {
+        assert.ok(id in dependencies, id)
+        return dependencies[id]
+      },
+      console,
+      process
+    }
+  )
+  exports.setupRemoteIpc!()
+  const call = <T = unknown>(name: string, payload?: unknown): Promise<T> =>
+    handlers.get(`remote:${name}`)!({}, payload) as Promise<T>
+  return { events, stopEntered, stopRelease, loadEntered, loadRelease, call }
+}
+
+test('main transport preserves cast ownership when stopCast overlaps a new castToDevice', async () => {
+  const state = castIpcFixture()
+  await state.call('discoverDlna')
+  await state.call('castToDevice', { usn: 'old', filePath: 'D:/Music/one.flac' })
+  const stopped = state.call('stopCast')
+  await state.stopEntered.promise
+  const cast = state.call('castToDevice', { usn: 'new', filePath: 'D:/Music/one.flac' })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  state.stopRelease.resolve()
+  await Promise.all([stopped, cast])
+  assert.ok(state.events.indexOf('stop:old:commit') < state.events.indexOf('load:new'))
+  assert.equal((await state.call<{ usn: string } | null>('getCastTarget'))?.usn, 'new')
+  await state.call('controlCast', { pause: true, seek: 12 })
+  assert.deepEqual(state.events.slice(-2), ['seek:new:12', 'pause:new'])
+})
+
+test('cast pause and seek wait for the pending target change', async () => {
+  const state = castIpcFixture(true)
+  await state.call('discoverDlna')
+  await state.call('castToDevice', { usn: 'old', filePath: 'D:/Music/one.flac' })
+  const cast = state.call('castToDevice', { usn: 'new', filePath: 'D:/Music/two.flac' })
+  await state.loadEntered.promise
+  const controls = state.call('controlCast', { pause: true, seek: 25 })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  state.loadRelease.resolve()
+  await Promise.all([cast, controls])
+  assert.deepEqual(state.events.slice(-2), ['seek:new:25', 'pause:new'])
+  assert.equal((await state.call<{ usn: string } | null>('getCastTarget'))?.usn, 'new')
+})
+
+test('a rejected cast releases the main transport queue for the next request', async () => {
+  const state = castIpcFixture()
+  await state.call('discoverDlna')
+  const rejected = state.call('castToDevice', { usn: 'missing', filePath: 'D:/Music/one.flac' })
+  const next = state.call('castToDevice', { usn: 'new', filePath: 'D:/Music/two.flac' })
+  await assert.rejects(rejected, /Cast device not found/)
+  await next
+  assert.equal((await state.call<{ usn: string } | null>('getCastTarget'))?.usn, 'new')
+})
 
 test('remote HTTP server supports mediaOnly bind without full remote surface', () => {
   assert.match(httpServerSource, /mode\?: RemoteServerMode/)
@@ -55,14 +204,15 @@ test('cast binds media-only when remote control is off and tears it down on stop
 })
 
 test('player queue skip re-casts while a cast session is active', () => {
-  assert.match(playerStoreSource, /castTargetUsn/)
-  assert.match(playerStoreSource, /function playQueueTrack/)
-  assert.match(playerStoreSource, /if \(castTargetUsn\.value\) \{[\s\S]*castCurrentTrackToDevice/)
+  assert.match(corePlayerStoreSource, /castToDevice[\s\S]*command\('cast\.start'/)
+  assert.match(corePlayerStoreSource, /next: \(\) => command\('playback\.next'/)
+  assert.match(corePlayerStoreSource, /prev: \(\) => command\('playback\.previous'/)
+  assert.match(coreSessionSource, /async navigate\(direction: 1 \| -1/)
+  assert.match(coreSessionSource, /if \(!this\.options\.cast\?\.active\(\)\) \{[\s\S]*engine\.loadQueue/)
   assert.match(
-    playerStoreSource,
-    /else if \(castTargetName\.value\) \{[\s\S]*controlCast\?\.\(\{ seek: 0 \}\)/
+    coreSessionSource,
+    /if \(this\.options\.cast\?\.active\(\)\) \{[\s\S]*this\.options\.cast\.load\([\s\S]*this\.acceptCast\(sample, resolved\.source\)/
   )
-  assert.match(playerStoreSource, /!castTargetUsn\.value && nativePlaybackActive/)
 })
 
 test('remote HTTP server exposes only authenticated bounded browse and explicit command failures', () => {

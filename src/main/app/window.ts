@@ -12,7 +12,7 @@ import {
 } from '../core/settings'
 import { installAudioDeviceHotplugWatcher } from '../audio/deviceHotplug'
 import { destroyDesktopLyrics } from '../integrations/desktopLyrics'
-import { showMiniPlayer } from '../integrations/miniPlayer.ts'
+import { registerMiniPlayerMainWindowFactory, showMiniPlayer } from '../integrations/miniPlayer.ts'
 import {
   createTaskbarThumbarButtons,
   destroyTaskbarThumbarButtons
@@ -389,6 +389,8 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
   }
   return runtime.mainWindow
 }
+
+registerMiniPlayerMainWindowFactory(() => createWindow())
 
 // S4：外部跳转默认仅放行 https:（共享实现见 security/externalUrl.ts）
 

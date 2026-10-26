@@ -494,3 +494,37 @@ test('clearDirectory preserves active and queued downloads and serializes agains
   await clearDirectory(cacheRoot)
   assert.equal(await getDirectorySize(cacheRoot), 0)
 })
+
+test('CoreNetworkService resolves cacheRoot and coverCacheRoot dynamically when settings change', async (t) => {
+  const f = await fixture(t)
+  let currentRoot = join(f.root, 'cache-a')
+  const service = new CoreNetworkService({
+    store: f.store,
+    library: f.library,
+    cacheRoot: () => join(currentRoot, 'network-cache'),
+    coverCacheRoot: () => join(currentRoot, 'cover-cache'),
+    newId: () => 'id-dynamic',
+    now: () => 1000,
+    changed: () => {},
+    getAdapter: async () => ({ protocol: 'webdav', createSession: async () => f.session })
+  })
+  await service.initialize()
+  t.after(() => service.shutdown())
+  await service.directory({ revision: 0, profileId: f.profile.id, path: '/' })
+  const track = await service.playback({
+    revision: 0,
+    profileId: f.profile.id,
+    entryId: f.entry.id
+  })
+  const first = await service.resolve(track)
+  assert.equal(first?.source, join(currentRoot, 'network-cache', `${f.entry.id}.flac`))
+  assert.equal((await service.cacheInfo()).sizeBytes, 4)
+
+  currentRoot = join(f.root, 'cache-b')
+  assert.equal((await service.cacheInfo()).sizeBytes, 0)
+  const second = await service.resolve(track)
+  assert.equal(second?.source, join(currentRoot, 'network-cache', `${f.entry.id}.flac`))
+  assert.equal((await service.cacheInfo()).sizeBytes, 4)
+  await service.clearCache((clear) => clear([]))
+  assert.equal((await service.cacheInfo()).sizeBytes, 0)
+})

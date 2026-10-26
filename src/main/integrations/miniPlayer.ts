@@ -33,7 +33,6 @@ import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
 import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
 import { getCoreApplication } from '../app/coreApplication.ts'
 import { CORE_WINDOW_POLICIES } from '../coreProcess/windowBridge.ts'
-import { createWindow } from '../app/window.ts'
 import { importBackgroundImage } from '../library/coverCache'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { publishDynamicIslandLyrics, publishDynamicIslandState } from './dynamicIsland.ts'
@@ -57,6 +56,11 @@ let boundsSaveTimer: NodeJS.Timeout | null = null
 let programmedBounds: Electron.Rectangle | null = null
 let dragSize: MiniPlayerWindowSize | null = null
 let miniPlayerExperienceTheme: ExperienceWindowTheme = 'default'
+let createMainWindowFactory: (() => BrowserWindow) | null = null
+
+export function registerMiniPlayerMainWindowFactory(factory: () => BrowserWindow): void {
+  createMainWindowFactory = factory
+}
 
 function getMiniPlayerIconPath(): string | undefined {
   const candidates =
@@ -413,7 +417,7 @@ export function restoreMainWindowFromMiniPlayer(): void {
     runtime.mainWindow && !runtime.mainWindow.isDestroyed()
       ? runtime.mainWindow
       : getCoreApplication()
-        ? createWindow()
+        ? (createMainWindowFactory?.() ?? null)
         : null
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()

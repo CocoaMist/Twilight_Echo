@@ -1,6 +1,7 @@
-import { BaseWindow } from 'electron'
+import { app, BaseWindow } from 'electron'
+import { join } from 'path'
+import { is } from '@electron-toolkit/utils'
 import { runtime } from '../core/runtime.ts'
-import { getAppIconPath } from './window.ts'
 
 export interface AfterglowAnchorOptions {
   /** Keep a taskbar entry the user can click to restore (minimize entry). */
@@ -9,6 +10,17 @@ export interface AfterglowAnchorOptions {
 }
 
 let restoreHandler: (() => void) | null = null
+
+function getAfterglowAnchorIconPath(): string {
+  if (process.platform === 'win32') {
+    return is.dev
+      ? join(app.getAppPath(), 'build', 'icon.ico')
+      : join(process.resourcesPath, 'icon.ico')
+  }
+  return is.dev
+    ? join(app.getAppPath(), 'build', 'icon.png')
+    : join(process.resourcesPath, 'icon.png')
+}
 
 /**
  * Renderer-free Windows window that survives the Afterglow unload.
@@ -28,7 +40,7 @@ export function createAfterglowAnchorWindow(options: AfterglowAnchorOptions): Ba
     y: -32_000,
     show: false,
     title: 'Twilight Echo',
-    icon: getAppIconPath(),
+    icon: getAfterglowAnchorIconPath(),
     skipTaskbar: !options.showInTaskbar,
     minimizable: true,
     maximizable: false,
