@@ -3,7 +3,11 @@ import { createCoreAudioUi } from '@renderer/stores/player/coreAudioUi.ts'
 import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { createDspFactoryScene } from '../../../shared/dspGraph.ts'
+import {
+  createDspFactoryScene,
+  graphHasEnabledProcessing,
+  resolveEffectiveTargetSampleRate
+} from '../../../shared/dspGraph.ts'
 import type {
   DspAsset,
   DspAssetKind,
@@ -379,6 +383,113 @@ async function toggleAudition(event: Event): Promise<void> {
     details.open = true
   }
 }
+let rateSyncInFlight = false
+async function ensureOutputSampleRateSynced(): Promise<void> {
+  if (rateSyncInFlight || dirty.value) return
+  const unwrap = <T,>(val: T | { value: T } | undefined): T | undefined =>
+    val && typeof val === 'object' && 'value' in val ? (val as { value: T }).value : val
+  const storeRef = outputStore as unknown as Record<string, unknown>
+  const playback = unwrap(storeRef.playbackInfo as {
+    state?: string
+    isDsd?: boolean
+    sourceSampleRate?: number
+    decodedSampleRate?: number
+    actualSampleRate?: number
+    outputSampleRate?: number
+  })
+  const outInfo = outputInfo.value
+  const playbackActive =
+    playback?.state === 'playing' || playback?.state === 'paused' || isPlaying.value
+  if (!playbackActive || outInfo?.isDsd || playback?.isDsd) return
+  const outConfig = unwrap(storeRef.audioOutputConfig as {
+    playbackPolicy?: string
+    dsdMuteTimeoutFrames?: number
+  })
+  if (outConfig?.playbackPolicy === 'continuity-first') return
+
+  const activeScene =
+    savedScenes.value.find((scene) => scene.id === activeSceneId.value) ??
+    selectedScene.value
+  const outStage =
+    activeScene?.graph.outputStage ??
+    state.value?.effectiveGraph?.outputStage
+  if (!outStage) return
+
+  const sourceRate =
+    playback?.sourceSampleRate ||
+    playback?.decodedSampleRate ||
+    0
+  if (sourceRate <= 0) return
+
+  const currentDevice = unwrap(storeRef.audioDevice as string) ?? 'auto'
+  const deviceOptions =
+    unwrap(storeRef.audioDeviceOptions as Array<{ id: string; sampleRates?: number[] }>) ?? []
+  const currentDeviceOption =
+    deviceOptions.find((d) => d.id === currentDevice) ?? deviceOptions[0]
+  const bypassed =
+    !audioProcessing.value.dspEnabled ||
+    audioProcessing.value.directMode ||
+    !!state.value?.effectiveBypassReason
+  const resolvedTarget = bypassed
+    ? 'device'
+    : resolveEffectiveTargetSampleRate(
+        outStage,
+        sourceRate,
+        currentDeviceOption?.sampleRates
+      )
+  const desiredRate =
+    typeof resolvedTarget === 'number' && resolvedTarget > 0 ? resolvedTarget : sourceRate
+  const actualRate =
+    outInfo?.actualSampleRate ||
+    outInfo?.outputSampleRate ||
+    playback?.actualSampleRate ||
+    playback?.outputSampleRate ||
+    0
+  const backend =
+    unwrap(storeRef.audioOutput as string) ??
+    outInfo?.actualBackend ??
+    outInfo?.backend ??
+    ''
+  const isExclusiveOrAsio =
+    backend === 'asio' ||
+    Boolean(unwrap(storeRef.exclusiveMode as boolean)) ||
+    outInfo?.exclusive === true
+  if (!isExclusiveOrAsio || desiredRate <= 0 || actualRate <= 0 || actualRate === desiredRate) {
+    return
+  }
+
+  rateSyncInFlight = true
+  try {
+    await outputStore.setOutputStage?.(outStage)
+    await outputStore.refreshAudioOutputState?.().catch(() => undefined)
+    const refreshedPlayback = unwrap(storeRef.playbackInfo as {
+      actualSampleRate?: number
+      outputSampleRate?: number
+    })
+    const refreshedRate =
+      outputInfo.value?.actualSampleRate ||
+      outputInfo.value?.outputSampleRate ||
+      refreshedPlayback?.actualSampleRate ||
+      refreshedPlayback?.outputSampleRate ||
+      0
+    if (refreshedRate !== desiredRate) {
+      if (currentDevice && currentDevice !== 'auto') {
+        await outputStore.setAudioDevice?.('auto')
+        await outputStore.setAudioDevice?.(currentDevice)
+      } else {
+        const currentTimeout =
+          unwrap(storeRef.audioOutputConfig as { dsdMuteTimeoutFrames?: number })
+            ?.dsdMuteTimeoutFrames ?? 4096
+        await outputStore.setAudioOutputConfig?.({
+          dsdMuteTimeoutFrames: currentTimeout === 4095 ? 4096 : 4095
+        })
+      }
+      await outputStore.refreshAudioOutputState?.().catch(() => undefined)
+    }
+  } finally {
+    rateSyncInFlight = false
+  }
+}
 async function saveScenes(): Promise<boolean> {
   if (!(await finishAudition())) return false
   return run(async () => {
@@ -394,6 +505,15 @@ async function saveScenes(): Promise<boolean> {
       next = await coreAudio.applyDspScene(next.pinnedSceneId, true)
     adopt(next)
     await refreshSavedAssetReferences()
+    if (
+      !audioProcessing.value.dspEnabled &&
+      !audioProcessing.value.directMode &&
+      selectedScene.value &&
+      graphHasEnabledProcessing(selectedScene.value.graph)
+    ) {
+      await outputStore.setAudioProcessing?.({ dspEnabled: true, directMode: false })
+    }
+    await ensureOutputSampleRateSynced().catch(() => undefined)
     message.value =
       next.requiresPcmFallback && !next.dsdPcmFallbackApplied
         ? '场景已保存；保持 DSD 直通。'
@@ -415,6 +535,7 @@ async function pinScene(pin: string | null): Promise<void> {
       }
     }
     adopt(next)
+    await ensureOutputSampleRateSynced().catch(() => undefined)
     await poller.refreshAfterCurrent().catch(() => undefined)
   })
 }
@@ -636,6 +757,7 @@ onMounted(async () => {
   try {
     adopt(await coreAudio.getDspSceneState())
     await refreshLibrary()
+    await ensureOutputSampleRateSynced().catch(() => undefined)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -935,9 +1057,10 @@ defineExpose({
       >
         <template #capture
           ><div class="capture-controls">
-            <label class="switch-field"
+            <label class="switch-field" title="开启 FFT 频谱采集"
               ><input
                 type="checkbox"
+                aria-label="开启 FFT 频谱采集"
                 :checked="audioProcessing.fftEnabled"
                 @change="
                   run(async () => {
@@ -947,10 +1070,10 @@ defineExpose({
                     )
                   })
                 "
-              /><span>开启 FFT 频谱采集</span></label
-            ><label class="inline-field"
-              ><span>FFT 分辨率</span
+              /><span>FFT</span></label
+            ><label class="inline-field" title="FFT 分辨率"
               ><select
+                aria-label="FFT 分辨率"
                 :value="audioProcessing.fftResolution"
                 @change="
                   run(async () => {

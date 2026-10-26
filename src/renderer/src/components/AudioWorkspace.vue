@@ -25,6 +25,9 @@ const diagnosticsError = ref('')
 const dirty = ref(false)
 const masterBusy = ref(false)
 const switching = ref(false)
+const signalDialog = ref<HTMLDialogElement | null>(null)
+const signalButton = ref<HTMLButtonElement | null>(null)
+const signalOpen = ref(false)
 const { audioProcessing, audioEngineReady, dspGraphStatus } = storeToRefs(useAudioOutputDspStore())
 const outputStore = useAudioOutputDspStore()
 const effectiveStatus = computed(() => status.value ?? dspGraphStatus?.value ?? null)
@@ -35,20 +38,33 @@ const editorWindow = useDspEditorWindow((value) => {
 const { target } = editorWindow
 const hostDocument = computed(() => target.value?.ownerDocument ?? document)
 const visible = computed(() => (detached.value ? dspEditorDocumentVisible.value : props.active))
-const currentMode = computed(
-  () => dspWorkspaceTabs.find((item) => item.id === tab.value)?.mode ?? 'status'
-)
 const processingBypassed = computed(
   () => audioProcessing.value.directMode || !audioProcessing.value.dspEnabled
 )
 const eqLive = computed(() => !processingBypassed.value && audioProcessing.value.eqEnabled)
 const applyLabel = computed(() => dspApplyLabel(effectiveStatus.value))
 const engineLabel = computed(() =>
-  audioProcessing.value.directMode
-    ? 'Direct 直通'
-    : audioProcessing.value.dspEnabled
-      ? applyLabel.value
-      : 'DSP 已旁路'
+  !audioEngineReady.value
+    ? '引擎未连接'
+    : audioProcessing.value.directMode
+      ? 'Direct 直通'
+      : audioProcessing.value.dspEnabled
+        ? applyLabel.value
+        : 'DSP 已旁路'
+)
+const clipCount = computed(
+  () =>
+    effectiveStatus.value?.meter?.clipCount ??
+    effectiveStatus.value?.nodes.reduce((sum, node) => sum + (node.clipCount ?? 0), 0) ??
+    0
+)
+const engineError = computed(
+  () =>
+    error.value ||
+    diagnosticsError.value ||
+    effectiveStatus.value?.applyError ||
+    effectiveStatus.value?.compileError ||
+    ''
 )
 const engineTone = computed(() => {
   if (!audioEngineReady.value) return 'offline'
@@ -56,47 +72,22 @@ const engineTone = computed(() => {
   if (processingBypassed.value) return 'bypassed'
   return applyLabel.value === '已生效' ? 'live' : 'pending'
 })
-const pageHeading = computed(
-  () =>
-    ({
-      equalizer: {
-        kicker: '实时生效',
-        title: '均衡器',
-        description:
-          '调整立即作用于正在播放的声音，无需保存。先用 OPRA 校正耳机频响，再按喜好塑造音色。'
-      },
-      chain: {
-        kicker: '场景草稿 · 保存后生效',
-        title: '效果链',
-        description:
-          '每个场景是一条串行处理链，按信号经过的顺序编排；引擎根据设备与音源格式自动选择场景。'
-      },
-      output: {
-        kicker: '场景草稿 · 设备参数',
-        title: '输出',
-        description:
-          '信号离开 DSP 前的最后一站。采样率、重采样与保护随场景保存，缓冲直接作用于设备。'
-      },
-      library: {
-        kicker: '跨场景共享',
-        title: '资料库',
-        description:
-          '脉冲响应、耳机与房间校正、VST3 插件集中于此。先在效果链中选中节点，再回来一键绑定。'
-      },
-      monitor: { kicker: '', title: '', description: '' }
-    })[tab.value]
-)
-const lifecycle = computed(() => {
-  const confirmed = !dirty.value && applyLabel.value === '已生效'
-  return [
-    { label: '编辑草稿', state: dirty.value ? 'current' : 'done' },
-    { label: '保存', state: dirty.value ? 'next' : 'done' },
-    {
-      label: processingBypassed.value ? '引擎确认 · 已旁路' : '引擎确认',
-      state: dirty.value ? 'next' : confirmed ? 'done' : 'current'
-    }
-  ]
-})
+function openSignal(): void {
+  signalDialog.value?.showModal()
+  signalOpen.value = true
+}
+function closeSignal(): void {
+  signalDialog.value?.close()
+}
+function signalClosed(): void {
+  signalOpen.value = false
+  signalButton.value?.focus({ preventScroll: true })
+}
+async function navigateSignal(next: DspWorkspaceTab): Promise<void> {
+  closeSignal()
+  await selectTab(next)
+}
+watch([visible, detached], () => closeSignal())
 async function prepareLeave(): Promise<boolean> {
   if (tab.value === 'equalizer' && equalizer.value && !(await equalizer.value.requestLeave()))
     return false
@@ -123,6 +114,7 @@ async function selectTab(next: DspWorkspaceTab): Promise<void> {
   }
 }
 async function focusNode(id: string): Promise<void> {
+  closeSignal()
   await selectTab('chain')
   if (tab.value === 'chain') await rack.value?.focusRuntimeNode(id)
 }
@@ -149,6 +141,7 @@ async function toggleMaster(): Promise<void> {
   }
 }
 function popout(): void {
+  closeSignal()
   try {
     editorWindow.open()
   } catch (cause) {
@@ -209,10 +202,9 @@ defineExpose({ requestLeave: leave })
         <header class="workspace-header">
           <nav class="workspace-tabs" aria-label="DSP 工作台">
             <button
-              v-for="(item, index) in dspWorkspaceTabs"
+              v-for="item in dspWorkspaceTabs"
               :key="item.id"
               :data-mode="item.mode"
-              :data-step="String(index + 1).padStart(2, '0')"
               :title="item.hint"
               :aria-current="tab === item.id ? 'page' : undefined"
               :disabled="switching || rack?.busy || equalizer?.busy"
@@ -234,6 +226,35 @@ defineExpose({ requestLeave: leave })
           </nav>
           <div class="workspace-actions">
             <button
+              class="workspace-power"
+              :class="{ enabled: !processingBypassed }"
+              role="switch"
+              :aria-checked="audioProcessing.dspEnabled"
+              aria-label="DSP 总开关"
+              :disabled="
+                masterBusy ||
+                switching ||
+                rack?.busy ||
+                equalizer?.busy ||
+                audioProcessing.directMode
+              "
+              :title="audioProcessing.directMode ? 'Direct 正在旁路 DSP' : '切换 DSP 总开关'"
+              @click="toggleMaster"
+            >
+              <span class="power-switch" aria-hidden="true"><i></i></span>
+              <span class="power-copy"><strong>DSP</strong></span>
+            </button>
+            <button
+              ref="signalButton"
+              class="workspace-signal-button"
+              :aria-expanded="signalOpen"
+              aria-controls="dsp-signal-dialog"
+              aria-haspopup="dialog"
+              @click="openSignal"
+            >
+              <i class="pi pi-share-alt" aria-hidden="true"></i><span>信号路径</span>
+            </button>
+            <button
               class="workspace-popout"
               :title="detached ? '收回主窗口' : '在独立窗口中调节'"
               @click="detached ? editorWindow.dock() : popout()"
@@ -243,27 +264,12 @@ defineExpose({ requestLeave: leave })
             </button>
           </div>
         </header>
-        <aside class="workspace-status" aria-label="音频链路与硬件参数总览">
-          <div class="status-rail-head">
-            <div class="status-rail-title-row">
-              <span class="rail-info-title">
-                <i class="pi pi-info-circle" aria-hidden="true"></i>
-                <strong>音频信息</strong>
-              </span>
-              <span class="engine-state" :data-tone="engineTone"
-                ><i :class="['state-dot', { ready: audioEngineReady }]" aria-hidden="true"></i
-                >{{ engineLabel }}</span
-              >
-            </div>
-            <div class="status-rail-kicker">
-              <span class="rail-kicker-tag">SIGNAL PIPELINE</span>
-              <span class="status-revision" title="引擎确认的版本 / 请求的版本"
-                >ACK {{ effectiveStatus?.appliedRevision ?? effectiveStatus?.revision ?? 0 }} /
-                {{ effectiveStatus?.requestedRevision ?? effectiveStatus?.revision ?? 0 }}</span
-              >
-            </div>
-          </div>
+        <div class="workspace-status" aria-label="音频链路摘要">
+          <span class="engine-state" :data-tone="engineTone"
+            ><i class="state-dot" aria-hidden="true"></i>{{ engineLabel }}</span
+          >
           <DspSignalOverview
+            compact
             :status="effectiveStatus"
             :scene-state="sceneState"
             :scene-name="sceneName"
@@ -272,54 +278,53 @@ defineExpose({ requestLeave: leave })
             @output="selectTab('output')"
             @navigate="selectTab"
           />
-        </aside>
+          <span v-if="clipCount > 0" class="workspace-clip-warning" role="status"
+            ><i class="pi pi-exclamation-triangle" aria-hidden="true"></i
+            >{{ clipCount }} 次削波</span
+          >
+          <span class="status-revision" title="引擎确认的版本 / 请求的版本"
+            >ACK {{ effectiveStatus?.appliedRevision ?? effectiveStatus?.revision ?? '—' }} /
+            {{ effectiveStatus?.requestedRevision ?? effectiveStatus?.revision ?? '—' }}</span
+          >
+        </div>
+        <dialog
+          id="dsp-signal-dialog"
+          ref="signalDialog"
+          class="signal-dialog"
+          aria-labelledby="signal-dialog-title"
+          @close="signalClosed"
+          @click.self="closeSignal"
+        >
+          <div class="signal-drawer">
+            <header class="signal-drawer-heading">
+              <div>
+                <p class="page-kicker">从音源到耳畔</p>
+                <h2 id="signal-dialog-title">信号路径</h2>
+              </div>
+              <button class="icon-button" aria-label="关闭信号路径" autofocus @click="closeSignal">
+                <i class="pi pi-times" aria-hidden="true"></i>
+              </button>
+            </header>
+            <div class="signal-drawer-body">
+              <DspSignalOverview
+                :status="effectiveStatus"
+                :scene-state="sceneState"
+                :scene-name="sceneName"
+                :disabled="switching || masterBusy || !!rack?.busy || !!equalizer?.busy"
+                @node="focusNode"
+                @output="navigateSignal('output')"
+                @navigate="navigateSignal"
+              />
+            </div>
+          </div>
+        </dialog>
         <div ref="contentRef" class="workspace-content" :data-workspace-tab="tab">
           <div class="workspace-page" :data-tab="tab">
-            <p
-              v-if="error || (tab !== 'monitor' && (status?.applyError || diagnosticsError))"
-              class="rack-message error"
-              role="alert"
-            >
-              <i class="pi pi-exclamation-triangle"></i
-              ><span>{{ error || status?.applyError || diagnosticsError }}</span>
+            <p v-if="engineError" class="rack-message error" role="alert">
+              <i class="pi pi-exclamation-triangle"></i><span>{{ engineError }}</span>
             </p>
-            <header
-              v-if="tab !== 'monitor'"
-              class="workspace-page-heading"
-              :data-mode="currentMode"
-            >
-              <p class="page-kicker">
-                <i class="mode-dot" aria-hidden="true"></i>{{ pageHeading.kicker }}
-              </p>
-              <h2>{{ pageHeading.title }}</h2>
-              <p class="page-description">{{ pageHeading.description }}</p>
-              <p
-                v-if="tab === 'equalizer'"
-                class="realtime-label"
-                :class="{ 'is-bypassed': !eqLive }"
-              >
-                <i class="state-dot" aria-hidden="true"></i
-                >{{
-                  processingBypassed
-                    ? '实时编辑 · 输出已旁路'
-                    : audioProcessing.eqEnabled
-                      ? '正在实时处理'
-                      : '均衡器已旁路'
-                }}
-              </p>
-              <ol
-                v-else-if="tab === 'chain' || tab === 'output'"
-                class="draft-lifecycle"
-                aria-label="草稿进度"
-              >
-                <li v-for="(step, index) in lifecycle" :key="step.label" :data-state="step.state">
-                  <span class="step-index">{{ index + 1 }}</span
-                  ><span class="step-label">{{ step.label }}</span>
-                </li>
-              </ol>
-            </header>
             <div
-              v-if="tab === 'equalizer' && processingBypassed"
+              v-if="['equalizer', 'chain', 'output'].includes(tab) && processingBypassed"
               class="live-eq-context"
               role="note"
             >

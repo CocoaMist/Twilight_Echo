@@ -223,16 +223,12 @@ defineExpose({ finishInteraction })
 }
 .knob-face {
   position: relative;
-  width: 58px;
-  height: 58px;
+  width: 60px;
+  height: 60px;
   border-radius: 50%;
   cursor: ns-resize;
   touch-action: none;
   outline-offset: 4px;
-}
-.gain .knob-face {
-  width: 78px;
-  height: 78px;
 }
 .disabled .knob-face {
   cursor: default;
@@ -262,10 +258,8 @@ defineExpose({ finishInteraction })
   inset: 8px;
   border: 1px solid var(--eq-knob-edge);
   border-radius: 50%;
-  background: linear-gradient(145deg, var(--eq-knob-light), var(--eq-knob-dark));
-  box-shadow:
-    inset 0 1px 1px var(--eq-highlight),
-    0 2px 5px var(--eq-shadow);
+  background: var(--eq-knob-light);
+  box-shadow: none;
 }
 .knob-disc i {
   position: absolute;
@@ -304,16 +298,15 @@ defineExpose({ finishInteraction })
   color: var(--eq-text-muted);
 }
 .knob-readout input {
-  width: 47px;
+  width: 50px;
   min-width: 0;
-  padding: 2px 0;
-  border: 0;
-  border-bottom: 1px solid transparent;
-  border-radius: 2px;
-  background: transparent;
+  padding: 2px 4px;
+  border: 1px solid var(--eq-border-soft);
+  border-radius: 3px;
+  background: var(--eq-surface);
   color: var(--eq-text);
   font: inherit;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   font-variant-numeric: tabular-nums;
   text-align: right;
   appearance: textfield;

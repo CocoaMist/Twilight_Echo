@@ -125,6 +125,7 @@ function canMove(index: number, delta: number): boolean {
           <span class="node-led" aria-hidden="true"></span>
           <button
             class="node-select"
+            :title="nodeLabel(node.type)"
             :aria-pressed="node.id === selectedNodeId"
             @click="emit('selectNode', node.id)"
             @keydown.alt.up.prevent="move(index, -1)"

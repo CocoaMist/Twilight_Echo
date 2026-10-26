@@ -42,6 +42,7 @@ const props = defineProps<{
   sceneState: DspSceneState | null
   sceneName: string
   disabled: boolean
+  compact?: boolean
 }>()
 const emit = defineEmits<{ node: [id: string]; output: []; navigate: [tab: DspWorkspaceTab] }>()
 const outputStore = useAudioOutputDspStore()
@@ -64,6 +65,7 @@ const {
 const playerStore = usePlayerStore()
 const { isPlaying } = playerStore
 const currentTrack = computed(() => playerStore.currentTrack?.value ?? null)
+const hasSource = computed(() => !!(playbackInfo.value || currentTrack.value))
 
 const effectiveStatus = computed(() => props.status ?? dspGraphStatus?.value ?? null)
 const bypassed = computed(
@@ -72,7 +74,9 @@ const bypassed = computed(
     audioProcessing.value.directMode ||
     !!props.sceneState?.effectiveBypassReason
 )
-const nodes = computed(() => dspSignalNodes(props.sceneState, effectiveStatus.value, bypassed.value))
+const nodes = computed(() =>
+  dspSignalNodes(props.sceneState, effectiveStatus.value, bypassed.value)
+)
 const activeGraphNodes = computed(() => {
   const graph = props.sceneState?.effectiveGraph ?? props.sceneState?.graph
   return new Map((graph?.nodes ?? []).map((node) => [node.id, node]))
@@ -91,56 +95,39 @@ const selectedDevice = computed(
     null
 )
 
-const rate = computed(() => {
-  const outStage =
-    effectiveStatus.value?.outputStage ??
+const configuredOutputStage = computed(
+  () =>
     props.sceneState?.effectiveGraph?.outputStage ??
     props.sceneState?.graph?.outputStage ??
-    dspOutputStage?.value
-  return (
+    dspOutputStage?.value ??
+    null
+)
+
+const rate = computed(
+  () =>
+    effectiveStatus.value?.outputStage?.actualSampleRate ||
     outputInfo.value?.actualSampleRate ||
     outputInfo.value?.outputSampleRate ||
-    effectiveStatus.value?.outputStage?.actualSampleRate ||
-    (typeof outStage?.targetSampleRate === 'number' ? outStage.targetSampleRate : 0) ||
     playbackInfo.value?.actualSampleRate ||
     playbackInfo.value?.outputSampleRate ||
-    selectedDevice.value?.sampleRates?.[0] ||
-    currentTrack.value?.sampleRate ||
-    48000
-  )
-})
+    0
+)
 
 const sourceRate = computed(() => {
   const info = playbackInfo.value
   const track = currentTrack.value
-  return (
-    info?.sourceSampleRate ||
-    info?.decodedSampleRate ||
-    track?.sampleRate ||
-    rate.value
-  )
+  return info?.sourceSampleRate || info?.decodedSampleRate || track?.sampleRate || 0
 })
 
 const sourceBits = computed(() => {
   const info = playbackInfo.value
   const track = currentTrack.value
-  return (
-    info?.sourceBitDepth ||
-    info?.decodedBitDepth ||
-    track?.bitDepth ||
-    outputInfo.value?.actualBitDepth ||
-    24
-  )
+  return info?.sourceBitDepth || info?.decodedBitDepth || track?.bitDepth || 0
 })
 
 const sourceChannels = computed(() => {
   const info = playbackInfo.value
-  return (
-    info?.sourceChannels ||
-    info?.decodedChannels ||
-    outputInfo.value?.actualChannels ||
-    2
-  )
+  return info?.sourceChannels || info?.decodedChannels || 0
 })
 
 const sourceBitrate = computed(() => {
@@ -238,10 +225,22 @@ const dspEmblemLogo = computed<EmblemLogoSpec>(() => {
 })
 
 const trackSpecLine = computed(() => {
-  const parts = [sourceCodec.value, `${sourceBits.value} bit`, dspSampleRate(sourceRate.value)]
+  const parts = [sourceCodec.value]
+  if (sourceBits.value) parts.push(`${sourceBits.value} bit`)
+  if (sourceRate.value) parts.push(dspSampleRate(sourceRate.value))
   if (sourceBitrate.value > 0) parts.push(`${sourceBitrate.value} kbps`)
   return parts.join(' ')
 })
+const summarySource = computed(() =>
+  playbackInfo.value || currentTrack.value ? trackSpecLine.value : '未载入音源'
+)
+const summaryProcessing = computed(() =>
+  audioProcessing.value.directMode
+    ? 'Direct 直通'
+    : bypassed.value
+      ? 'DSP 已旁路'
+      : `${props.sceneName} · ${nodes.value.length} 个处理器`
+)
 
 const decoderLabel = computed(() => {
   if (outputInfo.value?.isDsd || playbackInfo.value?.isDsd) {
@@ -261,29 +260,40 @@ const resamplerHeadline = computed(() => {
     props.sceneState?.effectiveGraph?.outputStage ??
     props.sceneState?.graph?.outputStage ??
     dspOutputStage?.value
-  if (!out) return 'Bit-Perfect 原生时钟直通'
+  if (!out) return '等待引擎报告'
   return describeResampler(out.resamplerQuality ?? 'native', effectiveStatus.value?.outputStage)
 })
 
 const resamplerPrecisionText = computed(() => {
-  const out =
-    effectiveStatus.value?.outputStage ??
-    props.sceneState?.effectiveGraph?.outputStage ??
-    props.sceneState?.graph?.outputStage ??
-    dspOutputStage?.value
-  const q = out?.resamplerQuality ?? 'native'
-  if (sourceRate.value === rate.value && !effectiveStatus.value?.outputStage?.resampled) {
-    return '零重采样损耗 · 采样率 1:1 锁定'
-  }
-  if (q === 'soxrVhq' || q === 'soxrHq') return '截断: 99.2% · 线性相位抗混叠'
-  return '截断: 97.0% · 64-bit 浮点插值'
+  const out = configuredOutputStage.value
+  const phase = out?.resamplerPhase ?? 'linear'
+  const phaseLabel =
+    phase === 'minimum'
+      ? '最小相位 (陡峭)'
+      : phase === 'linear-smooth'
+        ? '线性相位 (平缓)'
+        : phase === 'minimum-smooth'
+          ? '最小相位 (平缓)'
+          : '线性相位 (陡峭)'
+  return `配置滤波器 · ${phaseLabel}`
 })
 
-const outputName = computed(
-  () =>
-    outputInfo.value?.actualDeviceName ||
-    selectedDevice.value?.label ||
-    '系统默认音频输出'
+function formatCleanDeviceName(raw: string | undefined | null, backend?: string | null): string {
+  const trimmed = raw?.trim()
+  if (!trimmed) return '系统默认音频输出'
+  const guidMatch = trimmed.match(/^(?:([a-z0-9_-]+):)?\{[0-9a-f-]{8,}\}$/i)
+  if (guidMatch) {
+    const prefix = (guidMatch[1] || backend || '').toUpperCase()
+    return prefix ? `${prefix} 硬件输出` : '音频输出设备'
+  }
+  return trimmed
+}
+
+const outputName = computed(() =>
+  formatCleanDeviceName(
+    outputInfo.value?.actualDeviceName || selectedDevice.value?.label,
+    outputInfo.value?.actualBackend || audioOutput.value
+  )
 )
 
 const outputBackendLabel = computed(() => {
@@ -333,19 +343,19 @@ const buffer = computed(
   () =>
     outputInfo.value?.bufferSizeFrames ||
     playbackInfo.value?.bufferSizeFrames ||
-    selectedDevice.value?.preferredBufferSize ||
     0
 )
 const requestedBuffer = computed(() => audioOutputConfig.value?.preferredBufferSize || 0)
-const effectiveBuffer = computed(() => buffer.value || requestedBuffer.value || 512)
+const effectiveBuffer = computed(() => buffer.value)
 const bufferDurationMs = computed(() => {
   const frames = effectiveBuffer.value
   const sr = rate.value
-  if (!frames || frames <= 0 || !sr || sr <= 0) return '10.7'
+  if (!frames || frames <= 0 || !sr || sr <= 0) return '—'
   return ((frames / sr) * 1000).toFixed(1)
 })
 
 const effectiveLatencyMs = computed(() => {
+  if (!audioEngineReady.value) return null
   const direct =
     outputInfo.value?.latencyMs ||
     outputInfo.value?.latencyInfo?.totalLatencyMs ||
@@ -358,14 +368,14 @@ const effectiveLatencyMs = computed(() => {
   if (effectiveBuffer.value > 0 && rate.value > 0) {
     return (effectiveBuffer.value / rate.value) * 1000
   }
-  return 0
+  return null
 })
 
 const processMs = computed(() =>
   (effectiveStatus.value
     ? effectiveStatus.value.nodes.reduce((sum, node) => sum + (node.lastProcessMs || 0), 0)
-    : 0
-  ).toFixed(2)
+    : null
+  )?.toFixed(2) ?? '—'
 )
 
 const stereoImage = computed<DspStereoImageConfig>(() => {
@@ -387,7 +397,7 @@ const eqSpecLine = computed(() => {
     proc.eqMode === 'parametric'
       ? (proc.eqBands?.filter((b) => b.enabled !== false).length ?? proc.eqBands?.length ?? 10)
       : (proc.eqBands?.length ?? 10)
-  return `${count} 段 (31 Hz – 16K, Q: 1.41)`
+  return `${count} 段已启用`
 })
 
 const eqLimiterBalanceLine = computed(() => {
@@ -414,7 +424,9 @@ const spatialToneLines = computed(() => {
 
 const gainValueText = computed(() => {
   const proc = audioProcessing.value
-  const total = Number(proc.eqPreamp ?? 0) + Number(proc.replayGainPreamp ?? 0)
+  const out = configuredOutputStage.value
+  const headroom = !bypassed.value && out?.headroomEnabled ? Number(out.headroomGainDb ?? -3) : 0
+  const total = Number(proc.eqPreamp ?? 0) + Number(proc.replayGainPreamp ?? 0) + headroom
   return `${total >= 0 ? `+${total.toFixed(1)}` : total.toFixed(1)} dB`
 })
 
@@ -445,8 +457,8 @@ const crossfadeText = computed(() => {
 })
 
 const outputBitTransition = computed(() => {
-  const outBits = outputInfo.value?.actualBitDepth || playbackInfo.value?.decodedBitDepth || 24
-  return `32 bit → ${outBits} bit`
+  const outBits = outputInfo.value?.actualBitDepth || playbackInfo.value?.actualBitDepth
+  return outBits ? `输出 ${outBits} bit` : '实际位深未报告'
 })
 
 const outputFlagsText = computed(() => {
@@ -499,384 +511,418 @@ function getNodeDetail(id: string): string {
 <template>
   <section
     class="signal-overview"
-    :class="{ 'is-bypassed': bypassed, 'is-flowing': flowing, 'is-offline': !audioEngineReady }"
+    :class="{
+      'is-compact': compact,
+      'is-bypassed': bypassed,
+      'is-flowing': flowing,
+      'is-offline': !audioEngineReady
+    }"
     aria-label="实时音频链路"
   >
-    <ol class="pipeline-timeline" aria-label="音频信号处理流水线">
-      <!-- 01 · 音轨 (TRACK & SOURCE) -->
-      <li class="pipeline-station station-track">
-        <div class="station-axis" aria-hidden="true">
-          <span class="station-emblem emblem-codec" :class="{ 'has-logo': !!codecEmblemLogo }">
-            <template v-if="codecEmblemLogo">
+    <div v-if="compact" class="signal-summary">
+      <span class="signal-summary-source" :title="summarySource"
+        ><i class="pi pi-music" aria-hidden="true"></i><span>{{ summarySource }}</span></span
+      >
+      <i class="pi pi-angle-right" aria-hidden="true"></i>
+      <span class="signal-summary-processing" :title="summaryProcessing">{{
+        summaryProcessing
+      }}</span>
+      <i class="pi pi-angle-right" aria-hidden="true"></i>
+      <button
+        class="signal-summary-output"
+        :disabled="disabled"
+        :title="`${outputName} · ${dspSampleRate(rate)}`"
+        @click="emit('output')"
+      >
+        <i class="pi pi-headphones" aria-hidden="true"></i><span>{{ outputName }}</span
+        ><small>{{ dspSampleRate(rate) }}</small>
+      </button>
+    </div>
+    <template v-else>
+      <ol class="pipeline-timeline" aria-label="音频信号处理流水线">
+        <!-- 01 · 音轨 (TRACK & SOURCE) -->
+        <li class="pipeline-station station-track">
+          <div class="station-axis" aria-hidden="true">
+            <span class="station-emblem emblem-codec" :class="{ 'has-logo': !!codecEmblemLogo }">
+              <template v-if="codecEmblemLogo">
+                <img
+                  class="emblem-logo"
+                  :class="{
+                    'has-dark-variant': !!codecEmblemLogo.dark,
+                    'is-mono-ink': !!codecEmblemLogo.monoInk
+                  }"
+                  :src="codecEmblemLogo.light"
+                  :alt="codecEmblemLogo.alt"
+                  draggable="false"
+                />
+                <img
+                  v-if="codecEmblemLogo.dark"
+                  class="emblem-logo is-dark-variant"
+                  :src="codecEmblemLogo.dark"
+                  :alt="codecEmblemLogo.alt"
+                  draggable="false"
+                />
+              </template>
+              <template v-else>{{ sourceCodecBadge }}</template>
+            </span>
+            <span class="station-shaft">
+              <i class="shaft-line"></i>
+              <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
+            </span>
+          </div>
+          <div class="station-body">
+            <div class="station-title-row">
+              <strong class="station-title">音轨</strong>
+              <span class="station-tag">{{ !hasSource ? '等待音源' : flowing ? '实时流' : '暂停' }}</span>
+            </div>
+            <p class="station-primary-spec">{{ summarySource }}</p>
+            <p class="station-secondary-spec">{{ sourceChannels ? `${sourceChannels} 声道` : '声道未报告' }}</p>
+            <button
+              type="button"
+              class="station-inline-link"
+              :disabled="disabled"
+              @click="emit('navigate', 'monitor')"
+            >
+              {{ audioProcessing.gapless !== false ? '无间隙' : '常规衔接' }}
+            </button>
+          </div>
+        </li>
+
+        <!-- 02 · 解码器 (DECODER) -->
+        <li class="pipeline-station station-decoder">
+          <div class="station-axis" aria-hidden="true">
+            <span class="station-emblem emblem-decoder has-logo">
               <img
                 class="emblem-logo"
                 :class="{
-                  'has-dark-variant': !!codecEmblemLogo.dark,
-                  'is-mono-ink': !!codecEmblemLogo.monoInk
+                  'has-dark-variant': !!decoderEmblemLogo.dark,
+                  'is-mono-ink': !!decoderEmblemLogo.monoInk
                 }"
-                :src="codecEmblemLogo.light"
-                :alt="codecEmblemLogo.alt"
+                :src="decoderEmblemLogo.light"
+                :alt="decoderEmblemLogo.alt"
                 draggable="false"
               />
               <img
-                v-if="codecEmblemLogo.dark"
+                v-if="decoderEmblemLogo.dark"
                 class="emblem-logo is-dark-variant"
-                :src="codecEmblemLogo.dark"
-                :alt="codecEmblemLogo.alt"
+                :src="decoderEmblemLogo.dark"
+                :alt="decoderEmblemLogo.alt"
                 draggable="false"
               />
-            </template>
-            <template v-else>{{ sourceCodecBadge }}</template>
-          </span>
-          <span class="station-shaft">
-            <i class="shaft-line"></i>
-            <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
-          </span>
-        </div>
-        <div class="station-body">
-          <div class="station-title-row">
-            <strong class="station-title">音轨</strong>
-            <span class="station-tag">{{ flowing ? '实时流' : '就绪' }}</span>
+            </span>
+            <span class="station-shaft is-short">
+              <i class="shaft-line"></i>
+              <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
+            </span>
           </div>
-          <p class="station-primary-spec">{{ trackSpecLine }}</p>
-          <p class="station-secondary-spec">{{ sourceChannels }} 声道</p>
-          <button
-            type="button"
-            class="station-inline-link"
-            :disabled="disabled"
-            @click="emit('navigate', 'monitor')"
-          >
-            {{ audioProcessing.gapless !== false ? '无间隙' : '常规衔接' }}
-          </button>
-        </div>
-      </li>
-
-      <!-- 02 · 解码器 (DECODER) -->
-      <li class="pipeline-station station-decoder">
-        <div class="station-axis" aria-hidden="true">
-          <span class="station-emblem emblem-decoder has-logo">
-            <img
-              class="emblem-logo"
-              :class="{
-                'has-dark-variant': !!decoderEmblemLogo.dark,
-                'is-mono-ink': !!decoderEmblemLogo.monoInk
-              }"
-              :src="decoderEmblemLogo.light"
-              :alt="decoderEmblemLogo.alt"
-              draggable="false"
-            />
-            <img
-              v-if="decoderEmblemLogo.dark"
-              class="emblem-logo is-dark-variant"
-              :src="decoderEmblemLogo.dark"
-              :alt="decoderEmblemLogo.alt"
-              draggable="false"
-            />
-          </span>
-          <span class="station-shaft is-short">
-            <i class="shaft-line"></i>
-            <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
-          </span>
-        </div>
-        <div class="station-body">
-          <div class="station-title-row">
-            <strong class="station-title">解码器</strong>
+          <div class="station-body">
+            <div class="station-title-row">
+              <strong class="station-title">解码器</strong>
+            </div>
+            <p class="station-primary-spec">{{ hasSource ? decoderLabel : '等待载入音源' }}</p>
           </div>
-          <p class="station-primary-spec">{{ decoderLabel }}</p>
-        </div>
-      </li>
+        </li>
 
-      <!-- 03 · 重采样 (RESAMPLER / SRC) -->
-      <li class="pipeline-station station-resampler">
-        <div class="station-axis" aria-hidden="true">
-          <span class="station-emblem emblem-src">{{ resamplerBadge }}</span>
-          <span class="station-shaft">
-            <i class="shaft-line"></i>
-            <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
-          </span>
-        </div>
-        <div class="station-body">
-          <button
-            type="button"
-            class="station-title-link"
-            :disabled="disabled"
-            title="打开输出与重采样设置"
-            @click="emit('output')"
-          >
-            <strong class="station-title">重采样</strong>
-            <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
-          </button>
-          <p class="station-primary-spec">{{ resamplerHeadline }}</p>
-          <p class="station-secondary-spec">{{ resamplerPrecisionText }}</p>
-          <p class="station-conversion-spec">
-            <span>{{ dspSampleRate(sourceRate) }}</span>
-            <i class="conversion-arrow" aria-hidden="true">→</i>
-            <strong>{{ dspSampleRate(rate) }}</strong>
-          </p>
-        </div>
-      </li>
-
-      <!-- 04 · 信号处理 (DSP SIGNAL PROCESSING) -->
-      <li class="pipeline-station station-dsp">
-        <div class="station-axis" aria-hidden="true">
-          <span class="station-emblem emblem-dsp has-logo" :class="{ active: !bypassed }">
-            <img
-              class="emblem-logo"
-              :src="dspEmblemLogo.light"
-              :alt="dspEmblemLogo.alt"
-              draggable="false"
-            />
-          </span>
-          <span class="station-shaft is-long">
-            <i class="shaft-line"></i>
-            <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
-          </span>
-        </div>
-        <div class="station-body">
-          <div class="station-title-row">
-            <strong class="station-title">信号处理</strong>
-            <span class="station-tag">{{ sceneName }}</span>
+        <!-- 03 · 重采样 (RESAMPLER / SRC) -->
+        <li class="pipeline-station station-resampler">
+          <div class="station-axis" aria-hidden="true">
+            <span class="station-emblem emblem-src">{{ resamplerBadge }}</span>
+            <span class="station-shaft">
+              <i class="shaft-line"></i>
+              <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
+            </span>
           </div>
-          <p class="station-primary-spec">Float64/32 bit</p>
-          <p class="station-primary-spec">{{ dspSampleRate(rate) }}</p>
+          <div class="station-body">
+            <button
+              type="button"
+              class="station-title-link"
+              :disabled="disabled"
+              title="打开输出与重采样设置"
+              @click="emit('output')"
+            >
+              <strong class="station-title">重采样</strong>
+              <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+            </button>
+            <p class="station-primary-spec">{{ resamplerHeadline }}</p>
+            <p class="station-secondary-spec">{{ resamplerPrecisionText }}</p>
+            <p class="station-conversion-spec">
+              <span>{{ dspSampleRate(sourceRate) }}</span>
+              <i class="conversion-arrow" aria-hidden="true">→</i>
+              <strong>{{ dspSampleRate(rate) }}</strong>
+            </p>
+          </div>
+        </li>
 
-          <div class="dsp-subgroups">
-            <!-- 均衡器 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">均衡器</span>
-              <button
-                type="button"
-                class="subgroup-link-block"
-                :disabled="disabled"
-                @click="emit('navigate', 'equalizer')"
-              >
-                <span class="subgroup-line">
-                  均衡器模式: <u>{{ eqModeLabel }}</u>
-                </span>
-                <span class="subgroup-line">
-                  <u>{{ eqSpecLine }}</u>
-                </span>
-                <span class="subgroup-line">{{ eqLimiterBalanceLine }}</span>
-              </button>
+        <!-- 04 · 信号处理 (DSP SIGNAL PROCESSING) -->
+        <li class="pipeline-station station-dsp">
+          <div class="station-axis" aria-hidden="true">
+            <span class="station-emblem emblem-dsp has-logo" :class="{ active: !bypassed }">
+              <img
+                class="emblem-logo"
+                :src="dspEmblemLogo.light"
+                :alt="dspEmblemLogo.alt"
+                draggable="false"
+              />
+            </span>
+            <span class="station-shaft is-long">
+              <i class="shaft-line"></i>
+              <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
+            </span>
+          </div>
+          <div class="station-body">
+            <div class="station-title-row">
+              <strong class="station-title">信号处理</strong>
+              <span class="station-tag">{{ sceneName }}</span>
             </div>
+            <p class="station-primary-spec">Float64/32 bit</p>
+            <p class="station-primary-spec">{{ dspSampleRate(rate) }}</p>
 
-            <!-- 音调与声场 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">声场与馈送</span>
-              <button
-                type="button"
-                class="subgroup-link-block"
-                :disabled="disabled"
-                @click="emit('navigate', 'monitor')"
-              >
-                <span class="subgroup-line">
-                  <u>{{ spatialToneLines.line1 }}</u>
-                </span>
-                <span class="subgroup-line">
-                  <u>{{ spatialToneLines.line2 }}</u>
-                </span>
-              </button>
-            </div>
+            <div class="dsp-subgroups">
+              <!-- 均衡器 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">均衡器</span>
+                <button
+                  type="button"
+                  class="subgroup-link-block"
+                  :disabled="disabled"
+                  @click="emit('navigate', 'equalizer')"
+                >
+                  <span class="subgroup-line">
+                    均衡器模式: <u>{{ eqModeLabel }}</u>
+                  </span>
+                  <span class="subgroup-line">
+                    <u>{{ eqSpecLine }}</u>
+                  </span>
+                  <span class="subgroup-line">{{ eqLimiterBalanceLine }}</span>
+                </button>
+              </div>
 
-            <!-- 增益 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">增益</span>
-              <span class="subgroup-value">{{ gainValueText }}</span>
-            </div>
+              <!-- 音调与声场 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">声场与馈送</span>
+                <button
+                  type="button"
+                  class="subgroup-link-block"
+                  :disabled="disabled"
+                  @click="emit('navigate', 'monitor')"
+                >
+                  <span class="subgroup-line">
+                    <u>{{ spatialToneLines.line1 }}</u>
+                  </span>
+                  <span class="subgroup-line">
+                    <u>{{ spatialToneLines.line2 }}</u>
+                  </span>
+                </button>
+              </div>
 
-            <!-- 音量控制 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">音量控制</span>
-              <button
-                type="button"
-                class="subgroup-link-block"
-                :disabled="disabled"
-                @click="emit('navigate', 'monitor')"
-              >
-                <span class="subgroup-line">
-                  <s v-if="!audioProcessing.directMode" class="dvc-strike">DVC</s>
-                  <u>{{ volumeControlText }}</u>
-                </span>
-              </button>
-            </div>
+              <!-- 增益 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">增益</span>
+                <span class="subgroup-value">{{ gainValueText }}</span>
+              </div>
 
-            <!-- 串行效果器链 (默认折叠) -->
-            <div v-if="nodes.length" class="dsp-subgroup">
-              <span class="subgroup-label">串行效果链</span>
-              <button
-                type="button"
-                class="subgroup-collapse-toggle"
-                :aria-expanded="chainExpanded"
-                :title="chainExpanded ? '收起串行效果链节点' : '展开串行效果链节点'"
-                @click="chainExpanded = !chainExpanded"
-              >
-                <span class="subgroup-line">
-                  <u>{{ sceneName }} ({{ activeNodeCount }}/{{ nodes.length }} 启用)</u>
-                </span>
-                <i
-                  class="pi"
-                  :class="chainExpanded ? 'pi-chevron-up' : 'pi-chevron-down'"
-                  aria-hidden="true"
-                ></i>
-              </button>
-              <ol v-show="chainExpanded" class="overview-nodes" aria-label="当前引擎链路">
-                <li v-for="(node, idx) in nodes" :key="node.id">
-                  <button
-                    type="button"
-                    class="rail-node"
-                    :class="{ 'is-active': node.active, 'is-off': node.state === '已旁路' }"
-                    :disabled="disabled || !node.configured"
-                    :title="node.reason || `${node.state} · 编辑 ${nodeLabel(node.type)}`"
-                    @click="emit('node', node.id)"
-                  >
-                    <span class="rail-node-index">{{ String(idx + 1).padStart(2, '0') }}</span>
-                    <i class="rail-led" aria-hidden="true"></i>
-                    <span class="rail-node-main">
-                      <span class="rail-node-title">{{ nodeLabel(node.type) }}</span>
-                      <small v-if="getNodeDetail(node.id)" class="rail-node-summary">{{
-                        getNodeDetail(node.id)
-                      }}</small>
-                    </span>
-                    <span class="rail-node-badge">{{
-                      node.active ? '运行' : node.state === '已旁路' ? '旁路' : '待命'
-                    }}</span>
-                  </button>
-                </li>
-              </ol>
-            </div>
+              <!-- 音量控制 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">音量控制</span>
+                <button
+                  type="button"
+                  class="subgroup-link-block"
+                  :disabled="disabled"
+                  @click="emit('navigate', 'monitor')"
+                >
+                  <span class="subgroup-line">
+                    <s v-if="!audioProcessing.directMode" class="dvc-strike">DVC</s>
+                    <u>{{ volumeControlText }}</u>
+                  </span>
+                </button>
+              </div>
 
-            <!-- 交叉淡入淡出 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">交叉淡入淡出</span>
-              <button
-                type="button"
-                class="subgroup-link-block"
-                :disabled="disabled"
-                @click="emit('navigate', 'monitor')"
-              >
-                <span class="subgroup-line">
-                  <u>{{ crossfadeText }}</u>
-                </span>
-              </button>
-            </div>
+              <!-- 串行效果器链 (默认折叠) -->
+              <div v-if="nodes.length" class="dsp-subgroup">
+                <span class="subgroup-label">串行效果链</span>
+                <button
+                  type="button"
+                  class="subgroup-collapse-toggle"
+                  :aria-expanded="chainExpanded"
+                  :title="chainExpanded ? '收起串行效果链节点' : '展开串行效果链节点'"
+                  @click="chainExpanded = !chainExpanded"
+                >
+                  <span class="subgroup-line">
+                    <u>{{ sceneName }} ({{ activeNodeCount }}/{{ nodes.length }} 启用)</u>
+                  </span>
+                  <i
+                    class="pi"
+                    :class="chainExpanded ? 'pi-chevron-up' : 'pi-chevron-down'"
+                    aria-hidden="true"
+                  ></i>
+                </button>
+                <ol v-show="chainExpanded" class="overview-nodes" aria-label="当前引擎链路">
+                  <li v-for="(node, idx) in nodes" :key="node.id">
+                    <button
+                      type="button"
+                      class="rail-node"
+                      :class="{ 'is-active': node.active, 'is-off': node.state === '已旁路' }"
+                      :disabled="disabled || !node.configured"
+                      :title="node.reason || `${node.state} · 编辑 ${nodeLabel(node.type)}`"
+                      @click="emit('node', node.id)"
+                    >
+                      <span class="rail-node-index">{{ String(idx + 1).padStart(2, '0') }}</span>
+                      <i class="rail-led" aria-hidden="true"></i>
+                      <span class="rail-node-main">
+                        <span class="rail-node-title">{{ nodeLabel(node.type) }}</span>
+                        <small v-if="getNodeDetail(node.id)" class="rail-node-summary">{{
+                          getNodeDetail(node.id)
+                        }}</small>
+                      </span>
+                      <span class="rail-node-badge">{{
+                        node.active ? '运行' : node.state === '已旁路' ? '旁路' : '待命'
+                      }}</span>
+                    </button>
+                  </li>
+                </ol>
+              </div>
 
-            <!-- 缓冲区 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">缓冲区</span>
-              <button
-                type="button"
-                class="subgroup-link-block"
-                :disabled="disabled"
-                @click="emit('output')"
-              >
-                <span class="subgroup-line">
-                  <u>2x ({{ bufferDurationMs }} ms, {{ effectiveBuffer }} 音频帧)</u>
-                </span>
-              </button>
-            </div>
+              <!-- 交叉淡入淡出 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">交叉淡入淡出</span>
+                <button
+                  type="button"
+                  class="subgroup-link-block"
+                  :disabled="disabled"
+                  @click="emit('navigate', 'monitor')"
+                >
+                  <span class="subgroup-line">
+                    <u>{{ crossfadeText }}</u>
+                  </span>
+                </button>
+              </div>
 
-            <!-- 延迟 -->
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">延迟</span>
-              <span class="subgroup-value"
-                >{{ effectiveLatencyMs.toFixed(1) }} ms · 耗时 {{ processMs }} ms</span
-              >
+              <!-- 缓冲区 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">缓冲区</span>
+                <button
+                  type="button"
+                  class="subgroup-link-block"
+                  :disabled="disabled"
+                  @click="emit('output')"
+                >
+                  <span class="subgroup-line">
+                    <u
+                      >{{
+                        effectiveBuffer
+                          ? `${effectiveBuffer} frames · ${bufferDurationMs} ms`
+                          : '实际缓冲未报告'
+                      }}<template v-if="requestedBuffer">
+                        · 请求 {{ requestedBuffer }} frames</template
+                      ></u
+                    >
+                  </span>
+                </button>
+              </div>
+
+              <!-- 延迟 -->
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">延迟</span>
+                <span class="subgroup-value"
+                  >{{ effectiveLatencyMs?.toFixed(1) ?? '—' }} ms · 耗时 {{ processMs }} ms</span
+                >
+              </div>
             </div>
           </div>
-        </div>
-      </li>
+        </li>
 
-      <!-- 05 · 输出 (OUTPUT BACKEND) -->
-      <li class="pipeline-station station-output">
-        <div class="station-axis" aria-hidden="true">
-          <span class="station-emblem emblem-output has-logo">
-            <img
-              class="emblem-logo"
-              :class="{
-                'has-dark-variant': !!outputEmblemLogo.dark,
-                'is-mono-ink': !!outputEmblemLogo.monoInk
-              }"
-              :src="outputEmblemLogo.light"
-              :alt="outputEmblemLogo.alt"
-              draggable="false"
-            />
-            <img
-              v-if="outputEmblemLogo.dark"
-              class="emblem-logo is-dark-variant"
-              :src="outputEmblemLogo.dark"
-              :alt="outputEmblemLogo.alt"
-              draggable="false"
-            />
-          </span>
-          <span class="station-shaft">
-            <i class="shaft-line"></i>
-            <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
-          </span>
-        </div>
-        <div class="station-body">
-          <button
-            type="button"
-            class="station-title-link"
-            :disabled="disabled"
-            @click="emit('output')"
-          >
-            <strong class="station-title">输出</strong>
-            <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
-          </button>
-          <button
-            type="button"
-            class="station-inline-link"
-            :disabled="disabled"
-            @click="emit('output')"
-          >
-            {{ outputBackendLabel }} Output ({{ isExclusive ? '独占模式' : '共享模式' }})
-          </button>
-          <p class="station-conversion-spec">
-            <span>{{ outputBitTransition }}</span>
-          </p>
-          <p class="station-primary-spec">{{ dspSampleRate(rate) }}</p>
+        <!-- 05 · 输出 (OUTPUT BACKEND) -->
+        <li class="pipeline-station station-output">
+          <div class="station-axis" aria-hidden="true">
+            <span class="station-emblem emblem-output has-logo">
+              <img
+                class="emblem-logo"
+                :class="{
+                  'has-dark-variant': !!outputEmblemLogo.dark,
+                  'is-mono-ink': !!outputEmblemLogo.monoInk
+                }"
+                :src="outputEmblemLogo.light"
+                :alt="outputEmblemLogo.alt"
+                draggable="false"
+              />
+              <img
+                v-if="outputEmblemLogo.dark"
+                class="emblem-logo is-dark-variant"
+                :src="outputEmblemLogo.dark"
+                :alt="outputEmblemLogo.alt"
+                draggable="false"
+              />
+            </span>
+            <span class="station-shaft">
+              <i class="shaft-line"></i>
+              <i class="pi pi-angle-down shaft-arrow" aria-hidden="true"></i>
+            </span>
+          </div>
+          <div class="station-body">
+            <button
+              type="button"
+              class="station-title-link"
+              :disabled="disabled"
+              @click="emit('output')"
+            >
+              <strong class="station-title">输出</strong>
+              <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+            </button>
+            <button
+              type="button"
+              class="station-inline-link"
+              :disabled="disabled"
+              @click="emit('output')"
+            >
+              {{ outputBackendLabel }} Output ({{ isExclusive ? '独占模式' : '共享模式' }})
+            </button>
+            <p class="station-conversion-spec">
+              <span>{{ outputBitTransition }}</span>
+            </p>
+            <p class="station-primary-spec">{{ dspSampleRate(rate) }}</p>
 
-          <div class="dsp-subgroups output-subgroups">
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">标志</span>
-              <span class="subgroup-mono">{{ outputFlagsText }}</span>
-            </div>
-            <div class="dsp-subgroup">
-              <span class="subgroup-label">延迟</span>
-              <span class="subgroup-value">{{ effectiveLatencyMs.toFixed(1) }} ms</span>
+            <div class="dsp-subgroups output-subgroups">
+              <div class="dsp-subgroup">
+                <span class="subgroup-label">标志</span>
+                <span class="subgroup-mono">{{ outputFlagsText }}</span>
+              </div>
+              <div v-if="effectiveLatencyMs !== null" class="dsp-subgroup">
+                <span class="subgroup-label">延迟</span>
+                <span class="subgroup-value">{{ effectiveLatencyMs.toFixed(1) }} ms</span>
+              </div>
             </div>
           </div>
-        </div>
-      </li>
+        </li>
 
-      <!-- 06 · 输出设备 (OUTPUT DEVICE) -->
-      <li class="pipeline-station station-device">
-        <div class="station-axis" aria-hidden="true">
-          <span class="station-emblem emblem-device" :class="{ 'has-logo': !!deviceEmblemLogo }">
-            <img
-              v-if="deviceEmblemLogo"
-              class="emblem-logo"
-              :class="{ 'is-mono-ink': !!deviceEmblemLogo.monoInk }"
-              :src="deviceEmblemLogo.light"
-              :alt="deviceEmblemLogo.alt"
-              draggable="false"
-            />
-            <i v-else class="pi pi-volume-up" aria-hidden="true"></i>
-          </span>
-        </div>
-        <div class="station-body">
-          <button
-            type="button"
-            class="station-title-link"
-            :disabled="disabled"
-            @click="emit('output')"
-          >
-            <strong class="station-title">输出设备</strong>
-            <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
-          </button>
-          <p class="station-primary-spec">{{ outputName }}</p>
-        </div>
-      </li>
-    </ol>
+        <!-- 06 · 输出设备 (OUTPUT DEVICE) -->
+        <li class="pipeline-station station-device">
+          <div class="station-axis" aria-hidden="true">
+            <span class="station-emblem emblem-device" :class="{ 'has-logo': !!deviceEmblemLogo }">
+              <img
+                v-if="deviceEmblemLogo"
+                class="emblem-logo"
+                :class="{ 'is-mono-ink': !!deviceEmblemLogo.monoInk }"
+                :src="deviceEmblemLogo.light"
+                :alt="deviceEmblemLogo.alt"
+                draggable="false"
+              />
+              <i v-else class="pi pi-volume-up" aria-hidden="true"></i>
+            </span>
+          </div>
+          <div class="station-body">
+            <button
+              type="button"
+              class="station-title-link"
+              :disabled="disabled"
+              @click="emit('output')"
+            >
+              <strong class="station-title">输出设备</strong>
+              <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+            </button>
+            <p class="station-primary-spec">{{ outputName }}</p>
+          </div>
+        </li>
+      </ol>
+    </template>
   </section>
 </template>

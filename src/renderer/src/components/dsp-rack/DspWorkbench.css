@@ -1,5 +1,5 @@
 /*
- * DSP 工作台 · Monolith
+ * DSP 工作台 · Warm Hi-Fi
  *
  * A quiet, monochrome instrument: one ink colour in a few strengths, hairlines
  * instead of boxes-in-boxes, light tabular numerals for readouts, and the theme
@@ -81,75 +81,69 @@
 
 /* ── Root: palette, type scale, frame ─────────────────────────────────── */
 .audio-workspace {
-  /* Ink in four strengths. */
-  --dsp-text: var(--te-settings-text, var(--te-neutral-900));
-  --dsp-muted: var(--te-settings-text-muted, var(--te-neutral-500));
-  --dsp-faint: color-mix(in srgb, var(--dsp-muted) 62%, transparent);
-  --dsp-ghost: color-mix(in srgb, var(--dsp-text) 26%, transparent);
-  /* Signal colours, used as small marks only. */
-  --dsp-accent: var(--te-primary-500);
-  --dsp-accent-2: var(--te-accent-cyan, var(--te-primary-400));
-  --dsp-good: var(--te-success-500);
-  --dsp-warn: var(--te-warning-500);
-  --dsp-bad: var(--te-control-danger);
-  --dsp-good-text: color-mix(in srgb, var(--dsp-good) 78%, var(--dsp-text));
-  --dsp-warn-text: color-mix(in srgb, var(--dsp-warn) 74%, var(--dsp-text));
-  --dsp-bad-text: color-mix(in srgb, var(--dsp-bad) 80%, var(--dsp-text));
-  --dsp-accent-soft: color-mix(in srgb, var(--dsp-accent) 11%, transparent);
-  --dsp-accent-line: color-mix(in srgb, var(--dsp-accent) 38%, transparent);
-  --dsp-accent-text: color-mix(in srgb, var(--dsp-accent) 84%, var(--dsp-text));
-  /* Surfaces. Light themes lift white panels off a grey page. */
-  --dsp-bg: var(--te-app-bg);
-  --dsp-surface: color-mix(in srgb, var(--te-card-bg) 92%, transparent);
-  --dsp-surface-solid: var(--te-card-bg);
-  --dsp-raised: var(--te-card-bg);
-  --dsp-dialog: var(--te-card-bg);
+  /* Ink in four strengths — Roon MUSE architectural monochrome hierarchy. */
+  --dsp-text: var(--te-settings-text, #18181b);
+  --dsp-muted: var(--te-settings-text-muted, #66666e);
+  --dsp-faint: color-mix(in srgb, var(--dsp-text) 48%, transparent);
+  --dsp-ghost: color-mix(in srgb, var(--dsp-text) 24%, transparent);
+  /* Restrained studio signal & architectural ink accents — no loud theme-pink or neon. */
+  --dsp-accent: var(--dsp-text);
+  --dsp-on-accent: var(--dsp-surface-solid);
+  --dsp-signal: #3f627d;
+  --dsp-accent-2: var(--dsp-signal);
+  --dsp-good: #3b7657;
+  --dsp-warn: #94662a;
+  --dsp-bad: #9e3a3a;
+  --dsp-good-text: color-mix(in srgb, var(--dsp-good) 82%, var(--dsp-text));
+  --dsp-warn-text: color-mix(in srgb, var(--dsp-warn) 82%, var(--dsp-text));
+  --dsp-bad-text: color-mix(in srgb, var(--dsp-bad) 84%, var(--dsp-text));
+  --dsp-accent-soft: color-mix(in srgb, var(--dsp-text) 6%, transparent);
+  --dsp-accent-line: color-mix(in srgb, var(--dsp-text) 24%, transparent);
+  --dsp-accent-text: var(--dsp-text);
+  /* Pure matte neutral studio surfaces — zero yellow tint, zero drop shadows. */
+  --dsp-bg: #f5f5f4;
+  --dsp-surface: #ffffff;
+  --dsp-surface-solid: #ffffff;
+  --dsp-raised: #ffffff;
+  --dsp-dialog: #ffffff;
   --dsp-field: color-mix(in srgb, var(--dsp-text) 3.5%, transparent);
-  --dsp-sunken: color-mix(in srgb, var(--dsp-text) 3%, transparent);
-  --dsp-hover: color-mix(in srgb, var(--dsp-text) 5.5%, transparent);
-  --dsp-press: color-mix(in srgb, var(--dsp-text) 9%, transparent);
-  --dsp-line: color-mix(in srgb, var(--dsp-text) 8%, transparent);
-  --dsp-line-strong: color-mix(in srgb, var(--dsp-text) 14%, transparent);
-  --dsp-shadow-color: var(--te-chrome-shadow-color);
-  --dsp-shadow:
-    0 1px 2px color-mix(in srgb, var(--dsp-shadow-color) 4%, transparent),
-    0 18px 40px -28px color-mix(in srgb, var(--dsp-shadow-color) 22%, transparent);
-  --dsp-shadow-lift:
-    0 2px 6px color-mix(in srgb, var(--dsp-shadow-color) 8%, transparent),
-    0 36px 80px -32px color-mix(in srgb, var(--dsp-shadow-color) 46%, transparent);
-  --dsp-thumb:
-    0 1px 2px color-mix(in srgb, var(--dsp-shadow-color) 12%, transparent),
-    0 0 0 0.5px color-mix(in srgb, var(--dsp-shadow-color) 10%, transparent);
+  --dsp-sunken: #efefed;
+  --dsp-hover: color-mix(in srgb, var(--dsp-text) 5%, transparent);
+  --dsp-press: color-mix(in srgb, var(--dsp-text) 8.5%, transparent);
+  --dsp-line: color-mix(in srgb, var(--dsp-text) 10%, transparent);
+  --dsp-line-strong: color-mix(in srgb, var(--dsp-text) 18%, transparent);
+  --dsp-shadow-color: var(--te-chrome-shadow-color, #000000);
+  --dsp-shadow: none;
+  --dsp-shadow-lift: 0 12px 32px -8px color-mix(in srgb, var(--dsp-shadow-color) 24%, transparent);
+  --dsp-thumb: 0 0 0 1px var(--dsp-line-strong);
   --dsp-panel-ring: 0 0 0 1px var(--dsp-line);
   /* Type scale, derived from the user's body size so large text scales evenly. */
-  --dsp-t10: calc(var(--te-font-size-body, 14px) * 10 / 14);
-  --dsp-t11: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  --dsp-t10: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  --dsp-t11: calc(var(--te-font-size-body, 14px) * 11.5 / 14);
   --dsp-t12: calc(var(--te-font-size-body, 14px) * 12 / 14);
   --dsp-t13: calc(var(--te-font-size-body, 14px) * 13 / 14);
   --dsp-t14: var(--te-font-size-body, 14px);
   --dsp-t15: calc(var(--te-font-size-body, 14px) * 15 / 14);
   --dsp-t17: calc(var(--te-font-size-body, 14px) * 17 / 14);
   --dsp-t20: calc(var(--te-font-size-body, 14px) * 20 / 14);
-  --dsp-t24: calc(var(--te-font-size-body, 14px) * 24 / 14);
-  --dsp-t30: calc(var(--te-font-size-body, 14px) * 30 / 14);
-  --dsp-t36: calc(var(--te-font-size-body, 14px) * 36 / 14);
-  --dsp-t46: calc(var(--te-font-size-body, 14px) * 46 / 14);
-  --dsp-radius: 16px;
-  --dsp-radius-sm: 12px;
-  --dsp-radius-xs: 9px;
+  --dsp-t24: calc(var(--te-font-size-body, 14px) * 22 / 14);
+  --dsp-t30: calc(var(--te-font-size-body, 14px) * 28 / 14);
+  --dsp-t36: calc(var(--te-font-size-body, 14px) * 34 / 14);
+  --dsp-t46: calc(var(--te-font-size-body, 14px) * 40 / 14);
+  --dsp-radius: 4px;
+  --dsp-radius-sm: 4px;
+  --dsp-radius-xs: 3px;
   --dsp-mono: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
-  --dsp-gutter: 42px;
-  --dsp-max: 1580px;
+  --dsp-gutter: 28px;
+  --dsp-max: 1560px;
   --dsp-ease: var(--te-ease-out-strong, cubic-bezier(0.22, 1, 0.36, 1));
-  --dsp-fast: var(--te-motion-hover, 160ms);
+  --dsp-fast: var(--te-motion-hover, 140ms);
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-columns: 304px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas:
-    'header header'
-    'rail content';
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: 'header' 'rail' 'content';
   min-width: 0;
   overflow: hidden;
   color: var(--dsp-text);
@@ -162,27 +156,33 @@
   pointer-events: auto;
   container: dsp-workbench / inline-size;
 }
-/* Dark themes have no lighter card colour; panels are a breath of ink instead. */
+/* Dark themes: Roon-style matte obsidian & slate console surfaces. */
 html[data-theme='dark'] .audio-workspace {
-  --dsp-surface: color-mix(in srgb, var(--dsp-text) 3%, transparent);
-  --dsp-surface-solid: color-mix(in srgb, var(--dsp-text) 4%, var(--te-card-bg));
-  --dsp-raised: color-mix(in srgb, var(--dsp-text) 10%, var(--te-card-bg));
-  --dsp-dialog: color-mix(in srgb, var(--dsp-text) 6%, var(--te-card-bg));
-  --dsp-line: color-mix(in srgb, var(--dsp-text) 7.5%, transparent);
-  --dsp-line-strong: color-mix(in srgb, var(--dsp-text) 13%, transparent);
-  --dsp-shadow: 0 0 0 transparent;
-  --dsp-panel-ring:
-    0 0 0 1px var(--dsp-line), inset 0 1px 0 color-mix(in srgb, var(--dsp-text) 3.5%, transparent);
-  --dsp-thumb:
-    0 1px 2px color-mix(in srgb, var(--dsp-shadow-color) 40%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--dsp-text) 6%, transparent);
+  --dsp-bg: #111215;
+  --dsp-surface: #17181c;
+  --dsp-surface-solid: #17181c;
+  --dsp-raised: #1e2026;
+  --dsp-dialog: #1a1c21;
+  --dsp-sunken: #131418;
+  --dsp-signal: #759ab8;
+  --dsp-good: #5ca37d;
+  --dsp-warn: #c9964c;
+  --dsp-bad: #d16060;
+  --dsp-line: color-mix(in srgb, var(--dsp-text) 9%, transparent);
+  --dsp-line-strong: color-mix(in srgb, var(--dsp-text) 16%, transparent);
+  --dsp-shadow: none;
+  --dsp-panel-ring: 0 0 0 1px var(--dsp-line);
+  --dsp-thumb: 0 0 0 1px var(--dsp-line-strong);
 }
 .audio-workspace > .app-background-layer {
-  display: block;
+  display: none;
 }
 .audio-workspace.is-detached {
   position: fixed;
   inset: 0;
+}
+.audio-workspace:not(.is-detached) {
+  top: 0;
 }
 .audio-workspace *,
 .audio-workspace *::before,
@@ -252,14 +252,14 @@ html[data-theme='dark'] .audio-workspace {
 /* The doubled class outranks the app-wide `.primary-button` rules in base.css. */
 .audio-workspace .primary-button.primary-button:where(:not(.eq-page *)) {
   border: 0;
-  background: var(--dsp-accent);
-  color: var(--te-on-accent);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--te-on-accent) 14%, transparent);
+  background: var(--dsp-text);
+  color: var(--dsp-surface-solid);
+  box-shadow: none;
   font-weight: 600;
 }
 .audio-workspace .primary-button.primary-button:hover:not(:disabled):where(:not(.eq-page *)) {
-  background: color-mix(in srgb, var(--dsp-accent) 90%, var(--dsp-text));
-  color: var(--te-on-accent);
+  background: color-mix(in srgb, var(--dsp-text) 86%, var(--dsp-bg));
+  color: var(--dsp-surface-solid);
 }
 /* A disabled primary action recedes to a neutral wash rather than a faded accent. */
 .audio-workspace .primary-button.primary-button:disabled:where(:not(.eq-page *)) {
@@ -365,17 +365,13 @@ html[data-theme='dark'] .audio-workspace {
 .audio-workspace :where(input, textarea):where(:not(.eq-page *))::placeholder {
   color: var(--dsp-faint);
 }
-/* A drawn chevron replaces the platform arrow on the workbench's own selects. */
+/* A drawn SVG chevron replaces the platform arrow on the workbench's own selects. */
 .audio-workspace :where(select):where(:not(.eq-page *)) {
   appearance: none;
-  padding-right: 32px;
-  background-image:
-    linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position:
-    calc(100% - 17px) 52%,
-    calc(100% - 12.5px) 52%;
-  background-size: 4.5px 4.5px;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23787880' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: calc(100% - 11px) 50%;
+  background-size: 9px 5px;
   background-repeat: no-repeat;
   text-overflow: ellipsis;
 }
@@ -436,12 +432,12 @@ html[data-theme='dark'] .audio-workspace {
   width: 0.97em;
   height: 0.97em;
   border-radius: 50%;
-  background: var(--te-on-accent);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--te-chrome-shadow-color) 30%, transparent);
+  background: var(--dsp-surface-solid);
+  box-shadow: none;
   transition: transform var(--te-motion-panel, 240ms) var(--dsp-ease);
 }
 .audio-workspace input[type='checkbox']:checked:where(:not(.eq-page *)) {
-  background: var(--dsp-accent);
+  background: var(--dsp-text);
 }
 .audio-workspace input[type='checkbox']:checked:where(:not(.eq-page *))::before {
   transform: translateX(0.9em);
@@ -633,7 +629,7 @@ html[data-theme='dark'] .audio-workspace {
   white-space: nowrap;
 }
 
-/* ── Header: navigation · window action ───────────────────────────────── */
+/* ── Navigation: compact Roon MUSE studio bar ── */
 .audio-workspace .workspace-header {
   grid-area: header;
   position: relative;
@@ -641,145 +637,50 @@ html[data-theme='dark'] .audio-workspace {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0 24px;
-  min-height: 54px;
-  padding: 0 20px 0 24px;
-  border-bottom: 1px solid var(--dsp-line-strong);
-  background: color-mix(in srgb, var(--dsp-bg) 82%, transparent);
-  backdrop-filter: blur(22px) saturate(140%);
+  gap: 16px;
+  min-height: 50px;
+  padding: 0 var(--dsp-gutter);
+  border-bottom: 1px solid var(--dsp-line);
+  background: var(--dsp-surface);
 }
-.audio-workspace .workspace-identity {
-  grid-area: identity;
+.audio-workspace .workspace-tabs {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-.audio-workspace .workspace-mark {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  background: var(--dsp-text);
-  color: var(--dsp-bg);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsp-text) 12%, transparent);
-}
-.audio-workspace .workspace-mark svg {
-  width: 18px;
-  height: 18px;
-  overflow: visible;
-}
-.audio-workspace .mark-wave {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.audio-workspace[data-engine-tone='live'] .workspace-mark {
-  background: var(--dsp-accent);
-  color: var(--te-on-accent);
-  box-shadow: 0 0 0 3px var(--dsp-accent-soft);
-}
-.audio-workspace .workspace-title-group {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-.audio-workspace .workspace-eyebrow {
-  overflow: hidden;
-  color: var(--dsp-faint);
-  font-family: var(--dsp-mono);
-  font-size: calc(var(--dsp-t10) * 0.9);
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  line-height: 1.1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.audio-workspace .workspace-identity h1 {
-  overflow: hidden;
-  font-size: var(--dsp-t15);
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Text tabs with numbered step badge and an ink rule beneath the current page. */
-.audio-workspace .workspace-tabs {
-  grid-area: tabs;
-  display: flex;
-  align-self: stretch;
-  gap: 4px;
+  gap: 24px;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-}
-.audio-workspace .workspace-tabs::-webkit-scrollbar {
-  display: none;
 }
 .audio-workspace .workspace-tabs button {
   position: relative;
   flex: none;
   gap: 7px;
-  height: auto;
-  min-height: 62px;
-  padding: 0 15px;
+  min-height: 50px;
+  padding: 0 2px;
   border-radius: 0;
   background: transparent;
   color: var(--dsp-muted);
   font-size: var(--dsp-t13);
   font-weight: 500;
-  letter-spacing: 0.01em;
 }
-.audio-workspace .workspace-tabs button::before {
-  content: attr(data-step);
-  color: var(--dsp-faint);
-  font-family: var(--dsp-mono);
-  font-size: var(--dsp-t10);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-  transition: color var(--dsp-fast) ease;
-}
-.audio-workspace .workspace-tabs button[aria-current='page']::before {
-  color: var(--dsp-accent-text);
+.audio-workspace .workspace-tabs button:hover:not(:disabled),
+.audio-workspace .workspace-tabs button[aria-current='page'] {
+  background: transparent;
+  color: var(--dsp-text);
 }
 .audio-workspace .workspace-tabs button::after {
   content: '';
   position: absolute;
-  right: 12px;
-  bottom: -1px;
-  left: 12px;
+  right: 0;
+  bottom: 0;
+  left: 0;
   height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--dsp-accent);
+  border-radius: 0;
+  background: var(--dsp-text);
   opacity: 0;
-  transform: scaleX(0.4);
-  transition:
-    opacity var(--dsp-fast) ease,
-    transform var(--te-motion-panel, 280ms) var(--dsp-ease);
-}
-.audio-workspace .workspace-tabs button:hover:not(:disabled) {
-  background: transparent;
-  color: var(--dsp-text);
-}
-.audio-workspace .workspace-tabs button:active:not(:disabled) {
-  transform: none;
-}
-.audio-workspace .workspace-tabs button[aria-current='page'] {
-  color: var(--dsp-text);
-  font-weight: 600;
+  transition: opacity var(--dsp-fast) ease;
 }
 .audio-workspace .workspace-tabs button[aria-current='page']::after {
-  opacity: 1;
-  transform: none;
-}
-.audio-workspace .workspace-tabs button:disabled {
   opacity: 1;
 }
 .audio-workspace .tab-live {
@@ -787,39 +688,49 @@ html[data-theme='dark'] .audio-workspace {
   height: 5px;
   border-radius: 50%;
   background: var(--dsp-ghost);
-  transition: background-color var(--dsp-fast) ease;
 }
 .audio-workspace .tab-live.on {
   background: var(--dsp-good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsp-good) 16%, transparent);
 }
 .audio-workspace .unsaved-mark {
-  width: 5px;
-  height: 5px;
-  background: var(--dsp-accent);
-  box-shadow: 0 0 0 3px var(--dsp-accent-soft);
+  background: var(--dsp-text);
 }
-
 .audio-workspace .workspace-actions {
-  grid-area: actions;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
-  min-width: 0;
+  flex: none;
 }
-/* Master switch: a capsule whose track takes the accent when audio is processed. */
-.audio-workspace .workspace-power {
-  gap: 10px;
-  min-height: 34px;
-  padding: 0 14px 0 8px;
-  border-radius: 999px;
-  background: var(--dsp-hover);
+.audio-workspace .workspace-signal-button {
+  min-height: 30px;
+  padding: 0 11px;
+  background: transparent;
   box-shadow: inset 0 0 0 1px var(--dsp-line);
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .workspace-signal-button:hover:not(:disabled) {
+  background: var(--dsp-hover);
+  color: var(--dsp-text);
+}
+.audio-workspace .workspace-signal-button[aria-expanded='true'] {
+  background: var(--dsp-text);
+  box-shadow: none;
+  color: var(--dsp-surface-solid);
+}
+
+/* Master switch: sober monochrome studio switch, no cheap colour wash. */
+.audio-workspace .workspace-power {
+  gap: 9px;
+  min-height: 30px;
+  padding: 0 12px 0 8px;
+  border-radius: var(--dsp-radius-xs);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dsp-line-strong);
 }
 .audio-workspace .workspace-power.enabled {
-  background: color-mix(in srgb, var(--dsp-accent) 8%, var(--dsp-hover));
-  box-shadow: inset 0 0 0 1px var(--dsp-accent-line);
+  background: var(--dsp-hover);
+  box-shadow: inset 0 0 0 1px var(--dsp-text);
 }
 .audio-workspace .workspace-power:hover:not(:disabled) {
   background: var(--dsp-press);
@@ -827,55 +738,57 @@ html[data-theme='dark'] .audio-workspace {
 .audio-workspace .power-switch {
   position: relative;
   flex: none;
-  width: 30px;
-  height: 18px;
+  width: 26px;
+  height: 15px;
   border-radius: 999px;
   background: var(--dsp-line-strong);
-  transition: background-color var(--te-motion-panel, 260ms) var(--dsp-ease);
+  transition: background-color var(--te-motion-panel, 240ms) var(--dsp-ease);
 }
 .audio-workspace .power-switch i {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  background: var(--te-on-accent);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--dsp-shadow-color) 30%, transparent);
-  transition: transform var(--te-motion-panel, 260ms) var(--dsp-ease);
+  background: var(--dsp-surface-solid);
+  box-shadow: none;
+  transition: transform var(--te-motion-panel, 240ms) var(--dsp-ease);
 }
 .audio-workspace .workspace-power.enabled .power-switch {
-  background: var(--dsp-accent);
+  background: var(--dsp-text);
 }
 .audio-workspace .workspace-power.enabled .power-switch i {
-  transform: translateX(12px);
+  transform: translateX(11px);
 }
 .audio-workspace .power-copy {
   display: inline-flex;
   align-items: baseline;
-  gap: 7px;
+  gap: 6px;
   line-height: 1;
 }
 .audio-workspace .power-copy strong {
-  font-size: var(--dsp-t12);
-  font-weight: 650;
-  letter-spacing: 0.06em;
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t11);
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 .audio-workspace .power-copy small {
   color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
+  font-size: var(--dsp-t11);
   font-weight: 450;
 }
 .audio-workspace .workspace-power.enabled .power-copy small {
-  color: var(--dsp-accent-text);
+  color: var(--dsp-text);
 }
 .audio-workspace .workspace-popout {
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 12px;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 11px;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--dsp-line);
   color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
 }
 .audio-workspace .workspace-popout:hover:not(:disabled) {
   background: var(--dsp-hover);
@@ -901,15 +814,13 @@ html[data-theme='dark'] .audio-workspace {
 .audio-workspace .workspace-page {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 32px 36px;
+  align-items: stretch;
+  gap: 12px;
   width: 100%;
   max-width: var(--dsp-max);
   min-width: 0;
   margin: 0 auto;
-  padding: 38px var(--dsp-gutter) 80px;
-  /* No fill mode: a retained opacity animation would trap the page's dialogs in its own layer. */
-  animation: dsp-fade 0.36s ease;
+  padding: 12px var(--dsp-gutter) 32px;
 }
 .audio-workspace .workspace-page > *,
 .audio-workspace .dsp-rack-content > * {
@@ -919,122 +830,17 @@ html[data-theme='dark'] .audio-workspace {
 .audio-workspace .dsp-rack-content {
   display: contents;
 }
-.audio-workspace .workspace-page-heading {
-  display: grid;
-  flex: 1 1 440px;
-  justify-items: start;
-  gap: 0;
-}
-.audio-workspace .page-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-.audio-workspace .workspace-page-heading[data-mode='draft'] .mode-dot {
-  background: var(--dsp-accent);
-}
-.audio-workspace .workspace-page-heading[data-mode='live'] .mode-dot {
-  background: var(--dsp-good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsp-good) 16%, transparent);
-}
-.audio-workspace .workspace-page-heading h2 {
-  margin: 10px 0 10px;
-  font-size: var(--dsp-t30);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.12;
-}
-.audio-workspace .page-description {
-  max-width: 64ch;
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t13);
-  line-height: 1.7;
-}
-.audio-workspace .realtime-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  color: var(--dsp-good-text);
-  font-size: var(--dsp-t12);
-  font-weight: 500;
-}
-.audio-workspace .realtime-label .state-dot {
-  background: var(--dsp-good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsp-good) 16%, transparent);
-}
-.audio-workspace .realtime-label.is-bypassed {
-  color: var(--dsp-muted);
-}
-.audio-workspace .realtime-label.is-bypassed .state-dot {
-  background: var(--dsp-ghost);
-  box-shadow: none;
-}
-/* Draft progress: three quiet steps joined by hairlines. */
-.audio-workspace .draft-lifecycle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 0;
-  margin-top: 18px;
-  padding: 0;
-  list-style: none;
-  color: var(--dsp-faint);
-  font-size: var(--dsp-t12);
-}
-.audio-workspace .draft-lifecycle li {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.audio-workspace .draft-lifecycle li + li::before {
-  content: '';
-  width: 28px;
-  height: 1px;
-  margin: 0 12px;
-  background: var(--dsp-line-strong);
-}
-.audio-workspace .step-index {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px var(--dsp-line-strong);
-  font-size: var(--dsp-t10);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.audio-workspace .draft-lifecycle li[data-state='done'] {
-  color: var(--dsp-muted);
-}
-.audio-workspace .draft-lifecycle li[data-state='done'] .step-index {
-  background: var(--dsp-text);
-  box-shadow: none;
-  color: var(--dsp-bg);
-}
-.audio-workspace .draft-lifecycle li[data-state='current'] {
-  color: var(--dsp-text);
-}
-.audio-workspace .draft-lifecycle li[data-state='current'] .step-index {
-  background: var(--dsp-accent);
-  box-shadow: 0 0 0 3px var(--dsp-accent-soft);
-  color: var(--te-on-accent);
-}
+
 .audio-workspace .live-eq-context {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 12px 12px 18px;
-  border-radius: var(--dsp-radius-sm);
-  background: color-mix(in srgb, var(--dsp-warn) 6%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsp-warn) 14%, transparent);
-  color: var(--dsp-warn-text);
-  font-size: var(--dsp-t13);
+  padding: 8px 14px;
+  border-radius: var(--dsp-radius);
+  background: var(--dsp-surface);
+  box-shadow: inset 0 0 0 1px var(--dsp-line);
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
 }
 .audio-workspace .live-eq-context > span {
   flex: 1;
@@ -1044,7 +850,7 @@ html[data-theme='dark'] .audio-workspace {
   color: var(--dsp-text);
 }
 
-/* ── Draft toolbar: lives beside the page title, no box of its own ───── */
+/* ── Draft toolbar: sleek single-line Roon MUSE studio control bar ───── */
 .audio-workspace .rack-fields {
   min-width: 0;
   margin: 0;
@@ -1052,20 +858,25 @@ html[data-theme='dark'] .audio-workspace {
   border: 0;
 }
 .audio-workspace .dsp-rack-content > .draft-toolbar {
-  flex: 0 1 auto;
-  margin-left: auto;
+  flex: 1 1 100%;
+  margin-left: 0;
 }
 .audio-workspace .draft-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: 10px 12px;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 8px 16px;
+  border: 1px solid var(--dsp-line);
+  border-radius: var(--dsp-radius);
+  background: var(--dsp-surface);
 }
 .audio-workspace .draft-status {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  margin-right: auto;
   color: var(--dsp-muted);
   font-size: var(--dsp-t12);
   white-space: nowrap;
@@ -1080,9 +891,8 @@ html[data-theme='dark'] .audio-workspace {
   background: var(--dsp-good);
 }
 .audio-workspace .draft-dot.dirty {
-  background: var(--dsp-accent);
-  box-shadow: 0 0 0 3px var(--dsp-accent-soft);
-  animation: dsp-pulse 2s ease-in-out infinite;
+  background: var(--dsp-text);
+  box-shadow: none;
 }
 .audio-workspace .draft-scene {
   display: inline-flex;
@@ -1235,102 +1045,153 @@ html[data-theme='dark'] .audio-workspace {
   font-size: var(--dsp-t13);
 }
 
-/* ── Left Audio Information & Vertical Signal Pipeline Rail ──────────── */
+/* ── Signal summary and modal detail drawer ── */
 .audio-workspace .workspace-status {
   grid-area: rail;
-  position: relative;
-  z-index: 3;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 16px;
   min-width: 0;
-  min-height: 0;
-  padding: 20px 20px 28px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  border-right: 1px solid var(--dsp-line-strong);
-  background: color-mix(in srgb, var(--dsp-surface) 82%, var(--dsp-bg));
-  backdrop-filter: blur(24px) saturate(140%);
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
-  scrollbar-width: thin;
-}
-.audio-workspace .status-rail-head {
-  display: grid;
-  gap: 8px;
-  padding-bottom: 14px;
+  min-height: 34px;
+  padding: 4px var(--dsp-gutter);
   border-bottom: 1px solid var(--dsp-line);
-}
-.audio-workspace .status-rail-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.audio-workspace .rail-info-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--dsp-text);
-  font-size: var(--dsp-t15);
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-.audio-workspace .rail-info-title i {
-  color: var(--dsp-accent-text);
-  font-size: var(--dsp-t14);
-}
-.audio-workspace .status-rail-kicker {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.audio-workspace .rail-kicker-tag {
-  color: var(--dsp-faint);
-  font-family: var(--dsp-mono);
-  font-size: calc(var(--dsp-t10) * 0.92);
-  font-weight: 600;
-  letter-spacing: 0.14em;
+  background: var(--dsp-surface);
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t11);
 }
 .audio-workspace .engine-state {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--dsp-sunken);
-  box-shadow: inset 0 0 0 1px var(--dsp-line);
-  color: var(--dsp-text);
-  font-size: var(--dsp-t11);
-  font-weight: 600;
+  flex: none;
+  padding-right: 16px;
+  border-right: 1px solid var(--dsp-line);
+  color: var(--dsp-muted);
+  font-weight: 500;
+  white-space: nowrap;
 }
 .audio-workspace .engine-state[data-tone='live'] {
-  background: color-mix(in srgb, var(--dsp-good) 10%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsp-good) 28%, transparent);
-  color: var(--dsp-good-text);
+  color: var(--dsp-text);
 }
 .audio-workspace .engine-state[data-tone='live'] .state-dot {
   background: var(--dsp-good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsp-good) 18%, transparent);
 }
 .audio-workspace .engine-state[data-tone='pending'] .state-dot {
   background: var(--dsp-warn);
-  animation: dsp-pulse 1.6s ease-in-out infinite;
+}
+.audio-workspace .engine-state[data-tone='error'] {
+  color: var(--dsp-bad-text);
 }
 .audio-workspace .engine-state[data-tone='error'] .state-dot {
   background: var(--dsp-bad);
 }
-.audio-workspace .engine-state[data-tone='offline'] .state-dot {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--dsp-ghost);
-}
 .audio-workspace .status-revision {
+  margin-left: auto;
+  flex: none;
+  padding-left: 16px;
+  border-left: 1px solid var(--dsp-line);
   color: var(--dsp-faint);
   font-family: var(--dsp-mono);
   font-size: var(--dsp-t10);
-  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.audio-workspace .workspace-clip-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--dsp-bad-text);
+  font-weight: 600;
+}
+.audio-workspace .signal-dialog {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(460px, 100%);
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--dsp-line);
+  color: var(--dsp-text);
+  background: var(--dsp-surface-solid);
+  box-shadow: var(--dsp-shadow-lift);
+}
+.audio-workspace .signal-dialog::backdrop {
+  background: color-mix(in srgb, var(--te-chrome-shadow-color) 26%, transparent);
+}
+.audio-workspace .signal-drawer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.audio-workspace .signal-drawer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 26px 28px 22px;
+  border-bottom: 1px solid var(--dsp-line);
+}
+.audio-workspace .signal-drawer-heading h2 {
+  margin-top: 4px;
+  font-size: var(--dsp-t24);
+}
+.audio-workspace .signal-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 28px 32px;
+}
+.audio-workspace .signal-overview.is-compact {
+  flex-direction: row;
+}
+.audio-workspace .signal-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.audio-workspace .signal-summary > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audio-workspace .signal-summary-source,
+.audio-workspace .signal-summary-output {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.audio-workspace .signal-summary-source > span,
+.audio-workspace .signal-summary-output > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audio-workspace .signal-summary > .pi {
+  color: var(--dsp-ghost);
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .signal-summary-output {
+  min-height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .signal-summary-output small {
+  font: inherit;
+  flex: none;
+}
+.audio-workspace .signal-summary-output:hover:not(:disabled) {
+  background: transparent;
+  color: var(--dsp-accent-text);
 }
 
 /* ── Luxury Vertical Signal Pipeline Timeline ────────────────────────── */
@@ -1458,10 +1319,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, transparent, var(--dsp-accent), transparent);
-  background-size: 100% 55%;
-  background-repeat: no-repeat;
-  animation: dsp-flow-vertical 1.8s linear infinite;
+  background: var(--dsp-text);
+  opacity: 0.45;
 }
 .audio-workspace .shaft-arrow {
   flex: none;
@@ -1516,7 +1375,9 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 .audio-workspace .station-title-link i {
   color: var(--dsp-faint);
   font-size: var(--dsp-t10);
-  transition: transform var(--dsp-fast) ease, color var(--dsp-fast) ease;
+  transition:
+    transform var(--dsp-fast) ease,
+    color var(--dsp-fast) ease;
 }
 .audio-workspace .station-title-link:hover:not(:disabled) .station-title {
   color: var(--dsp-accent-text);
@@ -1710,7 +1571,9 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   flex: none;
   color: var(--dsp-faint);
   font-size: var(--dsp-t10);
-  transition: transform var(--dsp-fast) ease, color var(--dsp-fast) ease;
+  transition:
+    transform var(--dsp-fast) ease,
+    color var(--dsp-fast) ease;
 }
 .audio-workspace .subgroup-collapse-toggle:hover:not(:disabled) {
   background: transparent;
@@ -1825,234 +1688,119 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   box-shadow: inset 0 0 0 1px var(--dsp-ghost);
 }
 
-/* ── Overview (Detection -> Metering -> Live DSP Tuning -> Workflow) ──── */
+/* ── Overview: unified Roon MUSE architectural studio console ── */
 .audio-workspace .monitor-page {
   display: grid;
-  gap: 42px;
+  gap: 0;
   min-width: 0;
-}
-.audio-workspace .monitor-page > .rack-message.error {
-  margin-bottom: 4px;
-}
-.audio-workspace :is(.monitor-detection-zone, .monitor-metering-zone, .monitor-tuning-zone) {
-  display: grid;
-  gap: 20px;
-  min-width: 0;
-}
-.audio-workspace .zone-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 12px;
-  padding-bottom: 2px;
-  border-bottom: 0;
-}
-.audio-workspace .zone-num {
-  color: var(--dsp-accent-text);
-  font-family: var(--dsp-mono);
-  font-size: var(--dsp-t11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  font-variant-numeric: tabular-nums;
-}
-.audio-workspace .zone-kicker {
-  padding-left: 10px;
-  border-left: 1px solid var(--dsp-line-strong);
-  color: var(--dsp-faint);
-  font-family: var(--dsp-mono);
-  font-size: calc(var(--dsp-t10) * 0.94);
-  font-weight: 600;
-  letter-spacing: 0.14em;
-}
-.audio-workspace .zone-header h3 {
-  font-size: var(--dsp-t15);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-.audio-workspace .zone-rule {
-  flex: 1 1 60px;
-  height: 1px;
-  margin: 0 6px;
-  background: var(--dsp-line-strong);
-}
-.audio-workspace .zone-subtitle {
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
-}
-.audio-workspace .health-score-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin-left: auto;
-  padding: 5px 13px;
-  border-radius: 999px;
-  background: var(--dsp-sunken);
-  box-shadow: inset 0 0 0 1px var(--dsp-line);
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
-  font-variant-numeric: tabular-nums;
-}
-.audio-workspace .health-score-pill b {
-  color: var(--dsp-text);
-  font-weight: 650;
-}
-.audio-workspace .health-score-pill[data-all-pass='true'] .state-dot {
-  background: var(--dsp-good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsp-good) 16%, transparent);
-}
-/* Hero: Unified Studio Master Deck (topbar + status statement/readouts + 4-check ledger). */
-.audio-workspace .monitor-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 20px;
-  padding: 22px 28px 20px;
+  border: 1px solid var(--dsp-line);
   border-radius: var(--dsp-radius);
   background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
+  overflow: hidden;
 }
-.audio-workspace .hero-topbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 20px;
-  padding-bottom: 14px;
+.audio-workspace .monitor-page > .notice {
+  margin: 0;
+  border-radius: 0;
   border-bottom: 1px solid var(--dsp-line);
 }
-.audio-workspace .hero-main {
-  display: grid;
-  grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.38fr);
+.audio-workspace .monitor-heading {
+  display: flex;
   align-items: center;
-  gap: 24px 36px;
+  gap: 20px;
+  min-height: 44px;
+  padding: 8px 22px;
+  border-bottom: 1px solid var(--dsp-line);
+  background: var(--dsp-sunken);
+}
+.audio-workspace .monitor-heading-copy {
+  flex: 1;
   min-width: 0;
 }
-.audio-workspace .hero-copy {
-  display: grid;
-  justify-items: start;
-  min-width: 0;
-}
-.audio-workspace .hero-kicker {
-  display: inline-flex;
+.audio-workspace .monitor-state {
+  display: flex;
   align-items: center;
-  gap: 9px;
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
+  gap: 8px;
+  color: var(--dsp-text);
+  font-size: var(--dsp-t13);
   font-weight: 500;
 }
-.audio-workspace .hero-kicker span {
-  padding-left: 9px;
-  border-left: 1px solid var(--dsp-line-strong);
-  color: var(--dsp-text);
-}
 .audio-workspace .hero-led {
-  position: relative;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--dsp-ghost);
 }
-.audio-workspace .monitor-hero[data-state='live'] .hero-led {
+.audio-workspace .monitor-heading[data-state='live'] .hero-led {
   background: var(--dsp-good);
 }
-.audio-workspace .monitor-hero[data-state='live'] .hero-led::after {
-  content: '';
-  position: absolute;
-  inset: -5px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--dsp-good);
-  animation: dsp-ripple 2.4s var(--dsp-ease) infinite;
-}
-.audio-workspace .monitor-hero[data-state='pending'] .hero-led {
-  background: var(--dsp-warn);
-  animation: dsp-pulse 1.6s ease-in-out infinite;
-}
-.audio-workspace .monitor-hero[data-state='warning'] .hero-led {
-  background: var(--dsp-warn);
-}
-.audio-workspace .monitor-hero[data-state='error'] .hero-led {
+.audio-workspace .monitor-heading[data-state='error'] .hero-led {
   background: var(--dsp-bad);
 }
-.audio-workspace .monitor-hero[data-state='direct'] .hero-led {
-  background: var(--dsp-accent);
+.audio-workspace .monitor-heading[data-state='warning'] .hero-led,
+.audio-workspace .monitor-heading[data-state='pending'] .hero-led {
+  background: var(--dsp-warn);
 }
-.audio-workspace .monitor-hero[data-state='live'] .hero-kicker span {
-  color: var(--dsp-good-text);
-}
-.audio-workspace .monitor-hero[data-state='error'] .hero-kicker span {
-  color: var(--dsp-bad-text);
-}
-.audio-workspace .hero-copy h2 {
-  margin: 0 0 6px;
-  font-size: var(--dsp-t30);
-  font-weight: 600;
-  letter-spacing: -0.032em;
-  line-height: 1.1;
-}
-.audio-workspace .hero-detail {
-  max-width: 50ch;
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
-  line-height: 1.6;
-}
-.audio-workspace .hero-actions {
+.audio-workspace .monitor-readouts {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+}
+.audio-workspace .monitor-readouts > div {
+  display: inline-flex;
+  align-items: baseline;
   gap: 8px;
-  margin-top: 14px;
 }
-.audio-workspace .hero-actions button {
-  min-height: 34px;
-  padding: 0 15px;
-}
-.audio-workspace .hero-readouts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  min-width: 0;
-}
-.audio-workspace .hero-readouts > div {
-  display: grid;
-  align-content: end;
-  gap: 5px;
-  min-width: 0;
-  padding: 2px 0 2px 20px;
+.audio-workspace .monitor-readouts > div + div {
+  padding-left: 24px;
   border-left: 1px solid var(--dsp-line);
 }
-.audio-workspace .hero-readouts dt {
+.audio-workspace .monitor-readouts dt {
   color: var(--dsp-muted);
   font-size: var(--dsp-t11);
-  font-weight: 500;
 }
-.audio-workspace .readout-value {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  color: var(--dsp-text);
-  font-size: var(--dsp-t30);
-  font-weight: 260;
-  letter-spacing: -0.035em;
-  line-height: 1.05;
-  white-space: nowrap;
+.audio-workspace .monitor-readouts dd {
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t14);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
 }
-.audio-workspace .readout-value small {
-  color: var(--dsp-faint);
-  font-size: var(--dsp-t12);
-  font-weight: 500;
-  letter-spacing: 0;
-}
-.audio-workspace .readout-caption {
-  overflow: hidden;
+.audio-workspace .monitor-readouts small {
+  margin-left: 3px;
   color: var(--dsp-faint);
   font-size: var(--dsp-t11);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.audio-workspace .monitor-refresh {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  background: transparent;
+  color: var(--dsp-muted);
+}
+.audio-workspace .diagnostic-timing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+}
+.audio-workspace .diagnostic-timing > div {
+  display: grid;
+  gap: 4px;
+}
+.audio-workspace .diagnostic-timing dt {
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .diagnostic-timing dd {
+  font-size: var(--dsp-t14);
 }
 
-/* Instruments share one frame: title row, display, footer. */
+/* Flush 2-column studio analyzer console separated by 1px hairline. */
 .audio-workspace .monitor-console {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 316px;
+  gap: 0;
   min-width: 0;
 }
 .audio-workspace .instrument {
@@ -2061,16 +1809,20 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   gap: 16px;
   min-width: 0;
   padding: 20px 22px 18px;
-  border-radius: var(--dsp-radius);
-  background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.audio-workspace .loudness-panel {
+  border-left: 1px solid var(--dsp-line);
 }
 .audio-workspace .instrument-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 28px;
+  gap: 10px 14px;
+  min-height: 30px;
 }
 .audio-workspace .instrument-title {
   display: flex;
@@ -2085,7 +1837,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 .audio-workspace .scope-subtitle {
   overflow: hidden;
   color: var(--dsp-faint);
-  font-size: var(--dsp-t12);
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t11);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2100,18 +1853,19 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .scope-light.active {
   background: var(--dsp-good);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsp-good) 16%, transparent);
 }
 .audio-workspace .instrument-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 .audio-workspace .scope-tool {
   min-height: 28px;
   padding: 0 10px;
-  border-radius: 7px;
+  border-radius: var(--dsp-radius-xs);
   background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dsp-line);
   color: var(--dsp-muted);
   font-size: var(--dsp-t12);
 }
@@ -2120,24 +1874,26 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   color: var(--dsp-text);
 }
 .audio-workspace .scope-tool[aria-pressed='true'] {
-  background: var(--dsp-hover);
-  color: var(--dsp-text);
+  background: var(--dsp-text);
+  box-shadow: none;
+  color: var(--dsp-surface-solid);
 }
 .audio-workspace .scope-tool.icon {
   width: 28px;
   padding: 0;
 }
 
-/* Spectrum display. */
+/* Spectrum display: zero gradients, pure 1px studio hairlines. */
 .audio-workspace .scope-plot {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
-  height: clamp(220px, 24cqw, 380px);
-  margin-top: 6px;
+  height: clamp(240px, 26cqw, 360px);
+  margin-top: 4px;
 }
 .audio-workspace .scope-db-axis {
   position: relative;
   color: var(--dsp-faint);
+  font-family: var(--dsp-mono);
   font-size: var(--dsp-t10);
   font-variant-numeric: tabular-nums;
 }
@@ -2162,10 +1918,20 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 .audio-workspace .scope-grid {
   position: relative;
   min-width: 0;
+  border-top: 1px solid var(--dsp-line);
   border-bottom: 1px solid var(--dsp-line-strong);
-  background-image: linear-gradient(to bottom, var(--dsp-line) 1px, transparent 1px);
-  background-size: 100% 33.333%;
-  color: var(--dsp-accent);
+  color: var(--dsp-signal);
+}
+.audio-workspace .scope-hline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--dsp-line);
+  pointer-events: none;
+}
+.audio-workspace .scope-hline:first-child {
+  display: none;
 }
 .audio-workspace .scope-vline {
   position: absolute;
@@ -2185,11 +1951,12 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   overflow: visible;
 }
 .audio-workspace .scope-peak {
-  color: var(--dsp-ghost);
+  color: var(--dsp-faint);
 }
 .audio-workspace .scope-line {
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--dsp-accent) 45%, transparent));
+  filter: none;
 }
+
 .audio-workspace .scope-empty {
   position: absolute;
   inset: 0;
@@ -2215,6 +1982,7 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   height: 14px;
   margin: -6px 0 0 30px;
   color: var(--dsp-faint);
+  font-family: var(--dsp-mono);
   font-size: var(--dsp-t10);
   font-variant-numeric: tabular-nums;
 }
@@ -2243,29 +2011,32 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .scope-levels {
   color: var(--dsp-muted);
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t11);
   font-variant-numeric: tabular-nums;
 }
 .audio-workspace .scope-levels b {
   color: var(--dsp-text);
-  font-weight: 500;
+  font-weight: 600;
 }
 .audio-workspace .scope-separator {
   margin: 0 6px;
   color: var(--dsp-faint);
 }
 
-/* Loudness: the integrated figure leads, three meters follow. */
+/* Loudness: the integrated figure leads, three solid meters follow. */
 .audio-workspace .loudness-hero {
   display: flex;
   align-items: flex-end;
   gap: 12px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 .audio-workspace .loudness-hero strong {
-  font-size: var(--dsp-t46);
-  font-weight: 250;
-  letter-spacing: -0.045em;
-  line-height: 0.92;
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t36);
+  font-weight: 400;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
   font-variant-numeric: tabular-nums;
 }
 .audio-workspace .loudness-hero span {
@@ -2278,6 +2049,7 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .loudness-hero b {
   color: var(--dsp-text);
+  font-family: var(--dsp-mono);
   font-size: var(--dsp-t11);
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -2287,20 +2059,20 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .meter-rows {
   display: grid;
-  flex: 1;
-  align-content: center;
-  gap: 18px;
-  margin-top: 8px;
+  align-content: start;
+  gap: 14px;
+  margin-top: 6px;
 }
 .audio-workspace .meter-row {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 46px;
+  grid-template-columns: 40px minmax(0, 1fr) 44px;
   align-items: center;
   gap: 14px;
 }
 .audio-workspace .meter-key {
   display: grid;
   color: var(--dsp-text);
+  font-family: var(--dsp-mono);
   font-size: var(--dsp-t12);
   font-weight: 600;
   line-height: 1.25;
@@ -2308,38 +2080,32 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .meter-key small {
   color: var(--dsp-faint);
+  font-family: var(--te-font-sans);
   font-size: var(--dsp-t11);
   font-weight: 400;
   letter-spacing: 0;
 }
 .audio-workspace .meter-bar {
   position: relative;
-  height: 5px;
+  height: 4px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: 1px;
   background: var(--dsp-hover);
 }
 .audio-workspace .meter-bar i {
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: inherit;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--dsp-accent) 45%, transparent),
-    var(--dsp-accent)
-  );
+  background: var(--dsp-text);
   transition: width 0.18s linear;
 }
 .audio-workspace .meter-row.warn .meter-bar i {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--dsp-warn) 45%, transparent),
-    var(--dsp-warn)
-  );
+  background: var(--dsp-warn);
 }
 .audio-workspace .meter-row > strong {
   color: var(--dsp-text);
-  font-size: var(--dsp-t13);
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t12);
   font-weight: 500;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -2350,8 +2116,9 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 .audio-workspace .loudness-panel .meter-scale {
   position: relative;
   height: 12px;
-  margin: -4px 60px 0 62px;
+  margin: -4px 58px 0 54px;
   color: var(--dsp-faint);
+  font-family: var(--dsp-mono);
   font-size: var(--dsp-t10);
   font-variant-numeric: tabular-nums;
 }
@@ -2364,7 +2131,7 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px 16px;
-  margin-top: auto;
+  margin-top: 8px;
   padding-top: 16px;
   border-top: 1px solid var(--dsp-line);
 }
@@ -2378,7 +2145,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .stereo-readings dd {
   color: var(--dsp-text);
-  font-size: var(--dsp-t15);
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t14);
   font-weight: 500;
 }
 .audio-workspace .stereo-readings dd small {
@@ -2401,13 +2169,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   grid-column: 1 / -1;
   height: 3px;
   margin: 2px 0 4px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--dsp-bad) 55%, transparent),
-    var(--dsp-line-strong) 50%,
-    color-mix(in srgb, var(--dsp-good) 60%, transparent)
-  );
+  border-radius: 1px;
+  background: var(--dsp-line-strong);
 }
 .audio-workspace .correlation-track::before {
   content: '';
@@ -2443,8 +2206,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .health-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--dsp-line);
 }
@@ -2454,8 +2217,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  padding: 2px 18px;
-  border-left: 1px solid var(--dsp-line);
+  padding: 0;
+  border-left: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -2736,127 +2499,29 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   font-weight: 500;
 }
 
-/* Workflow Next Steps (4-Column Architectural Ledger) */
-.audio-workspace .next-steps {
-  display: grid;
-  gap: 20px;
+/* Diagnostics disclosure & flush studio sections. */
+.audio-workspace :is(.diagnostic-details, .audition-section, .disclosure) {
   min-width: 0;
-}
-.audio-workspace .step-list {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-.audio-workspace .step-card {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 18px;
-  width: 100%;
-  min-height: 138px;
-  padding: 20px 22px;
-  border-radius: var(--dsp-radius);
-  background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
-  text-align: left;
-  white-space: normal;
-}
-.audio-workspace .step-card:hover:not(:disabled) {
-  background: var(--dsp-raised);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow-lift);
-}
-.audio-workspace .step-card:active:not(:disabled) {
-  transform: none;
-}
-.audio-workspace .step-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.audio-workspace .step-number {
-  color: var(--dsp-faint);
-  font-family: var(--dsp-mono);
-  font-size: var(--dsp-t11);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  font-variant-numeric: tabular-nums;
-}
-.audio-workspace .step-mode-badge {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--dsp-accent-soft);
-  color: var(--dsp-accent-text);
-  font-size: var(--dsp-t10);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-.audio-workspace .step-copy {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.audio-workspace .step-copy strong {
-  font-size: var(--dsp-t15);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.audio-workspace .step-copy small {
-  color: var(--dsp-muted);
-  font-size: var(--dsp-t12);
-  font-weight: 400;
-  line-height: 1.5;
-}
-.audio-workspace .step-card-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding-top: 12px;
+  border-radius: 0;
   border-top: 1px solid var(--dsp-line);
-}
-.audio-workspace .step-meta {
-  overflow: hidden;
-  color: var(--dsp-muted);
-  font-family: var(--dsp-mono);
-  font-size: var(--dsp-t11);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.audio-workspace .step-go {
-  color: var(--dsp-faint);
-  font-size: var(--dsp-t12);
-  transition:
-    transform var(--dsp-fast) var(--dsp-ease),
-    color var(--dsp-fast) ease;
-}
-.audio-workspace .step-card:hover .step-go {
-  color: var(--dsp-text);
-  transform: translateX(3px);
-}
-
-/* Diagnostics disclosure. */
-.audio-workspace :is(.diagnostic-details, .audition-section) {
-  min-width: 0;
-  border-radius: var(--dsp-radius);
   background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
+  box-shadow: none;
 }
-.audio-workspace :is(.diagnostic-details, .audition-section) > summary {
+.audio-workspace :is(.diagnostic-details, .audition-section, .disclosure) > summary {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 18px 22px;
+  padding: 15px 22px;
   list-style: none;
-  border-radius: inherit;
+  border-radius: 0;
   transition: background-color var(--dsp-fast) ease;
 }
-.audio-workspace :is(.diagnostic-details, .audition-section) > summary::-webkit-details-marker {
+.audio-workspace
+  :is(.diagnostic-details, .audition-section, .disclosure)
+  > summary::-webkit-details-marker {
   display: none;
 }
-.audio-workspace :is(.diagnostic-details, .audition-section) > summary:hover {
+.audio-workspace :is(.diagnostic-details, .audition-section, .disclosure) > summary:hover {
   background: var(--dsp-sunken);
 }
 .audio-workspace :is(.summary-copy, .audition-copy) {
@@ -2868,7 +2533,7 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   min-width: 0;
 }
 .audio-workspace :is(.summary-copy, .audition-copy) strong {
-  font-size: var(--dsp-t14);
+  font-size: var(--dsp-t13);
   font-weight: 600;
 }
 .audio-workspace :is(.summary-copy, .audition-copy) small {
@@ -2880,36 +2545,49 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   font-size: var(--dsp-t12);
   transition: transform var(--te-motion-panel, 260ms) var(--dsp-ease);
 }
-.audio-workspace :is(.diagnostic-details, .audition-section)[open] > summary {
-  border-bottom-right-radius: 0;
-  border-bottom-left-radius: 0;
+.audio-workspace :is(.diagnostic-details, .audition-section, .disclosure)[open] > summary {
+  border-bottom: 1px solid var(--dsp-line);
+  background: var(--dsp-sunken);
 }
 .audio-workspace
-  :is(.diagnostic-details, .audition-section)[open]
+  :is(.diagnostic-details, .audition-section, .disclosure)[open]
   > summary
   :is(.summary-chevron, .audition-chevron) {
   transform: rotate(180deg);
 }
 .audio-workspace .diagnostic-body {
   display: grid;
-  gap: 20px;
-  padding: 4px 22px 22px;
+  gap: 18px;
+  padding: 18px 22px 22px;
 }
 .audio-workspace .capture-controls {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px 28px;
-  padding: 14px 16px;
-  border-radius: var(--dsp-radius-sm);
-  background: var(--dsp-sunken);
-  font-size: var(--dsp-t13);
+  gap: 8px 10px;
+  padding: 0 4px 0 0;
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .capture-controls .switch-field {
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: var(--dsp-radius-xs);
+  box-shadow: inset 0 0 0 1px var(--dsp-line);
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t11);
+  font-weight: 600;
 }
 .audio-workspace .capture-controls .inline-field {
+  gap: 6px;
   font-size: var(--dsp-t12);
 }
 .audio-workspace .capture-controls select {
-  min-width: 120px;
+  min-width: 82px;
+  min-height: 28px;
+  padding: 0 24px 0 8px;
+  font-family: var(--dsp-mono);
+  font-size: var(--dsp-t11);
 }
 .audio-workspace .engine-facts {
   display: grid;
@@ -2973,18 +2651,78 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   user-select: text;
 }
 
-/* ── Effects chain ────────────────────────────────────────────────────── */
+.audio-workspace .monitor-tuning-zone > .quick-dsp-grid {
+  padding: 4px 22px 22px;
+}
+.audio-workspace .monitor-tuning-zone .dsp-tuning-card,
+.audio-workspace .monitor-tuning-zone .dsp-master-strip {
+  padding: 18px 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.audio-workspace .monitor-tuning-zone .dsp-tuning-card:first-child {
+  padding-right: 22px;
+  border-right: 1px solid var(--dsp-line);
+}
+.audio-workspace .monitor-tuning-zone .dsp-master-strip {
+  border-top: 1px solid var(--dsp-line);
+}
+.audio-workspace .output-advanced {
+  margin-top: 18px;
+  border-top: 1px solid var(--dsp-line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.audio-workspace .output-advanced > summary {
+  padding: 18px 0;
+}
+.audio-workspace .output-advanced .stage-flow {
+  margin-top: 18px;
+}
+.audio-workspace .headroom-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  grid-column: 1 / -1;
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .headroom-slider-row input {
+  max-width: 220px;
+}
+.audio-workspace .headroom-slider-row strong {
+  flex: none;
+  font-weight: 500;
+}
+.audio-workspace .clip-indicator.active {
+  color: var(--dsp-bad-text);
+}
+.audio-workspace .draft-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 16px;
+  background: var(--dsp-surface);
+}
+
+/* ── Effects chain: unified Roon MUSE 3-column architectural rack ────── */
 .audio-workspace .rack-layout {
   display: grid;
-  grid-template-columns: 224px minmax(300px, 360px) minmax(0, 1fr);
+  grid-template-columns: 210px minmax(268px, 310px) minmax(0, 1fr);
   grid-template-areas:
     'scenes head head'
     'scenes chain editor'
     'scenes audition audition';
-  grid-template-rows: auto auto 1fr;
-  align-items: start;
-  gap: 22px 22px;
+  grid-template-rows: auto 1fr auto;
+  align-items: stretch;
+  gap: 0;
   min-width: 0;
+  border: 1px solid var(--dsp-line);
+  border-radius: var(--dsp-radius);
+  background: var(--dsp-surface);
+  overflow: hidden;
 }
 .audio-workspace .rack-layout > .narrow-tabs {
   display: none;
@@ -2992,18 +2730,38 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   justify-self: start;
 }
 
-/* Scene source list: an unboxed column, ruled off from the editor. */
+/* Scene source list: flush left rail ruled off from the signal chain. */
+.audio-workspace .scene-tools {
+  min-width: 0;
+}
+.audio-workspace .scene-tools > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  list-style: none;
+  color: var(--dsp-muted);
+  font-size: var(--dsp-t12);
+}
+.audio-workspace .scene-tools > summary::-webkit-details-marker {
+  display: none;
+}
+.audio-workspace .scene-tools .scene-actions {
+  padding-top: 10px;
+}
+.audio-workspace .scene-tools .factory-template-picker {
+  margin-top: 12px;
+}
 .audio-workspace .scene-pane {
-  position: sticky;
-  top: 24px;
   grid-area: scenes;
   display: grid;
   align-content: start;
   gap: 14px;
   min-width: 0;
   align-self: stretch;
-  padding-right: 22px;
+  padding: 20px 18px;
   border-right: 1px solid var(--dsp-line);
+  background: var(--dsp-sunken);
 }
 .audio-workspace .pane-heading {
   display: flex;
@@ -3141,26 +2899,31 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   font-size: var(--dsp-t12);
 }
 
-/* Scene heading. */
+/* Scene heading: flush studio header bar across chain + inspector. */
 .audio-workspace .chain-heading {
   grid-area: head;
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px 24px;
+  gap: 12px 24px;
   min-width: 0;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--dsp-line);
+  background: var(--dsp-surface);
 }
 .audio-workspace .chain-title {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
   min-width: 0;
 }
 .audio-workspace .chain-title h2 {
   overflow: hidden;
-  font-size: var(--dsp-t24);
+  font-size: var(--dsp-t17);
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3230,17 +2993,19 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   color: var(--dsp-accent-text);
 }
 
-/* Signal chain: a spine runs from the input port to the output stage. */
+/* Signal chain: flush middle column with 1px right hairline. */
 .audio-workspace .graph-pane {
   position: relative;
   grid-area: chain;
   display: grid;
+  align-content: start;
   gap: 12px;
   min-width: 0;
-  padding: 18px 14px 14px;
-  border-radius: var(--dsp-radius);
+  padding: 18px 14px;
+  border-radius: 0;
+  border-right: 1px solid var(--dsp-line);
   background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
+  box-shadow: none;
 }
 .audio-workspace .graph-pane > .pane-heading {
   padding: 0 8px;
@@ -3332,8 +3097,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   background: var(--dsp-hover);
 }
 .audio-workspace .graph-node.selected {
-  background: var(--dsp-raised);
-  box-shadow: var(--dsp-thumb), var(--dsp-panel-ring);
+  background: var(--dsp-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--dsp-accent-line);
 }
 .audio-workspace .graph-node.dragging {
   opacity: 0.4;
@@ -3356,7 +3121,7 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 }
 .audio-workspace .node-select {
   display: grid;
-  grid-template-columns: 18px 30px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -3414,12 +3179,13 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   display: flex;
   align-items: center;
 }
-/* Reordering and removal belong to the node in hand; Alt+↑/↓ always works. */
-.audio-workspace .node-actions > button:not(.node-power) {
+.audio-workspace .node-select > .node-glyph {
   display: none;
 }
-.audio-workspace .graph-node:is(:focus-within, .selected) .node-actions > button {
-  display: inline-flex;
+.audio-workspace .node-actions > .icon-button.small {
+  width: 24px;
+  height: 28px;
+  min-height: 28px;
 }
 .audio-workspace .node-actions > button:disabled {
   opacity: 0.25;
@@ -3611,16 +3377,17 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   text-align: center;
 }
 
-/* Inspector. */
+/* Inspector: flush right studio stage. */
 .audio-workspace .editor-pane {
   grid-area: editor;
   display: grid;
+  align-content: start;
   gap: 20px;
   min-width: 0;
   padding: 18px 24px 24px;
-  border-radius: var(--dsp-radius);
+  border-radius: 0;
   background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
+  box-shadow: none;
 }
 .audio-workspace .editor-tools {
   display: flex;
@@ -3859,6 +3626,26 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 .audio-workspace .draft-equalizer > .toolbar select {
   width: auto;
 }
+.audio-workspace .draft-equalizer .parametric-workspace {
+  --eq-surface: var(--dsp-surface-solid);
+  --eq-panel: var(--dsp-sunken);
+  --eq-panel-raised: var(--dsp-raised);
+  --eq-text: var(--dsp-text);
+  --eq-text-muted: var(--dsp-muted);
+  --eq-text-subtle: var(--dsp-muted);
+  --eq-border: var(--dsp-line-strong);
+  --eq-border-soft: var(--dsp-line);
+  --eq-response: var(--dsp-signal);
+  border: 1px solid var(--dsp-line);
+  border-radius: var(--dsp-radius);
+}
+.audio-workspace .draft-equalizer .eq-band-table-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--dsp-line);
+  border-radius: var(--dsp-radius);
+  padding: 0 12px 8px;
+}
 .audio-workspace .detail-pane .raw-config {
   padding-top: 14px;
   border-top: 1px solid var(--dsp-line);
@@ -4015,18 +3802,29 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   justify-self: stretch;
 }
 
-/* ── Output ───────────────────────────────────────────────────────────── */
+/* ── Output: flush 2-column Roon MUSE studio console ─────────────────── */
 .audio-workspace .output-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
-  align-items: start;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  align-items: stretch;
+  gap: 0;
   min-width: 0;
+  border: 1px solid var(--dsp-line);
+  border-radius: var(--dsp-radius);
+  background: var(--dsp-surface);
+  overflow: hidden;
 }
 .audio-workspace .output-stage-panel,
 .audio-workspace .buffer-panel {
   display: grid;
+  align-content: start;
   gap: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.audio-workspace .buffer-panel {
+  border-left: 1px solid var(--dsp-line);
+  background: var(--dsp-sunken);
 }
 .audio-workspace .output-workspace .panel-heading {
   align-items: flex-start;
@@ -4039,7 +3837,8 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 /* Processing order, read left to right like a signal flow. */
 .audio-workspace .stage-flow {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  row-gap: 16px;
   margin-bottom: 4px;
   padding: 16px 0;
   list-style: none;
@@ -4091,10 +3890,10 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 /* Settings rows: label column, then a segmented choice. */
 .audio-workspace .option-group {
   display: grid;
-  grid-template-columns: minmax(170px, 230px) minmax(0, 1fr);
+  grid-template-columns: minmax(145px, 180px) minmax(0, 1fr);
   align-items: center;
-  gap: 12px 32px;
-  padding: 22px 0;
+  gap: 12px 22px;
+  padding: 20px 0;
   border-bottom: 1px solid var(--dsp-line);
 }
 .audio-workspace .output-stage-panel > .option-group:last-of-type {
@@ -4228,18 +4027,15 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
 .audio-workspace .buffer-track {
   position: relative;
   height: 3px;
-  border-radius: 999px;
+  border-radius: 1px;
   background: var(--dsp-line-strong);
 }
 .audio-workspace .buffer-track::before {
   content: '';
   position: absolute;
   inset: -4px 0;
-  background: repeating-linear-gradient(
-    90deg,
-    var(--dsp-line-strong) 0 1px,
-    transparent 1px calc(100% / 9)
-  );
+  border-left: 1px solid var(--dsp-line-strong);
+  border-right: 1px solid var(--dsp-line-strong);
   pointer-events: none;
 }
 .audio-workspace .buffer-marker {
@@ -4336,24 +4132,30 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   font-size: var(--dsp-t12);
 }
 
-/* ── Library ──────────────────────────────────────────────────────────── */
+/* ── Library: unified flush Roon MUSE studio sections ─────────────────── */
 .audio-workspace .library-page {
   display: grid;
-  gap: 20px;
+  gap: 0;
   min-width: 0;
+  border: 1px solid var(--dsp-line);
+  border-radius: var(--dsp-radius);
+  background: var(--dsp-surface);
+  overflow: hidden;
 }
 .audio-workspace .bind-target {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
-  padding: 14px 14px 14px 20px;
-  border-radius: var(--dsp-radius-sm);
-  box-shadow: inset 0 0 0 1px var(--dsp-line);
+  padding: 14px 24px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--dsp-line);
+  background: var(--dsp-sunken);
+  box-shadow: none;
 }
 .audio-workspace .bind-target.ready {
-  background: color-mix(in srgb, var(--dsp-accent) 5%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsp-accent) 24%, transparent);
+  background: var(--dsp-accent-soft);
+  box-shadow: none;
 }
 .audio-workspace .bind-led {
   width: 8px;
@@ -4385,10 +4187,13 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   display: grid;
   gap: 18px;
   min-width: 0;
-  padding: 24px 26px 14px;
-  border-radius: var(--dsp-radius);
+  padding: 24px 26px 18px;
+  border-radius: 0;
   background: var(--dsp-surface);
-  box-shadow: var(--dsp-panel-ring), var(--dsp-shadow);
+  box-shadow: none;
+}
+.audio-workspace .library-section + .library-section {
+  border-top: 1px solid var(--dsp-line);
 }
 .audio-workspace .section-heading {
   display: flex;
@@ -4660,408 +4465,225 @@ html[data-theme='dark'] .audio-workspace .emblem-logo.is-mono-ink {
   margin-top: 14px;
 }
 
-/* ── Responsive (container width of the workbench itself) ─────────────── */
-@container dsp-workbench (max-width: 1520px) {
-  .audio-workspace .workspace-content {
-    --dsp-gutter: 28px;
-  }
+/* ── Responsive: layout follows the available workspace width ── */
+@container dsp-workbench (max-width: 1279px) {
   .audio-workspace .rack-layout {
-    grid-template-columns: minmax(256px, 296px) minmax(0, 1fr);
-    grid-template-areas:
-      'head head'
-      'scenes scenes'
-      'chain editor'
-      'audition audition';
-    grid-template-rows: auto;
+    grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+    grid-template-areas: 'scenes scenes' 'head head' 'chain editor' 'audition audition';
   }
-  .audio-workspace .scene-pane {
+  .audio-workspace .rack-layout > .scene-pane {
     position: static;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      'heading actions factory'
-      'list list list';
+    display: flex;
     align-items: center;
-    gap: 12px 16px;
-    padding: 0 0 18px;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 18px;
     border-right: 0;
     border-bottom: 1px solid var(--dsp-line);
   }
-  .audio-workspace .scene-pane > .pane-heading {
-    grid-area: heading;
-  }
+  .audio-workspace .scene-pane > .scene-list,
   .audio-workspace .scene-pane > .pane-hint {
     display: none;
   }
-  .audio-workspace .scene-pane > .scene-list {
-    grid-area: list;
-    display: flex;
-    gap: 6px;
-    margin: 0;
-    padding: 1px;
-    overflow-x: auto;
-    scrollbar-width: none;
+  .audio-workspace .workspace-page[data-tab='chain'] .draft-scene {
+    display: inline-flex;
   }
-  .audio-workspace .scene-pane .scene-row {
-    flex: none;
-    width: auto;
-    min-width: 164px;
-    max-width: 240px;
-    min-height: 48px;
-    box-shadow: inset 0 0 0 1px var(--dsp-line);
+  .audio-workspace .draft-toolbar {
+    justify-content: flex-start;
   }
-  .audio-workspace .scene-pane .scene-row.selected {
-    box-shadow: var(--dsp-thumb), var(--dsp-panel-ring);
+  .audio-workspace .dsp-rack-content > .draft-toolbar {
+    flex: 1 1 100%;
+    margin-left: 0;
   }
-  .audio-workspace .scene-pane > .scene-actions {
-    grid-area: actions;
-    justify-self: end;
-  }
-  .audio-workspace .scene-pane > .factory-template-picker {
-    grid-area: factory;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding-top: 0;
-    border-top: 0;
-  }
-  .audio-workspace .factory-template-picker label > span {
-    display: none;
-  }
-  .audio-workspace .factory-template-picker select {
-    width: 184px;
+  .audio-workspace .workspace-content {
+    --dsp-gutter: 28px;
   }
   .audio-workspace .output-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-@container dsp-workbench (max-width: 1180px) {
-  .audio-workspace .hero-main {
+  .audio-workspace .buffer-panel {
     grid-template-columns: minmax(0, 1fr);
-    gap: 22px;
-  }
-  .audio-workspace .hero-readouts {
-    padding-top: 14px;
+    border-left: 0;
     border-top: 1px solid var(--dsp-line);
   }
-  .audio-workspace .hero-readouts > div:first-child {
-    padding-left: 0;
-    border-left: 0;
-  }
-  .audio-workspace .health-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 14px;
-  }
-  .audio-workspace .health-row:nth-child(3) {
-    padding-left: 0;
-    border-left: 0;
-  }
-  .audio-workspace .step-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .audio-workspace {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(0, 1fr);
-    grid-template-areas:
-      'header'
-      'rail'
-      'content';
-  }
-  .audio-workspace .workspace-status {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 16px;
-    max-height: none;
-    padding: 10px 20px;
-    overflow: hidden;
-    border-right: 0;
-    border-bottom: 1px solid var(--dsp-line-strong);
-  }
-  .audio-workspace .status-rail-head {
-    display: flex;
-    align-items: center;
+}
+@container dsp-workbench (max-width: 959px) {
+  .audio-workspace .workspace-header {
+    padding: 0 20px;
     gap: 10px;
-    padding-bottom: 0;
-    border-bottom: 0;
   }
-  .audio-workspace .rail-kicker-tag,
-  .audio-workspace .station-decoder,
-  .audio-workspace .station-resampler,
-  .audio-workspace .station-shaft,
-  .audio-workspace .station-secondary-spec,
-  .audio-workspace .station-inline-link,
-  .audio-workspace .station-tag,
-  .audio-workspace .dsp-subgroups {
-    display: none;
-  }
-  .audio-workspace .signal-overview {
-    flex-direction: row;
-    flex: 1 1 auto;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    min-width: 0;
-  }
-  .audio-workspace .pipeline-timeline {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 14px;
-    min-width: 0;
-    overflow: hidden;
-  }
-  .audio-workspace .pipeline-station {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .audio-workspace .station-body {
-    flex-direction: row;
-    align-items: baseline;
-    gap: 6px;
-    padding-bottom: 0;
+  .audio-workspace .workspace-tabs {
+    gap: 20px;
   }
   .audio-workspace .workspace-popout .action-label {
     display: none;
   }
-  .audio-workspace .workspace-popout {
-    width: 34px;
-    padding: 0;
+  .audio-workspace .workspace-status {
+    padding: 10px 22px;
+    gap: 12px;
   }
-  .audio-workspace .monitor-console {
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
-  }
-}
-@container dsp-workbench (max-width: 980px) {
-  .audio-workspace .workspace-content {
-    --dsp-gutter: 24px;
-  }
-  .audio-workspace .workspace-header {
-    min-height: 48px;
-    padding: 0 16px;
-  }
-  .audio-workspace .workspace-tabs button {
-    min-height: 48px;
-    padding: 0 12px;
-  }
-  .audio-workspace .workspace-tabs button::after {
-    right: 12px;
-    left: 12px;
-  }
-  .audio-workspace .monitor-console,
-  .audio-workspace .quick-dsp-grid,
-  .audio-workspace .dsp-master-strip,
-  .audio-workspace .step-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .audio-workspace .dsp-master-strip {
-    gap: 18px;
-  }
-  .audio-workspace .strip-bay:not(:last-child) {
-    padding-right: 0;
-  }
-  .audio-workspace .strip-bay + .strip-bay {
-    padding-top: 18px;
-    padding-left: 0;
-    border-top: 1px solid var(--dsp-line);
-    border-left: 0;
-  }
-  .audio-workspace .stage-flow {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    row-gap: 14px;
-  }
-  .audio-workspace .stage-flow li:nth-child(4) {
-    padding-left: 0;
-  }
-  .audio-workspace .stage-flow li:nth-child(4)::before {
+  .audio-workspace .status-revision {
     display: none;
   }
-  .audio-workspace .option-group {
-    grid-template-columns: minmax(0, 1fr);
+  .audio-workspace .signal-summary {
+    gap: 8px;
   }
-  .audio-workspace .option-switch {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .audio-workspace .signal-scene-block,
-  .audio-workspace .signal-scene-block + .signal-wire,
-  .audio-workspace .signal-terminal em {
+  .audio-workspace .signal-summary-output small {
     display: none;
-  }
-}
-@container dsp-workbench (max-width: 860px) {
-  .audio-workspace .workspace-page {
-    padding: 24px 20px 52px;
-  }
-  .audio-workspace .dsp-rack-content > .draft-toolbar {
-    flex: 1 1 100%;
-    justify-content: flex-start;
-    margin-left: 0;
   }
   .audio-workspace .rack-layout {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      'head'
-      'scenes'
-      'narrow'
-      'chain'
-      'editor'
-      'audition';
+    grid-template-areas: 'scenes' 'head' 'narrow' 'chain' 'editor' 'audition';
   }
   .audio-workspace .rack-layout > .narrow-tabs {
     display: inline-flex;
+    margin: 12px 18px 0;
+  }
+  .audio-workspace .graph-pane {
+    border-right: 0;
   }
   .audio-workspace .rack-layout[data-narrow-view='chain'] > .editor-pane,
   .audio-workspace .rack-layout[data-narrow-view='editor'] > .graph-pane {
     display: none;
   }
-  .audio-workspace .scene-pane {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      'heading actions'
-      'list list'
-      'factory factory';
+  .audio-workspace .monitor-console {
+    grid-template-columns: minmax(0, 1fr) 278px;
+    gap: 0;
   }
-  .audio-workspace .scene-pane > .factory-template-picker select {
-    flex: 1;
-    width: auto;
+  .audio-workspace .instrument {
+    padding: 18px;
   }
-  .audio-workspace .hero-readouts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 20px;
+  .audio-workspace .instrument-title {
+    gap: 7px;
   }
-  .audio-workspace .hero-readouts > div:nth-child(3) {
-    padding-left: 0;
-    border-left: 0;
+  .audio-workspace .scope-subtitle {
+    display: none;
   }
-  .audio-workspace .health-list {
+  .audio-workspace .quick-dsp-grid,
+  .audio-workspace .dsp-master-strip {
     grid-template-columns: minmax(0, 1fr);
-    row-gap: 12px;
   }
-  .audio-workspace .health-row {
+  .audio-workspace .strip-bay:not(:last-child) {
     padding-right: 0;
-    padding-left: 0;
+  }
+  .audio-workspace .strip-bay + .strip-bay {
+    padding: 18px 0 0;
+    border-top: 1px solid var(--dsp-line);
     border-left: 0;
+  }
+  .audio-workspace .monitor-tuning-zone .dsp-tuning-card:first-child {
+    padding-right: 0;
+    border-right: 0;
   }
   .audio-workspace .rule-group {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
   }
-  .audio-workspace .rail-readouts > .readout-cell:nth-child(3) {
-    display: none;
-  }
 }
-@container dsp-workbench (max-width: 640px) {
-  .audio-workspace .workspace-content {
-    --dsp-gutter: 14px;
+@container dsp-workbench (max-width: 719px) {
+  .audio-workspace .workspace-header {
+    flex-wrap: wrap;
+    gap: 0;
+    padding: 0 16px;
+  }
+  .audio-workspace .workspace-tabs {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  .audio-workspace .workspace-tabs button {
+    min-height: 50px;
+  }
+  .audio-workspace .workspace-actions {
+    justify-content: flex-end;
+    width: 100%;
+    padding: 8px 0;
+  }
+  .audio-workspace .workspace-status {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding: 10px 16px;
+  }
+  .audio-workspace .workspace-status .signal-overview {
+    flex-basis: 100%;
+  }
+  .audio-workspace .signal-summary {
+    width: 100%;
+  }
+  .audio-workspace .signal-summary-source {
+    flex: 1;
+  }
+  .audio-workspace .signal-summary-processing {
+    max-width: 35%;
+  }
+  .audio-workspace .signal-summary-output {
+    max-width: 36%;
   }
   .audio-workspace .workspace-page {
     gap: 20px;
-    padding: 20px 14px 44px;
+    padding: 22px 16px 40px;
   }
-  .audio-workspace .workspace-header {
-    padding: 10px 10px 0 14px;
+  .audio-workspace .monitor-console {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .audio-workspace .workspace-eyebrow {
+  .audio-workspace .monitor-heading {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .audio-workspace .monitor-readouts {
+    gap: 20px;
+  }
+  .audio-workspace .monitor-readouts dd {
+    font-size: var(--dsp-t20);
+  }
+  .audio-workspace .monitor-refresh {
     display: none;
   }
-  .audio-workspace .workspace-tabs {
-    margin: 4px -10px 0 -6px;
+  .audio-workspace .loudness-panel {
+    gap: 20px;
+    border-left: 0;
+    border-top: 1px solid var(--dsp-line);
   }
-  .audio-workspace .workspace-tabs button {
-    flex: 1 0 auto;
-    padding: 0 10px;
+  .audio-workspace .loudness-panel .meter-rows {
+    gap: 18px;
   }
-  .audio-workspace .workspace-status {
-    gap: 8px 10px;
-    padding: 8px 12px;
+  .audio-workspace .health-list {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .audio-workspace .status-revision,
-  .audio-workspace .signal-source,
-  .audio-workspace .signal-wire,
-  .audio-workspace .rail-readouts > .readout-cell:nth-child(1) {
-    display: none;
+  .audio-workspace .option-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
   }
-  .audio-workspace .rail-readouts > .readout-cell.highlight {
-    display: inline-flex;
+  .audio-workspace .option-switch {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
-  .audio-workspace .workspace-page-heading h2 {
-    font-size: var(--dsp-t24);
-  }
-  .audio-workspace .hero-copy h2 {
-    font-size: var(--dsp-t30);
-  }
-  .audio-workspace .zone-subtitle {
-    display: none;
-  }
-  .audio-workspace .draft-lifecycle .step-label {
-    display: none;
-  }
-  .audio-workspace .draft-lifecycle li + li::before {
-    width: 18px;
-    margin: 0 8px;
+  .audio-workspace .surface-panel,
+  .audio-workspace .library-section,
+  .audio-workspace .editor-pane {
+    padding: 18px;
   }
   .audio-workspace .draft-scene {
+    padding: 0;
+    border: 0;
     flex: 1 1 100%;
-    padding-left: 0;
-    border-left: 0;
   }
   .audio-workspace .draft-scene select {
-    flex: 1;
     width: auto;
+    flex: 1;
   }
   .audio-workspace .draft-actions {
+    flex-wrap: wrap;
+    padding: 0;
+    border: 0;
     flex: 1 1 100%;
-    padding-left: 0;
-    border-left: 0;
   }
   .audio-workspace .draft-actions .primary-button {
     margin-left: auto;
-  }
-  .audio-workspace .readout-value {
-    font-size: var(--dsp-t24);
-  }
-  .audio-workspace .instrument,
-  .audio-workspace .monitor-hero,
-  .audio-workspace .dsp-tuning-card,
-  .audio-workspace .dsp-master-strip,
-  .audio-workspace :is(.surface-panel, .library-section) {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-  .audio-workspace .editor-pane {
-    padding: 16px;
-  }
-  .audio-workspace .scope-subtitle {
-    display: none;
-  }
-  .audio-workspace .step-card {
-    min-height: auto;
-    padding: 16px;
-    gap: 12px;
-  }
-  .audio-workspace .stage-flow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .audio-workspace .stage-flow li:nth-child(odd) {
-    padding-left: 0;
-  }
-  .audio-workspace .stage-flow li:nth-child(odd)::before {
-    display: none;
-  }
-  .audio-workspace .stage-flow li:nth-child(4) {
-    padding-left: 14px;
-  }
-  .audio-workspace .stage-flow li:nth-child(4)::before {
-    display: block;
-  }
-  .audio-workspace .buffer-readouts strong {
-    font-size: var(--dsp-t20);
   }
   .audio-workspace .rule-identity {
     grid-template-columns: minmax(0, 1fr) 96px;
   }
   .audio-workspace .node-identity-card {
-    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-columns: 40px minmax(0, 1fr);
   }
   .audio-workspace .node-enable {
     grid-column: 1 / -1;

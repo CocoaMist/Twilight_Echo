@@ -109,11 +109,14 @@ export function createCorePlayerAudio(core: CorePlayerClient, failed: (error: un
       dsp.value.value?.scenes.scenes.find((scene) => scene.id === 'default')?.graph
   )
   const dspOutputStage = computed(() => graph.value?.outputStage ?? DEFAULT_DSP_OUTPUT_STAGE)
-  const dspStereoImage = computed(() =>
-    graph.value
-      ? extractStereoImageFromGraph(structuredClone(graph.value))
-      : DEFAULT_DSP_STEREO_IMAGE
-  )
+  const dspStereoImage = computed(() => {
+    if (!graph.value) return DEFAULT_DSP_STEREO_IMAGE
+    try {
+      return extractStereoImageFromGraph(structuredClone(graph.value))
+    } catch {
+      return extractStereoImageFromGraph(JSON.parse(JSON.stringify(graph.value)))
+    }
+  })
   async function editOutput(edit: CoreAudioOutputEdit['edit']): Promise<void> {
     if (!output.value.value) await output.refresh()
     await core.command('audio.output.edit', { revision: output.value.value!.revision, edit })

@@ -66,7 +66,7 @@ window.api = {
     // Frozen so Vue's deep ref never proxies these objects: EqualizerPage
     // structuredClone()s them and rejects reactive proxies.
     get: async () => Object.freeze({
-      audioProcessing: Object.freeze({ ...defaultAudioProcessing, eqMode: 'parametric', eqEnabled: true }),
+      audioProcessing: Object.freeze({ ...defaultAudioProcessing, dspEnabled: false, eqMode: 'parametric', eqEnabled: true }),
       audioEqPresets: Object.freeze([]),
       headphoneCompensation: Object.freeze({ enabled: false, bands: [] })
     }),
@@ -177,7 +177,7 @@ window.auditCore = {
     if (name === 'audio.dsp')
       return {
         revision,
-        processing: { ...defaultAudioProcessing, eqMode: 'parametric', eqEnabled: true },
+        processing: { ...defaultAudioProcessing, dspEnabled: false, eqMode: 'parametric', eqEnabled: true },
         autoPreamp: null,
         scenes: plain(state),
         convolver: { loaded: false, active: false, bypassed: false, irResampled: false, path: '', sampleRate: 0 }
@@ -240,9 +240,17 @@ window.runWorkbenchCases = async () => {
     'overview is not first'
   )
   check(
-    document.querySelector('.signal-overview').textContent.includes('512'),
-    'actual buffer missing from overview'
+    !document.querySelector('.signal-dialog').open && document.querySelector('.signal-summary'),
+    'signal details should start collapsed, with a compact path summary'
   )
+  const beforeDisclosure = JSON.stringify(output.audioProcessing)
+  document.querySelector('.monitor-tuning-zone').open = true
+  document.querySelector('.diagnostic-details').open = true
+  await tick()
+  check(document.querySelector('.diagnostic-timing').textContent.includes('512'), 'actual buffer missing from diagnostics')
+  check(JSON.stringify(output.audioProcessing) === beforeDisclosure && writes === 0, 'disclosure changed audio settings')
+  document.querySelector('.monitor-tuning-zone').open = false
+  document.querySelector('.diagnostic-details').open = false
   check(
     !document.querySelector('.scope-grid path[stroke]').getAttribute('d'),
     'idle scope fabricates a spectrum'
@@ -262,6 +270,12 @@ window.runWorkbenchCases = async () => {
     'live source did not draw spectrum'
   )
   check(player.consumers.value === 1, 'scope did not acquire one shared consumer')
+  output.audioProcessing = { ...output.audioProcessing, fftEnabled: false }
+  await tick()
+  check(player.consumers.value === 0, 'FFT off retained spectrum demand')
+  check(document.querySelector('.scope-empty')?.textContent.includes('FFT 采集未开启'), 'FFT off state is missing')
+  output.audioProcessing = { ...output.audioProcessing, fftEnabled: true }
+  await tick()
   document.querySelector('[aria-label="冻结频谱"]').click()
   await tick()
   const frozenPath = document.querySelector('.scope-grid path[stroke]').getAttribute('d')
@@ -568,3 +582,19 @@ window.runPopoutCases = async () => {
 }
 window.workspaceForTest = workspace
 window.appForTest = app
+window.openDrawerForTest = async () => {
+  const button = document.querySelector('.workspace-signal-button')
+  button.focus()
+  button.click()
+  await tick()
+  const drawer = document.querySelector('.signal-dialog')
+  check(drawer.open, 'signal drawer did not open')
+  check(drawer.contains(document.activeElement), 'signal drawer did not receive focus')
+  check(drawer.textContent.includes('512'), 'actual buffer missing from signal details')
+  check(!output.audioProcessing.dspEnabled, 'opening the signal path enabled DSP')
+}
+window.checkDrawerClosed = async () => {
+  await tick()
+  check(!document.querySelector('.signal-dialog').open, 'Escape did not close the signal drawer')
+  check(document.activeElement === document.querySelector('.workspace-signal-button'), 'signal drawer did not restore focus')
+}

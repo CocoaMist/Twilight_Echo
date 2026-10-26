@@ -69,31 +69,34 @@ function processingCount(scene: DspScene): number {
         </span>
       </button>
     </div>
-    <div class="scene-actions">
-      <button class="ghost-button" title="复制选中场景" @click="emit('duplicate')">
-        <i class="pi pi-copy"></i>复制
-      </button>
-      <button
-        class="icon-button danger"
-        title="删除选中场景"
-        aria-label="删除选中场景"
-        :disabled="scenes.length <= 1"
-        @click="emit('remove')"
-      >
-        <i class="pi pi-trash"></i>
-      </button>
-    </div>
-    <div class="factory-template-picker">
-      <label
-        ><span>从工厂模板新建</span
-        ><select v-model="factoryTemplate" aria-label="工厂模板">
-          <option v-for="item in DSP_FACTORY_SCENE_TEMPLATES" :key="item.id" :value="item.id">
-            {{ item.name }}
-          </option>
-        </select></label
-      ><button class="ghost-button" @click="emit('addFactory')">
-        <i class="pi pi-sparkles"></i>从模板创建
-      </button>
-    </div>
+    <details class="scene-tools">
+      <summary>场景管理<i class="pi pi-chevron-down" aria-hidden="true"></i></summary>
+      <div class="scene-actions">
+        <button class="ghost-button" title="复制选中场景" @click="emit('duplicate')">
+          <i class="pi pi-copy"></i>复制
+        </button>
+        <button
+          class="icon-button danger"
+          title="删除选中场景"
+          aria-label="删除选中场景"
+          :disabled="scenes.length <= 1"
+          @click="emit('remove')"
+        >
+          <i class="pi pi-trash"></i>
+        </button>
+      </div>
+      <div class="factory-template-picker">
+        <label
+          ><span>从工厂模板新建</span
+          ><select v-model="factoryTemplate" aria-label="工厂模板">
+            <option v-for="item in DSP_FACTORY_SCENE_TEMPLATES" :key="item.id" :value="item.id">
+              {{ item.name }}
+            </option>
+          </select></label
+        ><button class="ghost-button" @click="emit('addFactory')">
+          <i class="pi pi-sparkles"></i>从模板创建
+        </button>
+      </div>
+    </details>
   </aside>
 </template>

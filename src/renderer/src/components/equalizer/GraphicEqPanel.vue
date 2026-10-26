@@ -105,23 +105,25 @@ const emit = defineEmits<{
   flex: 1;
 }
 .slider-gain {
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  font-weight: 700;
-  color: var(--te-primary-500);
-  background: var(--te-card-bg);
-  padding: 4px 10px;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
-}
-.slider-freq {
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   font-weight: 600;
-  color: var(--te-neutral-500);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsp-text, var(--te-neutral-900));
+  background: transparent;
+  padding: 2px 6px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+.slider-freq {
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsp-muted, var(--te-neutral-500));
 }
 .slider-track {
-  width: 6px;
+  width: 3px;
   height: 180px;
-  background: rgba(15, 23, 42, 0.06);
+  background: var(--dsp-line-strong, rgba(15, 23, 42, 0.12));
   border-radius: 999px;
   position: relative;
 }
@@ -129,20 +131,20 @@ const emit = defineEmits<{
   position: absolute;
   left: 0;
   width: 100%;
-  background: linear-gradient(to top, var(--te-primary-500), #818cf8);
+  background: var(--dsp-text, var(--te-neutral-900));
   border-radius: 999px;
   z-index: 1;
 }
 .slider-thumb {
-  width: 20px;
-  height: 20px;
-  background: #fff; /* keep-white: slider knob */
+  width: 14px;
+  height: 14px;
+  background: var(--dsp-surface-solid, #fff); /* keep-white: slider knob */
   border-radius: 50%;
   position: absolute;
   left: 50%;
   transform: translate(-50%, -50%);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  border: 2px solid var(--te-primary-500);
+  box-shadow: none;
+  border: 2px solid var(--dsp-text, var(--te-neutral-900));
   cursor: grab;
   transition: transform 0.1s;
   z-index: 2;
@@ -169,16 +171,16 @@ const emit = defineEmits<{
 .master-column {
   padding-right: 20px;
   margin-right: 10px;
-  border-right: 2px dashed rgba(15, 23, 42, 0.08);
+  border-right: 1px solid var(--dsp-line, rgba(15, 23, 42, 0.08));
 }
 .master-column .slider-gain {
-  color: #ec4899;
+  color: var(--dsp-text, var(--te-neutral-900));
 }
 .master-column .slider-fill {
-  background: linear-gradient(to top, #ec4899, #f472b6);
+  background: var(--dsp-text, var(--te-neutral-900));
 }
 .master-column .slider-thumb {
-  border-color: #ec4899;
+  border-color: var(--dsp-text, var(--te-neutral-900));
 }
 
 :global(html[data-te-equalizer-slider] .slider-track) {

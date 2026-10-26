@@ -127,7 +127,6 @@ const statusLabels: Record<string, string> = {
     <section class="library-section">
       <header class="section-heading">
         <div>
-          <p class="eyebrow">ASSETS</p>
           <h2>
             校正资料<span class="count-badge">{{ assets.length }}</span>
           </h2>
@@ -244,9 +243,8 @@ const statusLabels: Record<string, string> = {
     <section class="vst-library library-section">
       <header class="section-heading">
         <div>
-          <p class="eyebrow">PLUGINS</p>
           <h2>
-            VST3 插件<span class="count-badge">{{ vst3Counts.available }}</span>
+            插件管理<span class="count-badge">{{ vst3Counts.available }}</span>
           </h2>
         </div>
         <div class="toolbar">

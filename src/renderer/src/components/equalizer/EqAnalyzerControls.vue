@@ -63,14 +63,26 @@ function changeSpeed(event: Event): void {
 button,
 summary {
   border: 0;
-  padding: 4px 0;
+  border-radius: 4px;
+  padding: 4px 6px;
   color: inherit;
   background: transparent;
   font: inherit;
   cursor: pointer;
+  list-style: none;
 }
-button[aria-pressed='true'] {
+summary::-webkit-details-marker {
+  display: none;
+}
+button:hover:not(:disabled),
+summary:hover {
+  color: var(--eq-text);
+  background: var(--eq-control-bg);
+}
+button[aria-pressed='true'],
+details[open] > summary {
   color: var(--eq-response);
+  background: var(--eq-control-bg);
 }
 button:disabled {
   opacity: 0.4;

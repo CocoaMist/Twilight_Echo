@@ -6,8 +6,12 @@ import { dspSampleRate } from '@renderer/utils/dspSignalOverview'
 import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import {
   DSP_OUTPUT_SAMPLE_RATE_OPTIONS,
+  DSP_TARGET_SAMPLE_RATE_MODE_OPTIONS,
   DSP_RESAMPLER_QUALITY_OPTIONS,
+  DSP_RESAMPLER_PHASE_OPTIONS,
   DSP_DITHER_MODE_OPTIONS,
+  resolveEffectiveTargetSampleRate,
+  type DspOutputStageConfig,
   type DspScene,
   type DspGraphStatus
 } from '../../../../shared/dspGraph.ts'
@@ -19,6 +23,7 @@ const store = useAudioOutputDspStore()
 const {
   outputInfo,
   playbackInfo,
+  audioEngineReady,
   audioOutputConfig,
   audioOutputConfigApplyStatus,
   audioDevice,
@@ -41,6 +46,95 @@ const ditherLabels: Record<string, [string, string]> = {
   highpassTpdf: ['高通 TPDF', '更少可闻噪声'],
   noiseShaped: ['噪声整形', '移至高频']
 }
+const phaseLabels: Record<string, [string, string]> = {
+  linear: ['线性相位 (陡峭)', '零相位失真 · 精确滚降'],
+  minimum: ['最小相位 (陡峭)', '零前置振铃 · 瞬态优先'],
+  'linear-smooth': ['线性相位 (平缓)', '平滑高频衰减 · 降低振铃'],
+  'minimum-smooth': ['最小相位 (平缓)', '自然听感 · 零前置振铃']
+}
+const clipCount = computed(() => audioEngineReady.value ? props.status?.meter?.clipCount : undefined)
+const headroomEnabledModel = computed({
+  get: () => scene.value?.graph.outputStage.headroomEnabled === true,
+  set: (enabled: boolean) => {
+    if (!scene.value) return
+    scene.value.graph.outputStage.headroomEnabled = enabled
+    if (enabled && scene.value.graph.outputStage.headroomGainDb === undefined) {
+      scene.value.graph.outputStage.headroomGainDb = -3
+    }
+  }
+})
+const headroomGainModel = computed({
+  get: () => scene.value?.graph.outputStage.headroomGainDb ?? -3,
+  set: (gainDb: number) => {
+    if (!scene.value) return
+    scene.value.graph.outputStage.headroomGainDb = Number(gainDb)
+  }
+})
+const selectedDevice = computed(
+  () =>
+    audioDeviceOptions.value?.find((device) => device.id === audioDevice.value) ??
+    audioDeviceOptions.value?.[0] ??
+    null
+)
+const actualRate = computed(
+  () =>
+    !audioEngineReady.value ? 0 :
+    outputInfo.value?.actualSampleRate ||
+    outputInfo.value?.outputSampleRate ||
+    props.status?.outputStage?.actualSampleRate ||
+    playbackInfo.value?.actualSampleRate ||
+    playbackInfo.value?.outputSampleRate ||
+    0
+)
+const sourceRate = computed(
+  () =>
+    playbackInfo.value?.sourceSampleRate ||
+    playbackInfo.value?.decodedSampleRate ||
+    0
+)
+const deviceRates = computed(() => selectedDevice.value?.sampleRates)
+const targetRateModeModel = computed({
+  get: () => {
+    const out = scene.value?.graph.outputStage
+    if (!out) return 'device'
+    if (out.targetSampleRateMode) return out.targetSampleRateMode
+    return typeof out.targetSampleRate === 'number' ? 'fixed' : 'device'
+  },
+  set: (mode) => {
+    if (!scene.value) return
+    const out = scene.value.graph.outputStage
+    out.targetSampleRateMode = mode
+    if (mode === 'device') {
+      out.targetSampleRate = 'device'
+    } else if (mode === 'fixed') {
+      if (out.targetSampleRate === 'device' || !out.targetSampleRate) {
+        out.targetSampleRate = 96000
+      }
+    } else {
+      const resolved = resolveEffectiveTargetSampleRate(
+        { ...out, targetSampleRateMode: mode },
+        sourceRate.value,
+        deviceRates.value
+      )
+      out.targetSampleRate = resolved
+    }
+  }
+})
+const targetSampleRateModel = computed<DspOutputStageConfig['targetSampleRate']>({
+  get: () => scene.value?.graph.outputStage.targetSampleRate ?? 'device',
+  set: (value) => {
+    if (!scene.value) return
+    scene.value.graph.outputStage.targetSampleRate = value
+    scene.value.graph.outputStage.targetSampleRateMode = value === 'device' ? 'device' : 'fixed'
+  }
+})
+const resamplerPhaseModel = computed({
+  get: () => scene.value?.graph.outputStage.resamplerPhase ?? 'linear',
+  set: (phase) => {
+    if (!scene.value) return
+    scene.value.graph.outputStage.resamplerPhase = phase
+  }
+})
 const bufferOptions = computed(() =>
   [
     ...new Set([
@@ -62,28 +156,13 @@ const bufferOptions = computed(() =>
 const pending = computed(
   () => bufferBusy.value || audioOutputConfigApplyStatus.value?.state === 'pending'
 )
-const selectedDevice = computed(
-  () =>
-    audioDeviceOptions.value?.find((device) => device.id === audioDevice.value) ??
-    audioDeviceOptions.value?.[0] ??
-    null
-)
-const actualRate = computed(
-  () =>
-    outputInfo.value?.actualSampleRate ||
-    outputInfo.value?.outputSampleRate ||
-    props.status?.outputStage?.actualSampleRate ||
-    playbackInfo.value?.actualSampleRate ||
-    playbackInfo.value?.outputSampleRate ||
-    selectedDevice.value?.sampleRates?.[0] ||
-    48000
-)
 const actualBuffer = computed(() =>
   outputInfo.value && outputInfo.value.bufferSizeFrames > 0
     ? outputInfo.value.bufferSizeFrames
     : playbackInfo.value?.bufferSizeFrames || 0
 )
 const effectiveLatencyMs = computed(() => {
+  if (!audioEngineReady.value) return null
   const direct =
     outputInfo.value?.latencyMs ||
     outputInfo.value?.latencyInfo?.totalLatencyMs ||
@@ -95,7 +174,7 @@ const effectiveLatencyMs = computed(() => {
   if (actualBuffer.value > 0 && actualRate.value > 0) {
     return (actualBuffer.value / actualRate.value) * 1000
   }
-  return 0
+  return null
 })
 /** Logarithmic position of a buffer size between 64 and 32768 frames. */
 function bufferPosition(frames: number): number {
@@ -109,8 +188,28 @@ const processingCount = computed(
   () => scene.value?.graph.nodes.filter((node) => node.enabled && node.type !== 'meter').length ?? 0
 )
 const targetLabel = computed(() => {
-  const target = scene.value?.graph.outputStage.targetSampleRate
+  const out = scene.value?.graph.outputStage
+  if (!out) return '跟随设备'
+  const mode = targetRateModeModel.value
+  const resolved = resolveEffectiveTargetSampleRate(out, sourceRate.value, deviceRates.value)
+  if (mode === 'max-pcm') {
+    return typeof resolved === 'number' ? `最高 PCM (${dspSampleRate(resolved)})` : '最高 PCM'
+  }
+  if (mode === 'power-of-2') {
+    return typeof resolved === 'number' ? `2^n 倍频 (${dspSampleRate(resolved)})` : '2^n 倍频'
+  }
+  const target = out.targetSampleRate
   return target === 'device' || !target ? '跟随设备' : dspSampleRate(target)
+})
+const outputNoticeText = computed(() => {
+  if (!scene.value) return ''
+  const out = scene.value.graph.outputStage
+  const base = describeResampler(out.resamplerQuality, props.status?.outputStage)
+  const phaseLabel = phaseLabels[resamplerPhaseModel.value]?.[0] ?? '线性相位 (陡峭)'
+  const headroomLabel = headroomEnabledModel.value
+    ? `Headroom ${headroomGainModel.value.toFixed(1)} dB`
+    : 'Headroom 关闭'
+  return `${base} · 滤波器: ${phaseLabel} · ${headroomLabel}`
 })
 watch(
   () => audioOutputConfig.value?.preferredBufferSize,
@@ -145,34 +244,61 @@ async function applyBuffer(): Promise<void> {
     <section v-if="scene" class="output-stage-panel surface-panel">
       <header class="panel-heading">
         <div>
-          <h2>输出级</h2>
+          <h2>场景输出设置</h2>
           <p>属于场景「{{ scene.name }}」，保存更改后应用。</p>
         </div>
-        <span class="section-tag" data-mode="draft">场景草稿</span>
+        <span class="section-tag" data-mode="draft">保存后生效</span>
       </header>
-      <ol class="stage-flow" aria-label="输出级处理顺序">
-        <li>
-          <small>DSP 链</small><strong>{{ processingCount }} 个处理器</strong>
-        </li>
-        <li>
-          <small>目标采样率</small><strong>{{ targetLabel }}</strong>
-        </li>
-        <li>
-          <small>重采样</small
-          ><strong>{{ resamplerLabels[scene.graph.outputStage.resamplerQuality]?.[0] }}</strong>
-        </li>
-        <li>
-          <small>抖动</small
-          ><strong>{{ ditherLabels[scene.graph.outputStage.dither]?.[0] }}</strong>
-        </li>
-        <li :class="{ off: !scene.graph.outputStage.safetyClamp }">
-          <small>安全限幅</small
-          ><strong>{{ scene.graph.outputStage.safetyClamp ? '开启' : '关闭' }}</strong>
-        </li>
-        <li class="is-device">
-          <small>设备实际</small><strong>{{ dspSampleRate(actualRate) }}</strong>
-        </li>
-      </ol>
+      <div class="option-group">
+        <label class="option-switch">
+          <span class="option-copy">
+            <strong>Headroom 数字余量管理</strong>
+            <small>在 DSP 与重采样前预留衰减余量（推荐 -3.0 dB），消除插值过冲削波 (ISP)。</small>
+          </span>
+          <input
+            v-model="headroomEnabledModel"
+            type="checkbox"
+            aria-label="Headroom 数字余量管理"
+          />
+        </label>
+        <div v-if="headroomEnabledModel" class="headroom-slider-row">
+          <input
+            v-model.number="headroomGainModel"
+            type="range"
+            min="-12"
+            max="0"
+            step="0.5"
+            aria-label="Headroom 衰减分贝"
+          />
+          <strong>{{ headroomGainModel.toFixed(1) }} dB</strong>
+          <span class="clip-indicator" :class="{ active: (clipCount ?? 0) > 0 }">
+            {{ clipCount === undefined ? '削波数据未报告' : clipCount > 0 ? `检测到 ${clipCount} 次削波` : '无削波 (0 Clips)' }}
+          </span>
+        </div>
+      </div>
+      <div class="option-group">
+        <div class="option-copy">
+          <strong>升频策略模式</strong
+          ><small>跟随设备，或选择固定频率、最高 PCM 与整数倍升频。</small>
+        </div>
+        <div class="option-chips" role="radiogroup" aria-label="升频策略模式">
+          <label
+            v-for="mode in DSP_TARGET_SAMPLE_RATE_MODE_OPTIONS"
+            :key="mode.value"
+            class="option-chip"
+          >
+            <input
+              v-model="targetRateModeModel"
+              type="radio"
+              name="dsp-output-rate-mode"
+              :value="mode.value"
+            />
+            <span
+              ><strong>{{ mode.label }}</strong></span
+            >
+          </label>
+        </div>
+      </div>
       <div class="option-group">
         <div class="option-copy">
           <strong>输出采样率</strong><small>默认跟随设备；固定后由 DSP 重采样到目标采样率。</small>
@@ -184,7 +310,7 @@ async function applyBuffer(): Promise<void> {
             class="option-chip"
             :class="{ wide: item.value === 'device' }"
             ><input
-              v-model="scene.graph.outputStage.targetSampleRate"
+              v-model="targetSampleRateModel"
               type="radio"
               name="dsp-output-sample-rate"
               :value="item.value"
@@ -215,27 +341,6 @@ async function applyBuffer(): Promise<void> {
           >
         </div>
       </div>
-      <div class="option-group">
-        <div class="option-copy">
-          <strong>量化抖动 · Dither</strong><small>降低输出位深时使用，通常保持关闭。</small>
-        </div>
-        <div class="option-chips" role="radiogroup" aria-label="量化抖动">
-          <label
-            v-for="item in DSP_DITHER_MODE_OPTIONS"
-            :key="item.value"
-            class="option-chip stacked"
-            ><input
-              v-model="scene.graph.outputStage.dither"
-              type="radio"
-              name="dsp-output-dither"
-              :value="item.value"
-            /><span
-              ><strong>{{ ditherLabels[item.value]?.[0] ?? item.label }}</strong
-              ><small>{{ ditherLabels[item.value]?.[1] }}</small></span
-            ></label
-          >
-        </div>
-      </div>
       <label class="option-group option-switch">
         <span class="option-copy"
           ><strong>安全限幅</strong><small>将 PCM 输出限制在数字满幅范围内，防止削波。</small></span
@@ -245,16 +350,101 @@ async function applyBuffer(): Promise<void> {
           aria-label="安全限幅"
         />
       </label>
+      <details class="output-advanced disclosure">
+        <summary>
+          <span class="summary-copy"
+            ><strong>高级设置</strong><small>滤波器相位、抖动与处理顺序</small></span
+          ><i class="pi pi-chevron-down summary-chevron" aria-hidden="true"></i>
+        </summary>
+        <div class="output-advanced-body">
+          <div class="option-group">
+            <div class="option-copy">
+              <strong>滤波器相位</strong>
+              <small>线性相位保持群延迟恒定；最小相位消除前置振铃，瞬态响应更凝聚。</small>
+            </div>
+            <div class="option-chips" role="radiogroup" aria-label="抗混叠滤波器相位">
+              <label
+                v-for="item in DSP_RESAMPLER_PHASE_OPTIONS"
+                :key="item.value"
+                class="option-chip stacked"
+              >
+                <input
+                  v-model="resamplerPhaseModel"
+                  type="radio"
+                  name="dsp-output-resampler-phase"
+                  :value="item.value"
+                />
+                <span>
+                  <strong>{{ phaseLabels[item.value]?.[0] ?? item.label }}</strong>
+                  <small>{{ phaseLabels[item.value]?.[1] }}</small>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="option-group">
+            <div class="option-copy">
+              <strong>量化抖动</strong><small>降低输出位深时使用，通常保持关闭。</small>
+            </div>
+            <div class="option-chips" role="radiogroup" aria-label="量化抖动">
+              <label
+                v-for="item in DSP_DITHER_MODE_OPTIONS"
+                :key="item.value"
+                class="option-chip stacked"
+                ><input
+                  v-model="scene.graph.outputStage.dither"
+                  type="radio"
+                  name="dsp-output-dither"
+                  :value="item.value"
+                /><span
+                  ><strong>{{ ditherLabels[item.value]?.[0] ?? item.label }}</strong
+                  ><small>{{ ditherLabels[item.value]?.[1] }}</small></span
+                ></label
+              >
+            </div>
+          </div>
+          <ol class="stage-flow" aria-label="输出级处理顺序">
+            <li :class="{ off: !headroomEnabledModel }">
+              <small>余量管理</small
+              ><strong>{{
+                headroomEnabledModel ? `${headroomGainModel.toFixed(1)} dB` : '关闭'
+              }}</strong>
+            </li>
+            <li>
+              <small>DSP 链</small><strong>{{ processingCount }} 个处理器</strong>
+            </li>
+            <li>
+              <small>目标采样率</small><strong>{{ targetLabel }}</strong>
+            </li>
+            <li>
+              <small>重采样</small
+              ><strong>{{ resamplerLabels[scene.graph.outputStage.resamplerQuality]?.[0] }}</strong>
+            </li>
+            <li>
+              <small>滤波器相位</small
+              ><strong>{{ phaseLabels[resamplerPhaseModel]?.[0] ?? '线性相位 (陡峭)' }}</strong>
+            </li>
+            <li>
+              <small>抖动</small
+              ><strong>{{ ditherLabels[scene.graph.outputStage.dither]?.[0] }}</strong>
+            </li>
+            <li :class="{ off: !scene.graph.outputStage.safetyClamp }">
+              <small>安全限幅</small
+              ><strong>{{ scene.graph.outputStage.safetyClamp ? '开启' : '关闭' }}</strong>
+            </li>
+            <li class="is-device">
+              <small>设备实际</small><strong>{{ dspSampleRate(actualRate) }}</strong>
+            </li>
+          </ol>
+        </div>
+      </details>
       <p class="notice" aria-live="polite">
-        <i class="pi pi-info-circle"></i>{{
-          describeResampler(scene.graph.outputStage.resamplerQuality, status?.outputStage)
-        }}
+        <i class="pi pi-info-circle"></i>{{ outputNoticeText }}
       </p>
     </section>
     <section class="buffer-panel surface-panel">
       <header class="panel-heading">
         <div>
-          <h2>缓冲与延迟</h2>
+          <h2>设备缓冲</h2>
           <p>在响应速度与播放稳定性之间取得平衡。</p>
         </div>
         <span class="section-tag" data-mode="live">设备 · 立即应用</span>
@@ -263,13 +453,12 @@ async function applyBuffer(): Promise<void> {
         <div>
           <span>实际缓冲</span
           ><strong
-            >{{ actualBuffer || '自动'
-            }}<small>{{ actualBuffer ? 'frames' : '驱动分配' }}</small></strong
+            >{{ actualBuffer || '—'
+            }}<small>{{ actualBuffer ? 'frames' : '未报告' }}</small></strong
           >
         </div>
         <div>
-          <span>输出延迟</span
-          ><strong>{{ effectiveLatencyMs.toFixed(1) }}<small>ms</small></strong>
+          <span>输出延迟</span><strong>{{ effectiveLatencyMs?.toFixed(1) ?? '—' }}<small>ms</small></strong>
         </div>
         <div>
           <span>设备采样率</span
