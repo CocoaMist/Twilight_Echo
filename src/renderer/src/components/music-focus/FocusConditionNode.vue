@@ -214,9 +214,7 @@ const lookup = (offset = 0) =>
             @input="search = ($event.target as HTMLInputElement).value"
             @keydown.enter.prevent="lookup()"
         /></label>
-        <button type="button" :disabled="disabled || ownChoice?.loading" @click="lookup()">
-          查找
-        </button>
+        <button type="button" :disabled="disabled || ownChoice?.loading" @click="lookup()">查找</button>
       </div>
       <p v-if="ownChoice?.loading" role="status">正在查找…</p>
       <p v-if="ownChoice?.error" role="alert">{{ ownChoice.error }}</p>
@@ -377,12 +375,14 @@ const lookup = (offset = 0) =>
 .condition {
   min-width: 0;
   margin: 10px 0 0;
-  padding: 12px;
+  padding: 12px 14px;
   border: 1px solid var(--te-card-border);
-  border-radius: 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--te-neutral-500, #888) 3%, transparent);
 }
 .group {
-  border-left: 3px solid var(--te-primary-500);
+  border-left: 4px solid var(--te-primary-500);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 4%, transparent);
 }
 .condition-heading,
 .row,
@@ -403,6 +403,8 @@ label {
   display: grid;
   gap: 4px;
   min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
 }
 .kind {
   flex: 1;
@@ -416,15 +418,21 @@ label {
   gap: 10px;
 }
 .checkbox {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--te-card-border);
+  width: fit-content;
 }
 .checkbox input {
   width: auto;
 }
 .add-row {
   margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--te-card-border);
 }
 .add-row label {
   flex: 1;
@@ -435,12 +443,12 @@ select,
 textarea {
   box-sizing: border-box;
   max-width: 100%;
-  padding: 7px 9px;
+  padding: 6px 10px;
   font: inherit;
   color: var(--te-neutral-900);
   background: var(--te-card-bg);
   border: 1px solid var(--te-card-border);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 input,
 select,
@@ -451,12 +459,13 @@ textarea {
 button {
   cursor: pointer;
   color: var(--te-primary-600);
+  font-weight: 500;
 }
 button:hover:not(:disabled) {
   background: var(--te-hover-bg);
 }
 :disabled {
-  opacity: 0.5;
+  opacity: 0.48;
   cursor: default;
 }
 button:focus-visible,
@@ -469,12 +478,18 @@ textarea:focus-visible {
 .hint,
 nav span {
   color: var(--te-neutral-500);
+  font-size: 12px;
   margin: 0;
 }
 .choices {
   list-style: none;
-  margin: 0;
+  margin: 4px 0;
   padding: 0;
+}
+.choices button {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
 }
 .sr-only {
   position: absolute;
@@ -485,7 +500,7 @@ nav span {
 }
 @media (max-width: 640px) {
   .condition {
-    padding: 8px;
+    padding: 10px;
   }
 }
 </style>

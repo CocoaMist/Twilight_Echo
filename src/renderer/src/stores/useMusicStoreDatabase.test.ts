@@ -62,6 +62,7 @@ test('SQLite content refresh only reads bounded Core metadata and playlist descr
   assert.equal(f.store.isScanning.value, true)
   assert.equal(f.store.libraryTrackCount.value, 1)
   assert.equal(f.queries.filter((query) => query.name === 'library.metadata').length, 1)
+  assert.equal(f.queries.filter((query) => query.name === 'playlists.catalog').length, 0)
   assert.equal(
     f.queries.some((query) => query.name === 'library.tracks'),
     false
@@ -70,6 +71,45 @@ test('SQLite content refresh only reads bounded Core metadata and playlist descr
   f.publish({ scan: scan('cancelled') })
   await tick()
   assert.equal(f.store.libraryScanStatus.value.state, 'cancelled')
+})
+
+test('library-only refreshes preserve playlist descriptors and favorite presentation', async (t) => {
+  const f = await fixture(t)
+  const descriptors = f.store.playlists.value
+  const favoriteTrack = { ...track, size: 0, source: 'local' as const }
+  const query = f.core.query
+  f.core.query = async (name, payload, signal) => name === 'playlists.favorites'
+    ? { revision: f.state.value.playlistsRevision, contains: [true] } as never
+    : query(name, payload, signal)
+  await f.store.getFavoriteTrackStates([favoriteTrack])
+  f.publish({ libraryRevision: f.state.value.libraryRevision! + 1 })
+  await tick()
+  assert.equal(f.store.playlists.value, descriptors)
+  assert.equal(f.store.isFavoriteTrack(favoriteTrack), true)
+})
+
+test('superseded playlist catalog failures do not publish compatibility warnings', async (t) => {
+  const f = await fixture(t)
+  let reject!: (error: Error) => void
+  const stale = new Promise<never>((_resolve, no) => { reject = no })
+  let held = false
+  const query = f.core.query
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'playlists.catalog' && !held) {
+      held = true
+      return stale
+    }
+    return query(name, payload, signal)
+  }
+  // Force a new epoch to require a new catalog even with the same revision.
+  f.publish({ epoch: 'new-core' })
+  await tick()
+  assert.equal(held, true)
+  f.publish({ libraryRevision: f.state.value.libraryRevision! + 1 })
+  await tick()
+  reject(Object.assign(new Error('Playlists changed; read a fresh page'), { code: 'STALE_REVISION' }))
+  await tick()
+  assert.equal(f.store.libraryCompatibilityError.value, '')
 })
 
 test('metadata read failure preserves the last projection; retry reads Core rather than invoking a scanner', async (t) => {
@@ -84,6 +124,55 @@ test('metadata read failure preserves the last projection; retry reads Core rath
   f.intercept()
   await f.store.retryLibraryCompatibility()
   assert.equal(f.store.libraryCompatibilityError.value, '')
+  assert.deepEqual(f.commands, [])
+})
+
+test('a playlist revision race rereads fresh state and never publishes a mixed catalog', async (t) => {
+  const f = await fixture(t)
+  const query = f.core.query
+  let attempt = 0
+  const offsets: number[] = []
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'playlists.state') {
+      attempt++
+      return { ...await query('playlists.state', {}, signal), revision: 100 + attempt } as never
+    }
+    if (name === 'playlists.catalog') {
+      const offset = (payload as { offset: number }).offset
+      offsets.push(offset)
+      if (attempt === 1 && offset === 0)
+        return { revision: 101, offset, total: 201, items: Array.from({ length: 200 }, (_, i) => ({ id: `old-${i}`, name: 'Old' })) } as never
+      if (attempt === 1)
+        throw Object.assign(new Error('Playlists changed; read a fresh page'), { code: 'STALE_REVISION' })
+      return { revision: 102, offset, total: 1, items: [{ id: 'fresh', name: 'Fresh' }] } as never
+    }
+    return query(name, payload, signal)
+  }
+  await f.store.loadPlaylists()
+  assert.equal(attempt, 2)
+  assert.deepEqual(offsets, [0, 200, 0])
+  assert.deepEqual(f.store.playlists.value.map(p => p.id), ['fresh'])
+  assert.equal(f.store.libraryCompatibilityError.value, '')
+  assert.deepEqual(f.commands, [])
+})
+
+test('repeated playlist revision conflicts stay bounded and preserve the previous catalog', async (t) => {
+  const f = await fixture(t)
+  const before = f.store.playlists.value
+  const query = f.core.query
+  let attempts = 0
+  f.core.query = async (name, payload, signal) => {
+    if (name === 'playlists.catalog') {
+      attempts++
+      throw Object.assign(new Error('Playlists changed; read a fresh page'), { code: 'STALE_REVISION' })
+    }
+    return query(name, payload, signal)
+  }
+  f.publish({ epoch: 'conflict-core' })
+  await tick()
+  assert.equal(attempts, 2)
+  assert.equal(f.store.playlists.value, before)
+  assert.match(f.store.libraryCompatibilityError.value, /Playlists changed/)
   assert.deepEqual(f.commands, [])
 })
 

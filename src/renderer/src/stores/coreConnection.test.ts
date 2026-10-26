@@ -214,3 +214,37 @@ test('FFT events reach explicit consumers without becoming projection snapshots'
   unsubscribe()
   store.dispose()
 })
+
+test('page readers are admitted within Core capacity, queued cancellation and disposal never dispatch', async () => {
+  const f = fixture(), connection = new CoreWindowConnection(f.api)
+  await connection.connect()
+  const releases: Array<() => void> = []
+  f.api.request = async (_id, request) => {
+    f.requests.push(request)
+    await new Promise<void>(resolve => releases.push(resolve))
+    return { ok: true, value: null }
+  }
+  const request = (n: number, signal?: AbortSignal) => connection.request({
+    kind: 'query', name: 'state.snapshot', epoch: 'first', requestId: String(n), payload: {}
+  }, signal)
+  const readers = Array.from({ length: 12 }, (_, i) => request(i))
+  const cancelled = new AbortController()
+  const aborted = request(12, cancelled.signal)
+  const rejected = assert.rejects(aborted, { code: 'CANCELLED' })
+  const queued = request(13)
+  assert.equal(f.requests.length, 12)
+  cancelled.abort()
+  await rejected
+  assert.deepEqual(f.cancellations, [])
+  releases.shift()!()
+  await tick()
+  assert.equal(f.requests.at(-1)!.requestId, '13')
+  assert.equal(f.requests.length, 13)
+  const retired = request(14)
+  const disposed = assert.rejects(retired, /disposed/)
+  connection.dispose()
+  await disposed
+  for (const release of releases) release()
+  await Promise.all([...readers, queued])
+  assert.equal(f.requests.length, 13)
+})

@@ -16,7 +16,8 @@ interface State {
   error: string
 }
 export function createIdentityInboxView(
-  read: (query: IdentificationInboxQuery, signal: AbortSignal) => Promise<IdentificationInboxPage>
+  read: (query: IdentificationInboxQuery, signal: AbortSignal) => Promise<IdentificationInboxPage>,
+  options: { unresolvedOnly?: boolean } = {}
 ) {
   const state = shallowRef<State>({
     page: null,
@@ -38,7 +39,7 @@ export function createIdentityInboxView(
     request = current
     state.value = {
       ...state.value,
-      page: null,
+      page: clearSelection ? null : state.value.page,
       loading: true,
       error: '',
       ...(clearSelection ? { selected: null } : {})
@@ -49,6 +50,7 @@ export function createIdentityInboxView(
           offset,
           limit: IDENTITY_INBOX_PAGE_SIZE,
           state: state.value.filter,
+          ...(options.unresolvedOnly ? { unresolvedOnly: true } : {}),
           ...(state.value.kind ? { kind: state.value.kind } : {})
         },
         current.signal

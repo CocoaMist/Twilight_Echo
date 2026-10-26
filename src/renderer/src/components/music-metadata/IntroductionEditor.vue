@@ -62,10 +62,14 @@ onBeforeUnmount(editor.dispose)
 <template>
   <div class="introduction-editor">
     <div v-if="!state.mode" class="editor-actions">
-      <template v-if="current">
-        <button ref="editButton" type="button" @click="begin('value')">编辑介绍</button>
-        <button type="button" @click="begin('clear')">清空介绍</button>
-        <button v-if="current.override" type="button" @click="begin('reset')">恢复自动</button>
+      <template v-if="detail && detail.entityId === selected">
+        <button ref="editButton" type="button" :disabled="!current" @click="begin('value')">
+          编辑介绍
+        </button>
+        <button type="button" :disabled="!current" @click="begin('clear')">清空介绍</button>
+        <button v-if="detail.override" type="button" :disabled="!current" @click="begin('reset')">
+          恢复自动
+        </button>
       </template>
       <span v-if="state.notice" role="status">{{ state.notice }}</span>
     </div>
@@ -110,8 +114,10 @@ onBeforeUnmount(editor.dispose)
         清空后不再显示自动或历史介绍。以后可用“恢复自动”重新显示已有资料。
       </p>
       <p v-else>移除手动介绍或清空标记，重新显示已有自动或历史资料。此操作不会发起联网查询。</p>
-      <p v-if="!attached" role="status">当前条目尚未加载或已不在此分组；草稿尚未提交。</p>
-      <div v-else-if="needsReview" class="editor-review" role="status">
+      <p v-if="!attached && detail?.entityId !== selected" role="status">
+        当前条目尚未加载或已不在此分组；草稿尚未提交。
+      </p>
+      <div v-else-if="attached && needsReview" class="editor-review" role="status">
         <p>资料已重新读取。请核对上方最新内容；草稿不会自动覆盖它。</p>
         <button type="button" :disabled="state.saving" @click="editor.acceptLatest()">
           已核对最新资料，保留草稿

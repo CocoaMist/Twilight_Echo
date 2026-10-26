@@ -145,4 +145,9 @@ test('unknown and forward roles retain their meaning and reference links require
   assert.equal(musicBrainzReferenceUrl({ ...ref, provider: 'platform.test' }), null)
   assert.equal(musicBrainzReferenceUrl({ ...ref, value: 'javascript:alert(1)' }), null)
   assert.equal(musicBrainzReferenceUrl({ ...ref, idType: 'native' }), null)
+  const ncm = { provider: 'ncm', kind: 'artist', idType: 'native', value: '11977133' } as const
+  assert.equal(musicBrainzReferenceUrl(ncm), 'https://music.163.com/#/artist?id=11977133')
+  assert.equal(musicBrainzReferenceUrl({ ...ncm, kind: 'release' }), 'https://music.163.com/#/album?id=11977133')
+  assert.equal(musicBrainzReferenceUrl({ ...ncm, kind: 'album_project' }), null)
+  assert.equal(musicBrainzReferenceUrl({ ...ncm, value: '42&redirect=evil' }), null)
 })

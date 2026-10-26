@@ -98,6 +98,17 @@ export const creditTargetLabel = (kind: MusicCreditTarget['kind']): string =>
 
 /** Canonical source link, alongside in-app exact-reference navigation. */
 export function musicBrainzReferenceUrl(ref: MusicCreditTarget): string | null {
+  if (ref.provider === 'ncm' && ref.idType === 'native' && /^[1-9]\d{0,15}$/.test(ref.value) &&
+    ['artist', 'release', 'recording'].includes(ref.kind))
+    return `https://music.163.com/#/${ref.kind === 'release' ? 'album' : ref.kind === 'recording' ? 'song' : 'artist'}?id=${ref.value}`
+  if (ref.idType === 'native' && /^[1-9]\d{0,11}$/.test(ref.value)) {
+    if (ref.provider === 'vocadb' && ['artist', 'album_project'].includes(ref.kind))
+      return `https://vocadb.net/${ref.kind === 'artist' ? 'Ar' : 'Al'}/${ref.value}`
+    if (ref.provider === 'theaudiodb' && ['artist', 'album_project'].includes(ref.kind))
+      return `https://www.theaudiodb.com/${ref.kind === 'artist' ? 'artist' : 'album'}/${ref.value}`
+    if (ref.provider === 'discogs' && ['artist', 'release', 'album_project'].includes(ref.kind))
+      return `https://www.discogs.com/${ref.kind === 'album_project' ? 'master' : ref.kind}/${ref.value}`
+  }
   if (
     ref.provider !== 'musicbrainz' ||
     ref.idType !== 'mbid' ||

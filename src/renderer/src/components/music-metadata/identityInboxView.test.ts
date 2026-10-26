@@ -12,6 +12,19 @@ const page = (offset = 0): IdentificationInboxPage => ({
   offset,
   items: [{ entity, candidateCount: 2, sample: { provider: 'local', title: 'One', album: 'Album' } }]
 })
+
+test('compact inbox asks Core for unresolved entities rather than filtering a page locally', async () => {
+  const calls: IdentificationInboxQuery[] = []
+  const view = createIdentityInboxView(async query => {
+    calls.push(query)
+    return page(query.offset)
+  }, { unresolvedOnly: true })
+  await view.refresh()
+  await view.page(20)
+  assert.deepEqual(calls.map(query => query.unresolvedOnly), [true, true])
+  assert.equal(view.state.value.page!.total, 21)
+  view.dispose()
+})
 test('inbox queries are bounded, choices are explicit, and filters and page navigation clear the old selection', async () => {
   const calls: IdentificationInboxQuery[] = []
   const view = createIdentityInboxView(async (query) => {

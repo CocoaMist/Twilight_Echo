@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import type { EntityMetadataPolicyView } from '../../../shared/entityMetadata.ts'
+import { metadataSourceOptions } from './settings-page/musicMetadataSettings.ts'
 import {
   canResumeLocalLibraryScan,
   libraryScanStatusText
@@ -11,7 +14,35 @@ import {
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const musicStore = useMusicStore()
-const { settings, loaded: settingsLoaded, removeLibraryFolder } = useSettingsStore()
+const { settings, loaded: settingsLoaded, removeLibraryFolder, updateSettings } = useSettingsStore()
+const core = useCoreConnection()
+const automaticMetadata = ref(false)
+const metadataPolicy = ref<EntityMetadataPolicyView | null>(null)
+const metadataError = ref('')
+const metadataSources = computed(() =>
+  metadataSourceOptions(metadataPolicy.value, []).filter((s) => s.available)
+)
+let policyRequest: AbortController | undefined
+watch(
+  [() => props.show, () => core.state.value?.epoch],
+  async ([show, epoch]) => {
+    policyRequest?.abort()
+    if (!show || !epoch) return
+    automaticMetadata.value = settings.value.musicIdentification.newImports
+    const request = new AbortController()
+    policyRequest = request
+    metadataError.value = ''
+    try {
+      const policy = await core.query('metadata.entity.policy', {}, request.signal)
+      if (!request.signal.aborted) metadataPolicy.value = policy
+    } catch {
+      if (!request.signal.aborted)
+        metadataError.value = '暂时无法读取资料源；仍可导入本地文件，稍后在音乐库资料中补全。'
+    }
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => policyRequest?.abort())
 const selectedFolders = ref<Set<string>>(new Set())
 const scanError = ref('')
 const dialogRef = ref<HTMLElement | null>(null)
@@ -62,7 +93,7 @@ async function handleAddNewFolder(): Promise<void> {
   choosingFolder.value = true
   scanError.value = ''
   try {
-    const path = await window.api.dialog.openFolder()
+    const path = await window.api.dialog.openFolder({ deferImport: true })
     if (path) {
       if (!availableFolders.value.includes(path)) newlyAddedFolders.value.push(path)
       selectedFolders.value.add(path)
@@ -101,7 +132,27 @@ async function startScan(): Promise<void> {
   databaseRequestPending.value = true
   scanError.value = ''
   try {
+    await updateSettings({
+      musicIdentification: {
+        ...settings.value.musicIdentification,
+        newImports: automaticMetadata.value,
+        ...(automaticMetadata.value && metadataSources.value.length
+          ? {
+              sources: [
+                ...new Set([
+                  ...settings.value.musicIdentification.sources,
+                  ...metadataSources.value.map((s) => s.provider)
+                ])
+              ].slice(0, 16)
+            }
+          : {})
+      }
+    })
     await musicStore.scanLibraryDirectories({ directories: foldersToScan, reason: 'import' })
+    // The explicit scan owns the first import before folder watching can start.
+    await updateSettings({
+      libraryFolders: [...new Set([...settings.value.libraryFolders, ...foldersToScan])]
+    })
     newlyAddedFolders.value = []
   } catch (error) {
     scanError.value = `目录检查未完成：${error instanceof Error ? error.message : String(error)}。已提交曲目保留。`
@@ -191,84 +242,105 @@ async function controlScan(command: 'pause' | 'resume' | 'cancel'): Promise<void
               </div>
             </div>
 
+            <section class="import-metadata" aria-label="导入后补全资料">
+              <label class="checkbox-label">
+                <input
+                  v-model="automaticMetadata"
+                  type="checkbox"
+                  :disabled="busy || !metadataSources.length"
+                />
+                <strong>自动补全头像、简介和专辑资料</strong>
+              </label>
+              <p v-if="metadataSources.length">
+                可用来源：{{
+                  metadataSources.map((s) => s.label).join('、')
+                }}。优先核对文件自带身份，缺失时再搜索。
+              </p>
+              <p v-else role="status">
+                {{
+                  metadataError ||
+                  '当前没有可用的在线资料源。文件标签、内嵌封面与本地播放不受影响。'
+                }}
+              </p>
+              <p>
+                开启后仅发送名称、身份
+                ID、曲序和时长，不上传音频或文件路径。资料在后台保存，不必等候即可播放。
+              </p>
+            </section>
             <p v-if="scanError" class="scan-error" role="alert">{{ scanError }}</p>
             <div class="scan-status-slot" role="status" aria-live="polite">
-              <Transition name="scan-status">
-                <div key="database" class="progress-section">
-                  <p>
-                    {{
-                      databaseRequestPending && !databaseStatus.jobId
-                        ? '正在准备目录检查'
-                        : databaseStatusText
-                    }}
-                  </p>
-                  <progress
-                    v-if="databaseScanActive || databaseRequestPending"
-                    aria-label="目录检查进度"
-                  />
-                  <dl
-                    v-if="databaseStatus.databaseProgress"
-                    class="database-counters"
-                    aria-label="已确认的扫描统计"
-                  >
-                    <div>
-                      <dt>检查文件</dt>
-                      <dd>
-                        {{ databaseStatus.databaseProgress.checkedFiles.toLocaleString() }} 个
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>解析元数据</dt>
-                      <dd>
-                        {{ databaseStatus.databaseProgress.parsedFiles.toLocaleString() }} 个文件
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>已入库曲目</dt>
-                      <dd>{{ databaseStatus.databaseProgress.trackCount.toLocaleString() }} 首</dd>
-                    </div>
-                    <div>
-                      <dt>失败文件</dt>
-                      <dd>{{ databaseStatus.databaseProgress.failedFiles.toLocaleString() }} 个</dd>
-                    </div>
-                  </dl>
-                  <p class="scan-scope-note">
-                    已入库曲目为整个曲库的当前总数。可关闭窗口，扫描会在后台继续。
-                  </p>
-                  <p v-if="canContinue && !databaseScanActive" class="scan-scope-note">
-                    “继续扫描”沿用原任务范围；“检查并导入”会开始所选目录的新任务。
-                  </p>
-                  <div class="scan-controls">
-                    <button
-                      v-if="databaseStatus.state === 'running'"
-                      type="button"
-                      class="btn-cancel"
-                      :disabled="controlPending"
-                      @click="controlScan('pause')"
-                    >
-                      暂停
-                    </button>
-                    <button
-                      v-if="canContinue"
-                      type="button"
-                      class="btn-cancel"
-                      :disabled="controlPending"
-                      @click="controlScan('resume')"
-                    >
-                      继续扫描
-                    </button>
-                    <button
-                      v-if="databaseScanActive || databaseRequestPending"
-                      type="button"
-                      class="btn-cancel"
-                      :disabled="controlPending"
-                      @click="controlScan('cancel')"
-                    >
-                      取消扫描
-                    </button>
+              <div key="database" class="progress-section">
+                <p>
+                  {{
+                    databaseRequestPending && !databaseStatus.jobId
+                      ? '正在准备目录检查'
+                      : databaseStatusText
+                  }}
+                </p>
+                <progress
+                  v-if="databaseScanActive || databaseRequestPending"
+                  aria-label="目录检查进度"
+                />
+                <dl
+                  v-if="databaseStatus.databaseProgress"
+                  class="database-counters"
+                  aria-label="已确认的扫描统计"
+                >
+                  <div>
+                    <dt>检查文件</dt>
+                    <dd>{{ databaseStatus.databaseProgress.checkedFiles.toLocaleString() }} 个</dd>
                   </div>
+                  <div>
+                    <dt>解析元数据</dt>
+                    <dd>
+                      {{ databaseStatus.databaseProgress.parsedFiles.toLocaleString() }} 个文件
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>已入库曲目</dt>
+                    <dd>{{ databaseStatus.databaseProgress.trackCount.toLocaleString() }} 首</dd>
+                  </div>
+                  <div>
+                    <dt>失败文件</dt>
+                    <dd>{{ databaseStatus.databaseProgress.failedFiles.toLocaleString() }} 个</dd>
+                  </div>
+                </dl>
+                <p class="scan-scope-note">
+                  已入库曲目为整个曲库的当前总数。可关闭窗口，扫描会在后台继续。
+                </p>
+                <p v-if="canContinue && !databaseScanActive" class="scan-scope-note">
+                  “继续扫描”沿用原任务范围；“检查并导入”会开始所选目录的新任务。
+                </p>
+                <div class="scan-controls">
+                  <button
+                    v-if="databaseStatus.state === 'running'"
+                    type="button"
+                    class="btn-cancel"
+                    :disabled="controlPending"
+                    @click="controlScan('pause')"
+                  >
+                    暂停
+                  </button>
+                  <button
+                    v-if="canContinue"
+                    type="button"
+                    class="btn-cancel"
+                    :disabled="controlPending"
+                    @click="controlScan('resume')"
+                  >
+                    继续扫描
+                  </button>
+                  <button
+                    v-if="databaseScanActive || databaseRequestPending"
+                    type="button"
+                    class="btn-cancel"
+                    :disabled="controlPending"
+                    @click="controlScan('cancel')"
+                  >
+                    取消扫描
+                  </button>
                 </div>
-              </Transition>
+              </div>
             </div>
           </div>
 
@@ -298,6 +370,23 @@ async function controlScan(command: 'pause' | 'resume' | 'cancel'): Promise<void
   gap: 12px;
   margin: 16px 0;
 }
+.import-metadata {
+  margin: 16px 0;
+}
+.import-metadata p {
+  margin: 8px 0 0;
+  color: var(--te-neutral-600);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.import-metadata .checkbox-label {
+  color: var(--te-neutral-900);
+  align-items: flex-start;
+}
+.import-metadata input {
+  margin-top: 3px;
+  accent-color: var(--te-primary-500);
+}
 .database-counters dt,
 .scan-scope-note {
   color: var(--te-neutral-600);
@@ -326,26 +415,6 @@ async function controlScan(command: 'pause' | 'resume' | 'cancel'): Promise<void
 
 .scan-status-slot > div {
   grid-area: 1 / 1;
-}
-
-.scan-status-enter-active,
-.scan-status-leave-active {
-  transition: opacity var(--te-motion-hover) var(--te-ease-soft);
-}
-
-.scan-status-enter-from,
-.scan-status-leave-to {
-  opacity: 0;
-}
-
-html[data-te-motion='reduced'] .scan-status-enter-active,
-html[data-te-motion='reduced'] .scan-status-leave-active {
-  transition: opacity 120ms var(--te-ease-soft) !important;
-}
-
-html[data-te-motion='off'] .scan-status-enter-from,
-html[data-te-motion='off'] .scan-status-leave-to {
-  opacity: 1 !important;
 }
 
 .modal-overlay {

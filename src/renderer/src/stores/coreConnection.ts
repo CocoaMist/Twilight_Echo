@@ -27,6 +27,11 @@ export class CoreWindowConnection implements CoreConnection {
   private id: string | null = null
   private connecting: Promise<CoreSnapshot> | null = null
   private disposed = false
+  private activeRequests = 0
+  private readonly requestWaiters = new Set<{
+    grant(): void
+    reject(error: Error): void
+  }>()
   private readonly listeners = new Set<(message: CoreClientMessage) => void>()
   private queued: CoreBridgeMessage | null = null
   private queuedStatus: CoreBridgeStatus | null = null
@@ -36,21 +41,23 @@ export class CoreWindowConnection implements CoreConnection {
   constructor(api: CoreBridgeApi, changedStatus: (status: CoreBridgeStatus) => void = () => {}) {
     this.api = api
     this.changedStatus = changedStatus
-    this.disposeMessage = api.onMessage((event) => {
-      if (this.disposed) return
-      if (this.connecting && event.message.kind === 'state') {
-        this.queued = event
-        return
-      }
-      this.receive(event)
-    })
-    this.disposeStatus = api.onStatus((event) => {
-      if (this.connecting) {
-        this.queuedStatus = event
-        return
-      }
-      if (!this.disposed && event.connectionId === this.id) this.changedStatus(event)
-    })
+    this.disposeMessage =
+      api?.onMessage?.((event) => {
+        if (this.disposed) return
+        if (this.connecting && event.message.kind === 'state') {
+          this.queued = event
+          return
+        }
+        this.receive(event)
+      }) ?? (() => {})
+    this.disposeStatus =
+      api?.onStatus?.((event) => {
+        if (this.connecting) {
+          this.queuedStatus = event
+          return
+        }
+        if (!this.disposed && event.connectionId === this.id) this.changedStatus(event)
+      }) ?? (() => {})
   }
   private receive(event: CoreBridgeMessage): void {
     if (event.connectionId !== this.id) return
@@ -58,6 +65,7 @@ export class CoreWindowConnection implements CoreConnection {
   }
   connect(): Promise<CoreSnapshot> {
     if (this.disposed) return Promise.reject(new Error('Core connection was disposed'))
+    if (!this.api) return Promise.reject(new Error('Core bridge API is not available'))
     if (this.connecting) return this.connecting
     const work = this.api
       .connect(this.id ?? undefined)
@@ -94,14 +102,44 @@ export class CoreWindowConnection implements CoreConnection {
     if (!id || this.disposed) throw new Error('Core connection is not attached')
     if (signal?.aborted)
       throw Object.assign(new Error('Core request was cancelled'), { code: 'CANCELLED' })
+    // A real album/artist page can mount more readers than Core's per-client
+    // budget. Apply backpressure before dispatch, never replay a rejected command.
+    if (this.activeRequests < 12) this.activeRequests++
+    else
+      await new Promise<void>((resolve, reject) => {
+        const finish = () => {
+          this.requestWaiters.delete(waiter)
+          signal?.removeEventListener('abort', abort)
+        }
+        const waiter = {
+          grant: () => {
+            finish()
+            this.activeRequests++
+            resolve()
+          },
+          reject: (error: Error) => {
+            finish()
+            reject(error)
+          }
+        }
+        const abort = () =>
+          waiter.reject(Object.assign(new Error('Core request was cancelled'), { code: 'CANCELLED' }))
+        this.requestWaiters.add(waiter)
+        signal?.addEventListener('abort', abort, { once: true })
+      })
     const cancel = () => {
       void this.api.cancel(id, request.requestId).catch(() => {})
     }
     signal?.addEventListener('abort', cancel, { once: true })
     try {
+      if (this.disposed || this.id !== id) throw new Error('Core connection was disposed')
+      if (signal?.aborted)
+        throw Object.assign(new Error('Core request was cancelled'), { code: 'CANCELLED' })
       return unwrap(await this.api.request(id, request))
     } finally {
       signal?.removeEventListener('abort', cancel)
+      this.activeRequests--
+      this.requestWaiters.values().next().value?.grant()
     }
   }
   subscribe(listener: (message: CoreClientMessage) => void): () => void {
@@ -111,6 +149,7 @@ export class CoreWindowConnection implements CoreConnection {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    for (const waiter of this.requestWaiters) waiter.reject(new Error('Core connection was disposed'))
     this.disposeMessage()
     this.disposeStatus()
     this.listeners.clear()

@@ -166,6 +166,7 @@ export function createIdentityReviewView(api: IdentityReviewApi) {
   return {
     state,
     ready,
+    canAttachToCurrent: computed(() => ready.value && !state.value.preview?.stale && !!state.value.preview?.canAttachToCurrent),
     canConfirm,
     canReject,
     setContext(id: string | null, nextScope: string) {
@@ -248,23 +249,25 @@ export function createIdentityReviewView(api: IdentityReviewApi) {
           }
       }
     },
-    decide(decision: IdentificationDecision['decision']) {
-      if (!(decision === 'confirm' ? canConfirm.value : canReject.value)) return Promise.resolve()
+    decide(decision: IdentificationDecision['decision'], attachToCurrent = false) {
+      if (!(attachToCurrent ? ready.value && !state.value.preview?.stale && state.value.preview?.canAttachToCurrent :
+        decision === 'confirm' ? canConfirm.value : canReject.value)) return Promise.resolve()
       const preview = state.value.preview!
       const query: IdentificationDecision = {
         candidateId: preview.candidate.id,
         revision: preview.candidate.revision,
         linkRevision: preview.current.link?.revision ?? 0,
-        decision
+        decision,
+        ...(attachToCurrent ? { attachToCurrent: true as const } : {})
       }
       const impact = preview.ratingImpact
-      if (decision === 'confirm' && impact)
+      if (decision === 'confirm' && !attachToCurrent && impact)
         query.ratingResolution = {
           revision: impact.revision,
           choice: state.value.ratingChoice ?? (impact.action === 'carry' ? 'current' : 'target')
         }
       const preferenceImpact = preview.preferenceImpact
-      if (decision === 'confirm' && preferenceImpact)
+      if (decision === 'confirm' && !attachToCurrent && preferenceImpact)
         query.preferenceResolution = {
           revision: preferenceImpact.revision,
           choice:
@@ -273,7 +276,8 @@ export function createIdentityReviewView(api: IdentityReviewApi) {
         }
       return mutate(
         () => api.decide(query),
-        decision === 'confirm' ? '身份关联已确认' : '候选已拒绝；可在“已拒绝”中重新复核'
+        attachToCurrent ? '已补充网易云引用，原身份与资料保留；可更新资料补齐缺项' :
+          decision === 'confirm' ? '身份关联已确认' : '候选已拒绝；可在“已拒绝”中重新复核'
       )
     },
     beginDetach() {
@@ -310,6 +314,7 @@ export function createIdentityReviewView(api: IdentityReviewApi) {
 }
 
 const labels: Record<string, string> = {
+  file_native_id: '文件内网易云身份 ID',
   name: '名称',
   title: '标题',
   artist_credit: '艺人署名',
@@ -326,6 +331,12 @@ const labels: Record<string, string> = {
   track_positions: '碟号与曲序',
   full_titles: '完整曲名',
   all_track_artists: '全部曲目艺人',
+  recording_titles: '歌曲标题交叉核验',
+  raw_duration_2s: '原始时长（误差不超过 2 秒）',
+  recording_album: '歌曲所属专辑',
+  distinct_recordings: '不同歌曲指向同一艺人',
+  partial_album_project: '已导入歌曲属于该专辑作品',
+  project_track_witness: '专辑曲目交叉证据',
   pressing_disambiguation: '具体发行区分依据',
   external_references_belong_to_different_targets: '外部引用分属不同身份',
   conflicting_ids_in_same_namespace: '同一来源存在冲突 ID',

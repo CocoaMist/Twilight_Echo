@@ -8,7 +8,12 @@ import {
   METADATA_REQUERY_SOURCE_PAGE_SIZE
 } from './metadataRequeryView.ts'
 
-const props = defineProps<{ tasks: MetadataTaskItem[]; batchId: string | null; scope: string }>()
+const props = defineProps<{
+  tasks: MetadataTaskItem[]
+  batchId: string | null
+  scope: string
+  initiallyOpen?: boolean
+}>()
 const emit = defineEmits<{ changed: [] }>()
 const core = useCoreConnection()
 const view = createMetadataRequeryView({
@@ -33,7 +38,7 @@ onBeforeUnmount(view.dispose)
 </script>
 
 <template>
-  <details v-if="tasks.length" class="metadata-requery">
+  <details v-if="tasks.length" class="metadata-requery" :open="initiallyOpen">
     <summary>重新查询资料</summary>
     <p>选择当前仍在库、身份已确认的条目作为查询来源；这会联网补资料，不会覆盖手动内容。</p>
     <p v-if="batchId">仅处理此批次当前页中明确选中的任务；已取消的旧需求不会恢复。</p>
@@ -124,26 +129,31 @@ onBeforeUnmount(view.dispose)
 <style scoped>
 .metadata-requery {
   margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border, var(--notice-border));
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 4%, transparent);
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 summary {
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 650;
+  font-size: 13px;
 }
 p {
-  color: var(--te-text-secondary);
+  color: var(--te-neutral-500, var(--te-text-secondary));
   margin: 8px 0;
 }
 section {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--notice-border);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--te-card-border, var(--notice-border));
 }
 header,
 nav {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: space-between;
@@ -151,25 +161,29 @@ nav {
 ul {
   list-style: none;
   padding: 0;
+  margin: 8px 0;
 }
 li {
   margin: 6px 0;
 }
 button {
   font: inherit;
+  font-weight: 500;
   min-height: 30px;
-  padding: 6px 10px;
-  border: 0;
+  padding: 5px 10px;
+  border: 1px solid transparent;
   border-radius: 7px;
   cursor: pointer;
-  color: var(--te-text);
-  background: color-mix(in srgb, var(--te-primary-500) 10%, transparent);
+  color: var(--te-neutral-900, var(--te-text));
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 10%, transparent);
 }
 button[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--te-primary-500) 26%, transparent);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 24%, transparent);
+  border-color: color-mix(in srgb, var(--te-primary-500, #3b82f6) 45%, transparent);
+  font-weight: 600;
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.48;
   cursor: default;
 }
 button:focus-visible,

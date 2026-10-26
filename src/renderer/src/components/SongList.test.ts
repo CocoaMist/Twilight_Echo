@@ -449,46 +449,26 @@ test('library header places the search box last so it renders right-most', () =>
   }
 })
 
-test('library playback controls render in the title group while albums use dedicated controls', () => {
-  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8').replace(
-    /\r\n/g,
-    '\n'
-  )
-
-  assert.doesNotMatch(source, /class="header-play-actions"/)
-  const tableHeaderStart = source.lastIndexOf('<div class="song-list-header"')
-  const headerLeftStart = source.indexOf(
-    '<div v-if="!currentAlbum" class="header-left">',
-    tableHeaderStart
-  )
-  const titleGroupStart = source.indexOf('<div class="title-group">', headerLeftStart)
-  const headerRightStart = source.indexOf('<div class="header-right">', tableHeaderStart)
-  const albumHeaderIndex = source.indexOf('<AlbumDetailHeader', tableHeaderStart)
-  const playActionsIndex = source.indexOf('class="library-play-actions"', tableHeaderStart)
-  const tableHeaderEnd = source.lastIndexOf('</div>', albumHeaderIndex)
-
-  assert.ok(tableHeaderStart > 0)
-  assert.ok(headerLeftStart > tableHeaderStart)
-  assert.ok(titleGroupStart > headerLeftStart)
-  assert.ok(playActionsIndex > titleGroupStart)
-  assert.ok(headerRightStart > playActionsIndex)
-  assert.ok(tableHeaderEnd > headerRightStart)
-  assert.ok(albumHeaderIndex > tableHeaderEnd)
-  const titleGroup = source.slice(titleGroupStart, headerRightStart)
-  assert.match(titleGroup, /class="library-play-actions"[\s\S]*<\/div>\s*<\/div>\s*<\/div>\s*$/)
+test('library playback controls stay in the title group while the album stage precedes track tools', () => {
+  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+  const heroStart = source.indexOf('<AlbumDetailHeader')
+  const toolbarStart = source.indexOf('<div ref="trackToolbarRef"')
+  const titleStart = source.indexOf('class="library-play-actions"', toolbarStart)
+  const rightStart = source.indexOf('<div class="header-right">', toolbarStart)
+  assert.ok(heroStart > 0 && toolbarStart > heroStart)
+  assert.ok(titleStart > toolbarStart && rightStart > titleStart)
+  const controls = source.slice(toolbarStart, rightStart)
+  assert.match(controls, /v-if="!isAlbumDetail && !isArtistDetail"/)
   for (const handler of ['playAllTracks', 'shufflePlayTracks']) {
-    assert.match(
-      titleGroup,
-      new RegExp(
-        `:disabled="tableTrackCount === 0 \\|\\| databaseReadPending"\\s+@click="${handler}"`
-      )
-    )
+    assert.match(controls, new RegExp(':disabled="tableTrackCount === 0 \\|\\| databaseReadPending"\\s+@click="'+handler+'"'))
   }
-  const albumHeader = source.slice(albumHeaderIndex, source.indexOf('/>', albumHeaderIndex))
-  assert.match(albumHeader, /v-if="currentAlbum"/)
-  assert.match(albumHeader, /:can-play="tableTrackCount > 0 && !databaseReadPending"/)
-  assert.match(albumHeader, /@play="playAllTracks"/)
-  assert.match(albumHeader, /@shuffle="shufflePlayTracks"/)
+  const hero = source.slice(heroStart, source.indexOf('/>', heroStart))
+  assert.match(hero, /v-if="currentAlbum"/)
+  assert.match(hero, /:can-play="tableTrackCount > 0 && !databaseReadPending"/)
+  assert.match(hero, /@play="playAllTracks"/)
+  assert.match(hero, /@shuffle="shufflePlayTracks"/)
+  assert.match(source, /class="album-tracks-heading"/)
+  assert.match(source, /'搜索本专辑歌曲'/)
 })
 
 test('song list context menu exposes play next, view artist, and view album actions', () => {
@@ -658,4 +638,121 @@ test('selected tracks await one queue command before reporting success, without 
   assert.equal(cleared, 1, 'an earlier completed command must not clear a newer selection')
   assert.match(source, /@click="appendActionTracksToQueue\(contextTracksForAction\(\)\)"/)
   assert.match(source, /@click="appendActionTracksToQueue\(\)"/)
+})
+
+test('album detail uses a light record header and shared introduction and ratings above its tracks', () => {
+  const songListSource = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+  const headerSource = readFileSync(
+    new URL('./song-list/AlbumDetailHeader.vue', import.meta.url),
+    'utf8'
+  )
+  const metadataSource = readFileSync(
+    new URL('./music-metadata/EntityMetadataPanel.vue', import.meta.url),
+    'utf8'
+  )
+
+  const releaseIndex = headerSource.indexOf('class="album-detail-release"')
+  const titleIndex = headerSource.indexOf('id="local-album-title"')
+  const artistIndex = headerSource.indexOf('class="album-detail-artist"')
+  const genrePillsIndex = headerSource.indexOf('class="album-genre-pills"')
+  assert.ok(releaseIndex > 0 && releaseIndex < titleIndex, 'release date renders above the album title')
+  assert.ok(titleIndex < artistIndex, 'album title renders above artist subtitle')
+  assert.ok(genrePillsIndex > artistIndex, 'genre pills render below the artist')
+  assert.match(headerSource, /class="album-favorite-btn"/)
+  assert.match(headerSource, /class="album-playlist-btn"/)
+  assert.match(headerSource, /class="album-more-trigger"/)
+  assert.match(headerSource, /class="album-versions-btn"/)
+  assert.doesNotMatch(headerSource, /album-hero-backdrop|backdrop-filter|filter: blur/)
+  assert.doesNotMatch(headerSource, /localRatingSteps/)
+  assert.match(songListSource, /presentation="album-overview"/)
+  const overviewIndex = songListSource.indexOf('presentation="album-overview"')
+  assert.ok(overviewIndex < songListSource.indexOf('ref="albumTracksRef"'))
+  assert.match(metadataSource, /<Teleport\s+defer/)
+  assert.match(metadataSource, /AlbumMetadataDialog/)
+
+  assert.match(songListSource, /:genres="albumGenres"/)
+  assert.match(songListSource, /:format-text="albumFormatText"/)
+  assert.match(songListSource, /:type-text="albumTypeText"/)
+  assert.match(songListSource, /:favorited="albumAllFavorited"/)
+  assert.match(songListSource, /@favorite="favoriteCurrentAlbum"/)
+  assert.match(songListSource, /@add-to-playlist="addCurrentAlbumToPlaylist"/)
+  assert.match(songListSource, /@open-genre="openAlbumGenre"/)
+  assert.match(songListSource, /:album-summary="currentAlbumSummary"/)
+
+  assert.match(metadataSource, /class="roon-overview-grid"/)
+  assert.match(metadataSource, /class="overview-specs-col"/)
+  assert.match(metadataSource, /class="metadata-facts roon-specs-table"/)
+  assert.match(metadataSource, /<dt>时长<\/dt>/)
+  assert.match(metadataSource, /<dt>类型<\/dt>/)
+  assert.match(metadataSource, /<dt>格式<\/dt>/)
+  assert.match(
+    metadataSource,
+    /<AlbumVersionsPanel :entity-id="albumEntityId" :active-section="activeSection" \/>/
+  )
+})
+
+test('genres page uses an editorial image mosaic and retains sorting and custom genre tools', () => {
+  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+  const styles = readFileSync(new URL('./song-list/SongList.css', import.meta.url), 'utf8')
+  const grid = readFileSync(
+    new URL('./song-list/useSongListGridRendering.ts', import.meta.url),
+    'utf8'
+  )
+
+  assert.match(source, /'genre-library': category === 'genres' && showGrid/)
+  assert.match(source, /class="genre-view-controls"/)
+  assert.match(source, /class="genre-add-trigger"/)
+  assert.match(source, /<span>新建流派<\/span>/)
+  assert.match(source, /class="genre-add-bar"/)
+  assert.match(source, /addCustomGenre/)
+  assert.match(source, /removeCustomGenre/)
+  assert.match(source, /aria-label="流派排序方式"/)
+  assert.match(source, /<option value="trackCount-desc">按歌曲数量<\/option>/)
+  assert.match(source, /<option value="name-asc">按名称 A-Z<\/option>/)
+  assert.match(source, /<option value="name-desc">按名称 Z-A<\/option>/)
+  assert.match(source, /<option value="added-newest">按最近添加<\/option>/)
+  assert.match(source, /class="genre-workspace-toggle"/)
+  assert.match(source, /v-if="databaseGridEnabled && category === 'genres' && genreWorkspaceOpen"/)
+  assert.match(source, /CUSTOM_GENRES_STORAGE_KEY/)
+  assert.match(source, /loadGenreCoverTracks/)
+  assert.match(source, /genreMosaicItems/)
+  assert.match(source, /genreTileSpanClass\(index\)/)
+  assert.match(source, /'genre-mosaic-grid': category === 'genres'/)
+  assert.match(source, /class="genre-card"/)
+  assert.match(source, /class="genre-card-backdrop"/)
+  assert.match(source, /:cover="item\.cover"/)
+  assert.match(source, /:cover-source="item\.coverSource"/)
+  assert.match(source, /class="genre-card-bg"/)
+  assert.match(source, /class="genre-card-scrim"/)
+  assert.match(source, /class="genre-card-title"/)
+  assert.match(source, /class="genre-card-count"/)
+  assert.match(grid, /\.artist-card, \.album-card, \.genre-card, \.playlist-card, \.aggregate-card/)
+  assert.match(styles, /\.song-list\.genre-library \.card-grid\.genre-mosaic-grid/)
+  assert.match(styles, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/)
+  assert.match(styles, /grid-auto-rows:\s*calc\(\(100cqi - 3 \* var\(--genre-grid-gap\)\) \/ 4\)/)
+  assert.match(styles, /grid-auto-flow:\s*row/)
+  assert.match(styles, /\.genre-card--wide\s*\{\s*grid-column:\s*span 2;/)
+  assert.match(styles, /\.genre-card--square\s*\{\s*grid-column:\s*span 1;/)
+  assert.match(styles, /\.genre-card-bg\s*\{[\s\S]*object-fit:\s*cover/)
+  assert.match(styles, /\.genre-card-scrim/)
+  assert.match(styles, /\.genre-card-title/)
+})
+
+test('genre mosaic keeps keyboard focus, image-free fallbacks, and a single-column narrow layout', () => {
+  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+  const styles = readFileSync(new URL('./song-list/SongList.css', import.meta.url), 'utf8')
+  const genreCard = source
+    .slice(source.indexOf('v-for="(item, index) in genreMosaicItems"'))
+    .split('<template v-else>')[0]
+
+  assert.match(genreCard, /:aria-label="`\$\{item\.name\}，\$\{item\.trackCount \?\? 0\} 首歌曲`"/)
+  assert.match(genreCard, /@keydown="activateCollectionCard"/)
+  assert.match(genreCard, /class="genre-card-bg"\s+alt=""\s+fallback=""/)
+  assert.match(styles, /\.genre-card:focus-visible\s*\{\s*outline: 2px solid var\(--te-primary-500\)/)
+  assert.match(styles, /\.genre-card:focus-within \.genre-card-remove/)
+  assert.match(
+    styles,
+    /@container te-song-list \(max-width: 440px\)[\s\S]*?grid-template-columns: minmax\(0, 1fr\)/
+  )
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.genre-card-bg/)
 })

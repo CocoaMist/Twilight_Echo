@@ -38,6 +38,7 @@ export function createCoreMusicStore(core: Client) {
     failure = shallowRef(''),
     favorites = shallowRef(new Map<string, boolean>())
   let generation = 0
+  let catalogEpoch: string | null = null
   const revision = () => {
     const r = core.state.value?.playlistsRevision
     if (r == null) throw new Error('Core 歌单尚未就绪')
@@ -54,37 +55,65 @@ export function createCoreMusicStore(core: Client) {
     if (!core.state.value) await core.attach()
     const snapshot = core.state.value
     if (snapshot?.phase !== 'ready') throw new Error('Core 正在初始化，请稍候')
-    const [nextMetadata, nextState] = await Promise.all([
-      core.query('library.metadata', {}),
-      core.query('playlists.state', {})
-    ])
-    const items: CorePlaylistDescriptor[] = []
-    let offset = 0,
-      total = 1
-    do {
-      const page = await core.query('playlists.catalog', {
-        revision: nextState.revision,
-        offset,
-        limit: 200
-      })
-      items.push(...page.items)
-      total = page.total
-      offset += page.items.length
-      if (!page.items.length && offset < total) throw new Error('歌单目录读取中断')
-    } while (offset < total)
-    if (current !== generation || core.state.value?.epoch !== snapshot.epoch) return
-    metadata.value = Object.freeze(nextMetadata)
-    catalog.value = items.map(item => Object.freeze(item))
-    state.value = Object.freeze(nextState)
-    failure.value = ''
+    // A playlist commit can land between state and catalog reads, before its
+    // notification reaches this renderer. Restart the read once with fresh state.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const [nextMetadata, nextState] = await Promise.all([
+          core.query('library.metadata', {}),
+          core.query('playlists.state', {})
+        ])
+        // Track metadata commits do not change playlist membership. Reusing the
+        // catalog also keeps consumers from rebuilding unchanged playlist views.
+        const catalogChanged =
+          catalogEpoch !== snapshot.epoch || state.value?.revision !== nextState.revision
+        const items: CorePlaylistDescriptor[] = []
+        let offset = 0,
+          total = 1
+        if (catalogChanged)
+          do {
+            const page = await core.query('playlists.catalog', {
+              revision: nextState.revision,
+              offset,
+              limit: 200
+            })
+            items.push(...page.items)
+            total = page.total
+            offset += page.items.length
+            if (!page.items.length && offset < total) throw new Error('歌单目录读取中断')
+          } while (offset < total)
+        if (current !== generation || core.state.value?.epoch !== snapshot.epoch) return
+        metadata.value = Object.freeze(nextMetadata)
+        if (catalogChanged) {
+          catalog.value = items.map((item) => Object.freeze(item))
+          catalogEpoch = snapshot.epoch
+        }
+        state.value = Object.freeze(nextState)
+        failure.value = ''
+        return
+      } catch (error) {
+        // A newer revision already owns the refresh. Its obsolete read failure
+        // must not turn a healthy page into a compatibility warning.
+        if (current !== generation || core.state.value?.epoch !== snapshot.epoch) return
+        if (attempt === 0 && (error as { code?: string } | null)?.code === 'STALE_REVISION')
+          continue
+        throw error
+      }
+    }
   }
   const stop = watch(
     () => {
       const s = core.state.value
       return s?.phase === 'ready' ? `${s.epoch}:${s.libraryRevision}:${s.playlistsRevision}` : ''
     },
-    (key) => {
-      favorites.value = new Map()
+    (key, previous) => {
+      const current = core.state.value
+      if (
+        !previous ||
+        catalogEpoch !== current?.epoch ||
+        state.value?.revision !== current?.playlistsRevision
+      )
+        favorites.value = new Map()
       if (key)
         void refresh().catch((e) => {
           failure.value = e instanceof Error ? e.message : String(e)

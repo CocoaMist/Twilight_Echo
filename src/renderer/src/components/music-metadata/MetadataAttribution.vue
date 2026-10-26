@@ -1,7 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { MetadataAttribution } from '../../../../shared/entityMetadata.ts'
+import { metadataProviderLabel } from '../../../../shared/metadataProviders.ts'
 import { metadataExternalUrl } from './entityMetadataView.ts'
-defineProps<{ attribution: MetadataAttribution }>()
+const props = defineProps<{ attribution: MetadataAttribution }>()
+const providerName = computed(() =>
+  props.attribution.provider === 'platform.ncm'
+    ? '网易云音乐'
+    : metadataProviderLabel(props.attribution.provider)
+)
 function open(url: string) {
   const safe = metadataExternalUrl(url)
   if (safe) void window.api.shell.openExternal(safe)
@@ -13,10 +20,13 @@ function open(url: string) {
       v-if="metadataExternalUrl(attribution.url)"
       :href="metadataExternalUrl(attribution.url)!"
       @click.prevent="open(attribution.url)"
-      >{{ attribution.provider }}</a
+      >{{ providerName }}</a
     >
-    <span v-else>{{ attribution.provider }}</span>
-    <span> · {{ attribution.attribution }} · </span>
+    <span v-else>{{ providerName }}</span>
+    <span v-if="attribution.attribution && attribution.attribution !== providerName">
+      · {{ attribution.attribution }}</span
+    >
+    <span v-if="attribution.license"> · </span>
     <a
       v-if="metadataExternalUrl(attribution.licenseUrl)"
       :href="metadataExternalUrl(attribution.licenseUrl)!"

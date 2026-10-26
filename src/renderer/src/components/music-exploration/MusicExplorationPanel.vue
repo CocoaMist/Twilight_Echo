@@ -123,25 +123,181 @@ onBeforeUnmount(() => { stop(); view.dispose() })
 </template>
 
 <style scoped>
-.music-exploration { line-height: 1.65; overflow-wrap: anywhere; color: var(--te-neutral-900); }
-header, .actions, .filters, nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-header { justify-content: space-between; }
-h3, h4, p { margin: 8px 0; }
-h3 { font-size: 1.2em; } h4 { font-size: 1.05em; }
-.entity-heading { padding: 8px 0; } .entity-heading h4 { font-size: 1.4em; }
-.hint, .attribution, small, .kind { color: var(--te-neutral-500); }
-.kind { font-size: 0.9em; }
-.relation-list, .picker-list { padding: 0; list-style: none; }
-.relation-list > li, .picker-list > li, .performance-editor li { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--te-card-border); }
-.relation-main { flex: 1; min-width: min(220px, 100%); }
-.relation-main p { margin: 3px 0; }
-button, input, select { padding: 6px 10px; font: inherit; color: inherit; border: 1px solid var(--te-card-border); border-radius: 6px; background: transparent; }
-button { cursor: pointer; color: var(--te-primary-600); } button:disabled { opacity: 0.45; cursor: default; }
-button:not(:disabled):hover { background: var(--te-hover-bg); }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--te-primary-500); outline-offset: 3px; }
-.entity-link { margin-left: 8px; padding: 0; border: 0; font-weight: 600; text-align: left; }
-label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; } input { min-width: 0; max-width: 100%; }
-.performance-editor, .delete-confirmation, .unknown-receipt { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--te-card-border); }
-.performance-editor > label input { flex: 1; } .performance-editor ol { padding-left: 20px; }
-nav { margin: 12px 0; }
+.music-exploration {
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--te-card-border);
+  background: var(--te-card-bg, color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent));
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  color: var(--te-neutral-900);
+  font-size: 13px;
+}
+header,
+.actions,
+.filters,
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+header {
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--te-card-border);
+}
+h3,
+h4,
+p {
+  margin: 6px 0;
+}
+h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+h4 {
+  font-size: 14px;
+  font-weight: 650;
+}
+.entity-heading {
+  padding: 12px 14px;
+  margin: 10px 0;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 5%, transparent);
+}
+.entity-heading h4 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 4px 0;
+}
+.hint,
+.attribution,
+small {
+  color: var(--te-neutral-500);
+  font-size: 12px;
+}
+.kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--te-primary-600);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 12%, transparent);
+}
+.filters {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border);
+  background: color-mix(in srgb, var(--te-neutral-500, #888) 3%, transparent);
+}
+.relation-list,
+.picker-list {
+  padding: 0;
+  list-style: none;
+  margin: 10px 0;
+}
+.relation-list > li,
+.picker-list > li,
+.performance-editor li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--te-card-border);
+  border-radius: 8px;
+  transition: background-color 0.14s ease;
+}
+.relation-list > li:hover,
+.picker-list > li:hover {
+  background: var(--te-hover-bg);
+}
+.relation-main {
+  flex: 1;
+  min-width: min(220px, 100%);
+}
+.relation-main p {
+  margin: 4px 0;
+}
+.credit {
+  font-weight: 500;
+  color: var(--te-neutral-700, var(--te-neutral-900));
+}
+button,
+input,
+select {
+  padding: 6px 11px;
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--te-card-border);
+  border-radius: 8px;
+  background: var(--te-card-bg, transparent);
+}
+button {
+  cursor: pointer;
+  color: var(--te-primary-600);
+  font-weight: 500;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button:not(:disabled):hover {
+  background: var(--te-hover-bg);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
+}
+.entity-link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 650;
+  text-align: left;
+}
+.entity-link:not(:disabled):hover {
+  background: transparent;
+  text-decoration: underline;
+}
+label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+input {
+  min-width: 0;
+  max-width: 100%;
+}
+.performance-editor,
+.delete-confirmation,
+.unknown-receipt {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border);
+  background: color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent);
+}
+.performance-editor > label input {
+  flex: 1;
+}
+.performance-editor ol {
+  padding-left: 20px;
+}
+nav {
+  margin: 12px 0;
+}
 </style>

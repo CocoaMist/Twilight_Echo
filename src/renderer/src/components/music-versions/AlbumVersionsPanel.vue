@@ -13,7 +13,14 @@ import {
   type AlbumSourceOrder
 } from './albumVersionsView.ts'
 
-const props = defineProps<{ entityId: string }>()
+const props = defineProps<{
+  entityId: string
+  activeSection?: 'overview' | 'versions' | 'curation' | 'all'
+}>()
+const isOverviewMode = computed(() => props.activeSection === 'overview')
+const showVersionsBody = computed(
+  () => !props.activeSection || props.activeSection === 'versions' || props.activeSection === 'all'
+)
 const core = useCoreConnection()
 const view = createAlbumVersionsView({
   browse: (query, signal) => core.query('albums.browse', query, signal),
@@ -111,8 +118,14 @@ onBeforeUnmount(view.dispose)
 </script>
 
 <template>
-  <section class="album-versions" aria-label="专辑发行与播放来源" :aria-busy="busy">
-    <header class="versions-heading">
+  <section
+    class="album-versions"
+    :class="{ 'is-overview-mode': isOverviewMode }"
+    aria-label="专辑发行与播放来源"
+    :aria-busy="busy"
+  >
+    <div :class="{ 'detail-pane-hidden': !showVersionsBody }">
+      <header class="versions-heading">
       <div>
         <h3>发行与音源</h3>
         <p>具体发行与人工播放版本分开显示。</p>
@@ -309,10 +322,30 @@ onBeforeUnmount(view.dispose)
         </button>
       </nav>
     </section>
-    <section v-if="ratingRelease" aria-label="所选具体发行的评分">
-      <p>评分对象：{{ ratingRelease.title }} · {{ ratingRelease.artist }}</p>
-      <PersonalRatingsPanel :entity-id="ratingRelease.entityId" :scope="JSON.stringify([entityId, ratingRelease.groupId])" label="具体发行" />
+    </div>
+    <div v-if="isOverviewMode && !ratingRelease" class="rating-release-empty" role="status">
+      <h3>评分</h3>
+      <p v-if="busy">正在读取具体发行…</p>
+      <p v-else-if="state.error || state.sourceError">
+        无法读取评分条目
+        <button type="button" @click="view.refresh()">重试</button>
+      </p>
+      <p v-else>暂无可评分的具体发行</p>
+    </div>
+    <section
+      v-if="ratingRelease"
+      class="rating-release-section"
+      aria-label="所选具体发行的评分"
+    >
+      <p class="rating-target-caption">评分对象：{{ ratingRelease.title }} · {{ ratingRelease.artist }}</p>
+      <PersonalRatingsPanel
+        :entity-id="ratingRelease.entityId"
+        :scope="JSON.stringify([entityId, ratingRelease.groupId])"
+        label="具体发行"
+        :compact="isOverviewMode"
+      />
     </section>
+    <div :class="{ 'detail-pane-hidden': !showVersionsBody }">
     <p v-if="state.playingId" role="status">
       正在准备音源… <button type="button" @click="view.cancelPlayback()">取消准备</button>
     </p>
@@ -362,17 +395,39 @@ onBeforeUnmount(view.dispose)
         @changed="view.invalidate()"
       />
     </section>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .album-versions {
-  margin: 0 0 28px;
-  padding: 20px 0;
-  border-block: 1px solid color-mix(in srgb, var(--te-neutral-500) 16%, transparent);
-  font-size: var(--te-font-size-body, 14px);
+  margin: 0 0 24px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--te-card-border, color-mix(in srgb, var(--te-neutral-500) 16%, transparent));
+  background: var(--te-card-bg, color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent));
+  font-size: var(--te-font-size-body, 13px);
   color: var(--te-neutral-700);
 }
+.album-versions.is-overview-mode {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.detail-pane-hidden {
+  display: none;
+}
+.rating-target-caption {
+  font-size: 12px;
+  color: var(--te-neutral-500);
+}
+.album-versions.is-overview-mode .rating-target-caption {
+  display: none;
+}
+.rating-release-empty { display: flex; align-items: baseline; gap: 16px; }
+.rating-release-empty h3, .rating-release-empty p { margin: 0; color: var(--te-neutral-500); font-size: 12.5px; font-weight: 400; }
 .versions-heading,
 .section-heading,
 .versions-actions,
@@ -387,6 +442,10 @@ onBeforeUnmount(view.dispose)
 .section-heading {
   justify-content: space-between;
 }
+.versions-heading {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--te-card-border, color-mix(in srgb, var(--te-neutral-500) 16%, transparent));
+}
 h3,
 h4,
 p {
@@ -398,55 +457,72 @@ strong {
   color: var(--te-neutral-900);
 }
 h3 {
-  font-size: 1.1em;
+  font-size: 16px;
+  font-weight: 700;
 }
 h4 {
-  font-size: 1em;
+  font-size: 14px;
+  font-weight: 650;
 }
 p {
-  line-height: 1.7;
-  margin-block: 8px;
+  line-height: 1.65;
+  margin-block: 6px;
 }
 .hint,
 .eyebrow,
 .versions-heading p,
 .source-description span {
   color: var(--te-neutral-500);
+  font-size: 12px;
 }
 .eyebrow {
-  display: block;
-  margin-bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--te-primary-600);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 12%, transparent);
+  margin-bottom: 6px;
 }
 .album-project {
-  margin-top: 18px;
-  padding-left: 14px;
-  border-left: 3px solid var(--te-primary-500);
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border, color-mix(in srgb, var(--te-neutral-500) 18%, transparent));
+  border-left: 4px solid var(--te-primary-500);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 4%, transparent);
 }
 .release-section,
 .source-section {
-  margin-top: 24px;
+  margin-top: 20px;
 }
 button {
   font: inherit;
-  border: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: transparent;
+  font-weight: 500;
+  border: 1px solid var(--te-card-border, color-mix(in srgb, var(--te-neutral-500) 18%, transparent));
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--te-card-bg, transparent);
   color: var(--te-primary-600);
   cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
 }
 select {
   font: inherit;
-  padding: 6px 8px;
+  padding: 6px 10px;
   color: var(--te-neutral-900);
   background: var(--te-card-bg);
   border: 1px solid var(--te-card-border);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 .source-order {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  font-size: 12px;
+  font-weight: 600;
 }
 button:disabled {
   opacity: 0.45;
@@ -454,11 +530,12 @@ button:disabled {
 }
 button:focus-visible {
   outline: 2px solid var(--te-primary-500);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 button:not(:disabled):hover,
 button[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--te-primary-500) 12%, transparent);
+  background: color-mix(in srgb, var(--te-primary-500) 14%, transparent);
+  border-color: color-mix(in srgb, var(--te-primary-500) 40%, transparent);
 }
 .release-list,
 .source-list {
@@ -469,7 +546,7 @@ button[aria-pressed='true'] {
 .release-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 .release-list button {
   display: flex;
@@ -478,9 +555,14 @@ button[aria-pressed='true'] {
   width: 100%;
   height: 100%;
   padding: 14px;
+  border-radius: 10px;
   text-align: left;
   color: var(--te-neutral-600);
-  border: 1px solid color-mix(in srgb, var(--te-neutral-500) 18%, transparent);
+  border: 1px solid var(--te-card-border, color-mix(in srgb, var(--te-neutral-500) 18%, transparent));
+}
+.release-list button[aria-pressed='true'] {
+  border-color: var(--te-primary-500);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--te-primary-500) 35%, transparent);
 }
 .source-list > li {
   display: flex;
@@ -488,15 +570,19 @@ button[aria-pressed='true'] {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding-block: 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--te-neutral-500) 14%, transparent);
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--te-card-border, color-mix(in srgb, var(--te-neutral-500) 14%, transparent));
+  border-radius: 8px;
+}
+.source-list > li:hover {
+  background: var(--te-hover-bg, color-mix(in srgb, var(--te-primary-500) 4%, transparent));
 }
 .source-description {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   flex: 1 1 240px;
-  line-height: 1.6;
+  line-height: 1.55;
 }
 .source-description strong,
 .release-list strong,
@@ -508,7 +594,8 @@ code {
   flex-shrink: 0;
 }
 .source-actions button:first-child {
-  background: color-mix(in srgb, var(--te-primary-500) 12%, transparent);
+  background: color-mix(in srgb, var(--te-primary-500) 14%, transparent);
+  font-weight: 600;
 }
 .pagination {
   margin-top: 10px;
@@ -518,7 +605,10 @@ code {
 }
 .play-result {
   margin-top: 14px;
-  line-height: 1.7;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border);
+  line-height: 1.65;
 }
 code {
   font: inherit;

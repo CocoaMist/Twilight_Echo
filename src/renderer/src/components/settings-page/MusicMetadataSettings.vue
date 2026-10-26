@@ -143,7 +143,8 @@ onBeforeUnmount(model.dispose)
             :checked="preferences.sources.includes(source.provider)"
             :disabled="
               state.saving ||
-              (!preferences.sources.includes(source.provider) && (state.loading || !source.available))
+              (!preferences.sources.includes(source.provider) &&
+                (state.loading || !source.available))
             "
             @change="model.source(source.provider, ($event.target as HTMLInputElement).checked)"
           />
@@ -166,6 +167,26 @@ onBeforeUnmount(model.dispose)
           所选资料源当前均不可用，自动任务暂不执行。可更换资料源，或在能力恢复后继续。
         </p>
         <p v-else-if="!preferences.sources.length">尚未选择资料源，自动任务暂不执行。</p>
+        <details class="metadata-source-detail">
+          <summary>多来源与 API 配置</summary>
+          <p>
+            VocaDB 补充 Vocaloid、UTAU 与同人音乐；TheAudioDB 补充多语言简介和授权图片；Discogs
+            补充人物介绍与发行说明。各来源分别核对身份，不按同名合并。
+          </p>
+          <p>
+            开发版在 .env.metadata.local 配置 TWILIGHT_METADATA_THEAUDIODB_KEY；Discogs 名称搜索使用
+            TWILIGHT_METADATA_DISCOGS_TOKEN，已确认 ID 的资料查询无需
+            Token。保存后重启应用。正式版由 Core 启动环境提供；Key 不进入网页或任务日志。
+          </p>
+          <p>
+            TheAudioDB 的公开 Key 123 仅用于开发，应用商店发布需订阅。VocaDB 和 Discogs
+            的图片不继承文本许可，缺少图片授权时保留空态；Discogs 资料六小时后到期，需显式更新。
+          </p>
+          <p>
+            This application uses Discogs’ API but is not affiliated with, sponsored or endorsed by
+            Discogs. ‘Discogs’ is a trademark of Zink Media, LLC.
+          </p>
+        </details>
       </div>
     </div>
     <p v-if="state.error || state.policyError" role="alert">

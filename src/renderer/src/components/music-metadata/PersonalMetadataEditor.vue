@@ -22,9 +22,10 @@ const editor = createEntityPersonalMetadataEditor({
   refresh: () => props.refresh()
 })
 const { state, current, attached, needsReview, canSubmit } = editor
-const sources = computed(() => [...new Set([...(current.value?.sourceOptions ?? []),
-  ...(current.value?.sourcePreference?.provider ? [current.value.sourcePreference.provider] : [])])])
-const selectedProvider = computed(() => state.value.mode === 'source' ? state.value.provider : current.value?.sourcePreference?.provider)
+const displayed = computed(() => props.detail?.entityId === props.selected ? props.detail : null)
+const sources = computed(() => [...new Set([...(displayed.value?.sourceOptions ?? []),
+  ...(displayed.value?.sourcePreference?.provider ? [displayed.value.sourcePreference.provider] : [])])])
+const selectedProvider = computed(() => state.value.mode === 'source' ? state.value.provider : displayed.value?.sourcePreference?.provider)
 const sourceLabels: Record<string, string> = { wikipedia: 'Wikipedia', musicbrainz: 'MusicBrainz', ncm: '网易云音乐', qq: 'QQ 音乐' }
 const sourceLabel = (provider: string) => sourceLabels[provider.replace(/^platform\./, '')] ?? provider.replace(/^platform\./, '')
 function chooseFile(event: Event) {
@@ -52,7 +53,7 @@ onBeforeUnmount(editor.dispose)
 </script>
 
 <template>
-  <div v-if="current || state.mode" class="personal-metadata-editor" :aria-busy="state.saving || state.reading">
+  <div v-if="displayed || state.mode" class="personal-metadata-editor" :aria-busy="!available || state.saving || state.reading">
     <template v-if="!state.mode || state.mode === 'source'">
       <label class="source-choice">介绍资料源
         <select :value="selectedProvider ?? ''" :disabled="!current || state.saving"
@@ -61,25 +62,25 @@ onBeforeUnmount(editor.dispose)
           <option v-for="provider in sources" :key="provider" :value="provider">{{ sourceLabel(provider) }}</option>
         </select>
       </label>
-      <p v-if="current?.sourcePreference?.provider && !current.sourcePreference.available" role="status">
+      <p v-if="displayed?.sourcePreference?.provider && !displayed.sourcePreference.available" role="status">
         首选资料源当前没有可用介绍，已使用其他可用资料。首选仍保留。
       </p>
       <p v-if="state.mode === 'source'">只选择此条目的已有资料，不发起联网查询。手动介绍始终优先。</p>
     </template>
     <div v-if="!state.mode || state.mode === 'value'" class="artwork-actions">
-      <label class="file-choice">{{ current?.manualArtwork ? '替换资料图片' : '添加资料图片' }}
+      <label class="file-choice">{{ displayed?.manualArtwork ? '替换资料图片' : '添加资料图片' }}
         <input type="file" accept="image/png,image/jpeg,image/webp" :disabled="!current || state.saving || state.reading" @change="chooseFile" />
       </label>
       <span>静态 PNG、JPEG、WebP，最大 2 MiB</span>
       <button v-if="!state.mode" type="button" :disabled="!current" @click="editor.begin('clear')">隐藏资料图片</button>
-      <button v-if="!state.mode && current?.artworkOverride" type="button" @click="editor.begin('reset')">恢复自动图片</button>
+      <button v-if="!state.mode && displayed?.artworkOverride" type="button" :disabled="!current" @click="editor.begin('reset')">恢复自动图片</button>
     </div>
     <img v-if="state.mode === 'value' && state.dataUrl" class="artwork-preview" :src="state.dataUrl" alt="待保存的资料图片" />
     <p v-if="state.reading" role="status">正在读取图片…</p>
     <p v-if="state.mode === 'clear'">隐藏自动和手工资料图片。以后可恢复自动图片。</p>
     <p v-if="state.mode === 'reset'">移除手工图片或隐藏标记，重新显示已有自动图片，不发起联网查询。</p>
-    <p v-if="state.mode && !attached" role="status">当前条目尚未加载，草稿未提交。</p>
-    <div v-else-if="state.mode && needsReview" role="status">
+    <p v-if="state.mode && !attached && !displayed" role="status">当前条目尚未加载，草稿未提交。</p>
+    <div v-else-if="state.mode && attached && needsReview" role="status">
       <p>请核对最新资料；草稿不会自动覆盖它。</p>
       <button type="button" :disabled="state.saving || state.reading" @click="editor.acceptLatest()">已核对，保留草稿</button>
     </div>

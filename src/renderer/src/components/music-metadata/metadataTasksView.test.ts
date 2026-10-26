@@ -7,6 +7,7 @@ import type {
 } from '../../../../shared/entityMetadataTasks.ts'
 import {
   createMetadataTasksView,
+  canRestartMetadataTask,
   METADATA_TASK_PAGE_SIZE,
   METADATA_DEMAND_PAGE_SIZE
 } from './metadataTasksView.ts'
@@ -50,6 +51,65 @@ const demands = (offset = 0): MetadataTaskDemandsPage => ({
   offset,
   total: 7,
   items: [{ batchId: 'explicit', automatic: false, origin: null, canCancel: true }]
+})
+
+test('source retry submits one explicit demand, reconciles a lost receipt and never replays the write', async () => {
+  const failed = page()
+  failed.items[0].state = 'failed'
+  const reads: MetadataTasksQuery[] = [], writes: Array<{ entityId: string; batchId: string }> = []
+  let reply!: () => void, uncertain = false
+  const view = createMetadataTasksView({
+    tasks: async query => { reads.push(query); return failed },
+    demands: async () => demands(),
+    cancel: async () => assert.fail('retry does not cancel other consumers'),
+    identify: async query => {
+      writes.push(query)
+      if (uncertain) throw new Error('receipt lost')
+      await new Promise<void>(resolve => { reply = resolve })
+    }
+  })
+  await view.refresh()
+  assert.equal(writes.length, 0, 'reads create no work')
+  const saving = view.retry('a')
+  await view.retry('a')
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].entityId, 'catalog')
+  assert.match(writes[0].batchId, /^retry:/)
+  reply()
+  await saving
+  assert.equal(view.state.value.retrying, null)
+  uncertain = true
+  await view.retry('a')
+  assert.equal(writes.length, 2)
+  assert.notEqual(writes[0].batchId, writes[1].batchId)
+  assert.ok(reads.some(query => query.batchId === writes[1].batchId && query.limit === 1))
+  assert.match(view.state.value.retryMessage, /已核对/)
+  view.dispose()
+})
+
+test('only terminal source identity queries restart and old retry receipts cannot cross an epoch', async () => {
+  const task = page().items[0]
+  assert.equal(canRestartMetadataTask(task), false)
+  assert.equal(canRestartMetadataTask({ ...task, state: 'needs_review' }), false)
+  assert.equal(canRestartMetadataTask({ ...task, state: 'failed', type: 'enrich' }), false)
+  assert.equal(canRestartMetadataTask({ ...task, state: 'failed', entity: null }), false)
+  assert.equal(canRestartMetadataTask({ ...task, state: 'blocked', type: 'resolve' }), true)
+  let reply!: () => void, reads = 0
+  const view = createMetadataTasksView({
+    tasks: async () => { reads++; return { ...page(), items: [{ ...task, state: 'failed' }] } },
+    demands: async () => demands(), cancel: async () => {},
+    identify: () => new Promise<void>(resolve => { reply = resolve })
+  })
+  await view.refresh()
+  const saving = view.retry('a')
+  view.reset()
+  reply()
+  await saving
+  assert.equal(reads, 1)
+  assert.equal(view.state.value.page, null)
+  assert.equal(view.state.value.retryMessage, '')
+  assert.equal(view.state.value.retrying, null)
+  view.dispose()
 })
 
 test('task view pages and filters persisted jobs and demands without creating tasks', async () => {
@@ -232,5 +292,35 @@ test('failed list and consumer reads remain recoverable without enabling a stale
   fail = false
   await view.refresh()
   assert.equal(view.state.value.error, '')
+  view.dispose()
+})
+
+test('rapid Core revisions do not abort a useful page read and coalesce into one catch-up read', async () => {
+  const replies: Array<(page: MetadataTasksPage) => void> = []
+  const signals: AbortSignal[] = []
+  const view = createMetadataTasksView({
+    tasks: (_query, signal) => {
+      signals.push(signal)
+      return new Promise(resolve => replies.push(resolve))
+    },
+    demands: async () => demands(),
+    cancel: async () => {}
+  })
+  const first = view.refresh()
+  for (let i = 0; i < 30; i++) void view.refresh()
+  assert.equal(signals.length, 1)
+  assert.equal(signals[0].aborted, false)
+  replies[0](page())
+  await tick()
+  assert.equal(signals.length, 2)
+  assert.equal(view.state.value.page?.items[0].state, 'queued')
+  const latest = page()
+  latest.items[0].state = 'completed'
+  latest.counts.queued = 0
+  latest.counts.completed = 1
+  replies[1](latest)
+  await first
+  assert.equal(view.state.value.page?.items[0].state, 'completed')
+  assert.equal(view.state.value.counts?.completed, 1)
   view.dispose()
 })

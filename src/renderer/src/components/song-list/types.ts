@@ -13,6 +13,9 @@ export type GridItem = {
   cover?: string | null
   coverSource?: string | null
   releaseDate?: string
+  duration?: number
+  genre?: string | null
+  compilation?: boolean
   path?: string
   artist?: string
   tracks?: Track[]

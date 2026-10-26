@@ -77,6 +77,31 @@ function bareLocalCoverHandle(handle: string): string {
   return handle.trim().split(/[?#]/, 1)[0]
 }
 
+/** Synchronous first paint for virtualized cards whose artwork is already resolved. */
+export function readCachedCover(
+  handle: string | null | undefined,
+  durableSource?: string | null
+): string | null {
+  const trimmed = typeof handle === 'string' ? handle.trim() : ''
+  if (trimmed && isProtocolLocalCoverHandle(trimmed)) {
+    const bare = bareLocalCoverHandle(trimmed)
+    const cached = localCoverDataCache.get(bare)
+    if (!cached) return null
+    localCoverDataCache.delete(bare)
+    localCoverDataCache.set(bare, cached)
+    return cached
+  }
+  if (/^(data|blob):/i.test(trimmed)) return trimmed
+  const source =
+    typeof durableSource === 'string' && isDurableRemoteCoverSource(durableSource)
+      ? durableSource.trim()
+      : isDurableRemoteCoverSource(trimmed)
+        ? trimmed
+        : null
+  if (source) return remoteCoverGrantCache.get(source) ?? null
+  return trimmed || null
+}
+
 /**
  * Resolve a cover handle to a displayable image src.
  * - `null` / empty → returns null (or re-grants from durableSource when present)

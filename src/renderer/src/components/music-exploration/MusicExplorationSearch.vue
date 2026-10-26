@@ -30,8 +30,71 @@ onBeforeUnmount(() => view.dispose())
 </template>
 
 <style scoped>
-.exploration-search { margin: 12px 0; padding: 14px 0; border-block: 1px solid var(--te-card-border); font-size: var(--te-font-size-body, 14px); }
-header, nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; } header { justify-content: space-between; } h3 { margin: 0; font-size: 1em; }
-ul { list-style: none; margin: 10px 0; padding: 0; } li { margin: 5px 0; } span { color: var(--te-neutral-500); }
-button, select { color: var(--te-neutral-900); background: var(--te-hover-bg); border: 1px solid var(--te-card-border); border-radius: 6px; padding: 6px 10px; font: inherit; } button { cursor: pointer; } button:disabled { opacity: .45; } button:focus-visible, select:focus-visible { outline: 2px solid var(--te-primary-500); outline-offset: 2px; }
+.exploration-search {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--te-card-border);
+  background: var(--te-card-bg, color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent));
+  font-size: var(--te-font-size-body, 13px);
+}
+header,
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+header {
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--te-card-border);
+}
+h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+ul {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+li {
+  margin: 0;
+}
+span {
+  color: var(--te-neutral-500);
+  font-size: 12px;
+}
+button,
+select {
+  color: var(--te-neutral-900);
+  background: var(--te-hover-bg);
+  border: 1px solid var(--te-card-border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+button {
+  cursor: pointer;
+}
+button[aria-pressed='true'] {
+  border-color: var(--te-primary-500);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 14%, transparent);
+  color: var(--te-primary-600);
+  font-weight: 600;
+}
+button:disabled {
+  opacity: 0.45;
+}
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
+}
 </style>

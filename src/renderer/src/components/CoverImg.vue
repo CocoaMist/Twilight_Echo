@@ -25,6 +25,7 @@ import { recordCoverDiagnostic } from '../utils/coverDiagnostics.ts'
 import {
   clearLocalCoverDataCache,
   invalidateRemoteCoverGrant,
+  readCachedCover,
   resolveCover
 } from '../utils/coverLoader.ts'
 
@@ -61,8 +62,9 @@ const coverIdentityKey = computed(
 async function reloadCover(): Promise<void> {
   const id = ++requestId
   retriedCover = false
-  // Blank first so Chromium cannot keep the previous bitmap while we resolve.
-  displayCover.value = null
+  // Never keep another identity's bitmap, but reuse this cover's resolved src
+  // immediately when a virtualized card returns to the viewport.
+  displayCover.value = props.coreTrackId ? null : readCachedCover(props.cover, props.coverSource)
 
   const cover = typeof props.cover === 'string' ? props.cover.trim() : ''
   const source = typeof props.coverSource === 'string' ? props.coverSource.trim() : ''

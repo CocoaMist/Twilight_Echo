@@ -367,7 +367,7 @@ interface WindowAPI {
     onTheme: (callback: (theme: ExperienceWindowTheme) => void) => () => void
   }
   dialog: {
-    openFolder: () => Promise<string | null>
+    openFolder: (options?: { deferImport?: boolean }) => Promise<string | null>
   }
   shell: {
     showItemInFolder: (filePath: string) => Promise<void>

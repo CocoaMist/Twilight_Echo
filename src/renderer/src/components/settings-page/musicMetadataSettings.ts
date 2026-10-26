@@ -1,6 +1,7 @@
 import { shallowRef } from 'vue'
 import type { EntityMetadataPolicyView } from '../../../../shared/entityMetadata.ts'
 import type { MusicIdentificationSettings } from '../../../../shared/musicIdentificationSchedule.ts'
+import { metadataProviderLabel } from '../../../../shared/metadataProviders.ts'
 
 const reasons: Record<string, string> = {
   metadata_disabled: '此版本未启用在线资料',
@@ -10,12 +11,17 @@ const reasons: Record<string, string> = {
   provider_not_available: '平台插件不可用',
   provider_method_not_supported: '平台不支持此识别能力',
   metadata_capability_not_supported: '平台不支持此资料能力',
-  platform_metadata_cache_not_approved: '平台文字展示与缓存权限尚未获批',
+  platform_metadata_cache_not_approved: '平台资料展示与缓存权限尚未获批',
   platform_metadata_permission_expired: '平台资料使用权限已到期',
   commons_images_not_permitted: '此版本尚未启用人物公共图片',
   caa_artwork_cache_not_approved: '专辑图片展示与缓存权限尚未获批或已到期',
   caa_artwork_cross_source_not_approved: '专辑图片尚未获准跨来源使用',
-  source_not_registered: '当前没有此资料源适配器'
+  source_not_registered: '当前没有此资料源适配器',
+  public_source_disabled: '此公共资料源未启用',
+  discogs_token_required: '需要在 Core 环境配置 TWILIGHT_METADATA_DISCOGS_TOKEN 后重启',
+  discogs_token_invalid: 'Discogs Token 格式无效，请检查 Core 配置',
+  theaudiodb_key_required:
+    '需要配置 TWILIGHT_METADATA_THEAUDIODB_KEY；开发测试可使用官方公开 Key 123'
 }
 export const metadataReason = (reason: string) => reasons[reason] ?? `暂不可用（${reason}）`
 const kinds = { artist: '艺人', recording: '歌曲', album_project: '专辑作品', release: '具体发行' }
@@ -40,10 +46,7 @@ export function metadataSourceOptions(policy: EntityMetadataPolicyView | null, s
     }
     return {
       provider,
-      label:
-        provider === 'musicbrainz'
-          ? 'MusicBrainz / Wikipedia / 公共图片'
-          : `平台 · ${provider.replace(/^platform\./, '')}`,
+      label: metadataProviderLabel(provider),
       available: capabilities.some((c) => !c.reason),
       descriptions: groups.size
         ? [...groups].map(([label, list]) => `${label}：${list.join('、')}`)

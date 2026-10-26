@@ -317,14 +317,20 @@ onBeforeUnmount(view.dispose)
 
 <style scoped>
 .genre-workspace {
-  margin: 12px 0;
-  color: var(--te-text);
-  font-size: 12px;
-  line-height: 1.65;
+  margin: 14px 0;
+  padding: 16px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--te-card-border, var(--notice-border));
+  background: var(--te-card-bg, color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent));
+  color: var(--te-neutral-900, var(--te-text));
+  font-size: 13px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .workspace-toggle {
   font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 999px;
 }
 header,
 .editor-actions,
@@ -348,24 +354,33 @@ p {
   margin: 8px 0;
 }
 h4 {
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 650;
 }
 h5 {
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
 }
 p,
 .node-actions,
 .raw-values span,
 .node-name span {
-  color: var(--te-text-secondary);
+  color: var(--te-neutral-500, var(--te-text-secondary));
+  font-size: 12px;
 }
 .workspace-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
+  margin-top: 14px;
+  align-items: start;
 }
 .workspace-columns > section {
   min-width: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--te-card-border, var(--notice-border));
+  background: color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent);
 }
 .search-controls label {
   flex: 1;
@@ -374,27 +389,36 @@ p,
 label:not(.ignored-filter) {
   display: grid;
   gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
 }
 input:not([type='checkbox']) {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 32px;
-  padding: 5px 8px;
+  min-height: 34px;
+  padding: 6px 10px;
   font: inherit;
-  color: var(--te-text);
-  border: 1px solid var(--notice-border);
-  border-radius: 7px;
-  background: transparent;
+  color: var(--te-neutral-900, var(--te-text));
+  border: 1px solid var(--te-card-border, var(--notice-border));
+  border-radius: 8px;
+  background: var(--te-bg-elevated, var(--te-card-bg, transparent));
 }
 .ignored-filter {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   margin: 10px 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--te-card-border, var(--notice-border));
+  font-size: 12px;
 }
 .breadcrumbs {
   margin: 10px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 6%, transparent);
 }
 ul {
   list-style: none;
@@ -402,8 +426,13 @@ ul {
   padding: 0;
 }
 li {
-  padding: 6px 0;
-  border-bottom: 1px solid var(--notice-border);
+  padding: 8px;
+  border-bottom: 1px solid var(--te-card-border, var(--notice-border));
+  border-radius: 8px;
+  transition: background-color 0.14s ease;
+}
+li:hover {
+  background: var(--te-hover-bg, color-mix(in srgb, var(--te-primary-500, #3b82f6) 5%, transparent));
 }
 .node-heading {
   justify-content: space-between;
@@ -412,7 +441,7 @@ li {
 .raw-values button {
   text-align: left;
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 .node-name {
   flex: 1;
@@ -426,9 +455,9 @@ li {
 }
 .genre-editor,
 .mapping-editor {
-  border-top: 1px solid var(--notice-border);
+  border-top: 1px solid var(--te-card-border, var(--notice-border));
   margin-top: 14px;
-  padding-top: 8px;
+  padding-top: 12px;
 }
 .genre-editor label {
   margin: 8px 0;
@@ -436,20 +465,28 @@ li {
 button {
   max-width: 100%;
   min-height: 30px;
-  padding: 5px 9px;
+  padding: 5px 10px;
   font: inherit;
-  color: var(--te-text);
-  border: 0;
+  font-weight: 500;
+  color: var(--te-neutral-900, var(--te-text));
+  border: 1px solid transparent;
   border-radius: 7px;
-  background: color-mix(in srgb, var(--te-primary-500) 10%, transparent);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 10%, transparent);
   cursor: pointer;
   overflow-wrap: anywhere;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 18%, transparent);
 }
 button[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--te-primary-500) 26%, transparent);
+  background: color-mix(in srgb, var(--te-primary-500, #3b82f6) 24%, transparent);
+  border-color: color-mix(in srgb, var(--te-primary-500, #3b82f6) 45%, transparent);
+  color: var(--te-primary-600, var(--te-text));
+  font-weight: 600;
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.48;
   cursor: default;
 }
 button:focus-visible,

@@ -15,6 +15,11 @@ const source = stripTypeScriptTypes(
 )
 function fixture(mode = 'sqlite') {
   const calls = [],
+    settingsWrites = [],
+    settings = ref({
+      libraryFolders: [],
+      musicIdentification: { newImports: false, history: false, sources: [] }
+    }),
     closeDisabled = ref(false)
   const unexpected = () => {
     throw new Error('legacy whole-library mutation')
@@ -38,6 +43,13 @@ function fixture(mode = 'sqlite') {
     choosingFolder: ref(false),
     scannedFolders: ref(['D:/Music/a', 'D:/Music/b']),
     settingsLoaded: ref(true),
+    settings,
+    automaticMetadata: ref(false),
+    metadataSources: ref([]),
+    updateSettings: async (patch) => {
+      settingsWrites.push(JSON.parse(JSON.stringify(patch)))
+      Object.assign(settings.value, patch)
+    },
     removeLibraryFolder: async (path) => calls.push(['settings-remove', path]),
     isTrackUnderLibraryRoot,
     normalizeLibraryPath,
@@ -75,7 +87,7 @@ function fixture(mode = 'sqlite') {
     assert.ok(start >= 0 && end > start)
     vm.runInContext(source.slice(start, end + 2), context)
   }
-  return { context, calls }
+  return { context, calls, settingsWrites }
 }
 
 test('SQLite import submits selected directories to the owner without an array scan/save or global legacy busy flag', async () => {
@@ -90,7 +102,11 @@ test('SQLite import submits selected directories to the owner without an array s
   const pending = f.context.startScan()
   assert.equal(f.context.databaseRequestPending.value, true)
   assert.equal(f.context.isScanning.value, false)
+  await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(f.calls, [['scan', { directories: ['D:/Music/a'], reason: 'import' }]])
+  assert.deepEqual(f.settingsWrites, [
+    { musicIdentification: { newImports: false, history: false, sources: [] } }
+  ])
   f.context.close()
   assert.deepEqual(
     f.calls.at(-1),
@@ -100,6 +116,7 @@ test('SQLite import submits selected directories to the owner without an array s
   release({ state: 'cancelled' })
   await pending
   assert.equal(f.context.databaseRequestPending.value, false)
+  assert.deepEqual(f.settingsWrites.at(-1), { libraryFolders: ['D:/Music/a'] })
 })
 
 test('SQLite import failure preserves partial results and allows explicit retry, never replaying a write', async () => {

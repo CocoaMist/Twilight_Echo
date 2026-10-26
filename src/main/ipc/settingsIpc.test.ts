@@ -60,9 +60,9 @@ test('music folder picker remembers an existing or removed root across registrat
         }
       }
     )
-    const handlers = new Map<string, (event: unknown) => Promise<string | null>>()
+    const handlers = new Map<string, (event: unknown, options?: { deferImport: boolean }) => Promise<string | null>>()
     exports.registerSettingsIpc!({
-      handle: (channel: string, handler: (event: unknown) => Promise<string | null>) =>
+      handle: (channel: string, handler: (event: unknown, options?: { deferImport: boolean }) => Promise<string | null>) =>
         handlers.set(channel, handler)
     })
     return handlers.get('dialog:openFolder')!
@@ -86,6 +86,10 @@ test('music folder picker remembers an existing or removed root across registrat
   assert.equal(await pick({}), selected)
   assert.equal(runtime.appSettings.lastLibraryFolder, selected)
   assert.deepEqual(Array.from(runtime.appSettings.libraryFolders), [selected])
+  selected = 'F:/Deferred Music'
+  assert.equal(await pick({}, { deferImport: true }), selected)
+  assert.deepEqual(Array.from(runtime.appSettings.libraryFolders), ['E:/New Music'], 'choosing a root does not start import before metadata consent')
+  assert.equal(runtime.appSettings.lastLibraryFolder, selected)
 })
 
 test('settings backup IPC delegates to the installed Core writer', async () => {

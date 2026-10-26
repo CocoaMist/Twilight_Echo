@@ -530,15 +530,19 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .music-focus {
-  margin: 16px 0;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin: 10px 0;
+  padding: 10px 16px;
   border: 1px solid var(--te-card-border);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--te-card-bg);
   color: var(--te-neutral-900);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 header,
 .row,
@@ -560,23 +564,29 @@ h4 {
   color: var(--te-neutral-900);
 }
 h3 {
-  font-size: 20px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 h4 {
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 650;
 }
 p {
-  margin: 8px 0;
+  margin: 6px 0;
 }
 .focus-heading p {
   margin: 2px 0 0;
+  font-size: 12px;
   color: var(--te-neutral-500);
 }
 .focus-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(270px, 1fr);
+  grid-template-columns: minmax(0, 1.55fr) minmax(270px, 1fr);
   gap: 24px;
-  margin-top: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--te-card-border);
 }
 .query-editor,
 .saved-queries,
@@ -595,6 +605,8 @@ label {
   display: grid;
   gap: 4px;
   min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
 }
 .row label {
   flex: 1;
@@ -605,29 +617,37 @@ input,
 select {
   box-sizing: border-box;
   max-width: 100%;
-  padding: 7px 10px;
+  padding: 6px 11px;
   font: inherit;
   color: var(--te-neutral-900);
   background: var(--te-card-bg);
   border: 1px solid var(--te-card-border);
-  border-radius: 6px;
+  border-radius: 8px;
+  transition: background-color 0.14s ease, border-color 0.14s ease;
 }
 input,
 select {
   min-width: 0;
   width: 100%;
+  min-height: 34px;
 }
 button {
   color: var(--te-primary-600);
+  font-weight: 500;
   cursor: pointer;
 }
 button.primary {
   background: var(--te-primary-600);
+  border-color: var(--te-primary-600);
   color: var(--te-on-primary, #fff);
+  font-weight: 600;
 }
 button:hover:not(:disabled),
 button[aria-pressed='true'] {
   background: var(--te-hover-bg);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--te-primary-500, var(--te-primary-600));
 }
 button:focus-visible,
 input:focus-visible,
@@ -636,15 +656,16 @@ select:focus-visible {
   outline-offset: 2px;
 }
 :disabled {
-  opacity: 0.5;
+  opacity: 0.48;
   cursor: default;
 }
 .sort-editor {
   min-width: 0;
   margin: 14px 0;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid var(--te-card-border);
-  border-radius: 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent);
 }
 .sort-editor > button {
   margin-top: 10px;
@@ -653,6 +674,7 @@ select:focus-visible {
 nav span,
 .query-actions > span {
   color: var(--te-neutral-500);
+  font-size: 12px;
 }
 ul,
 ol {
@@ -662,7 +684,11 @@ ol {
 }
 .saved-list > li {
   border-bottom: 1px solid var(--te-card-border);
-  padding: 10px 0;
+  padding: 10px 6px;
+  border-radius: 8px;
+}
+.saved-list > li:hover {
+  background: var(--te-hover-bg);
 }
 .saved-name {
   display: grid;
@@ -670,9 +696,13 @@ ol {
   flex: 1;
   text-align: left;
   min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
 }
 .saved-name span {
   color: var(--te-neutral-500);
+  font-size: 12px;
 }
 .saved-search,
 .selection-actions,
@@ -682,14 +712,15 @@ ol {
   border-top: 1px solid var(--te-card-border);
 }
 .focus-results {
-  margin-top: 22px;
-  padding-top: 18px;
+  margin-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid var(--te-card-border);
 }
 .results-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 0.4fr);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr);
   gap: 24px;
+  align-items: start;
 }
 .result-list li {
   display: flex;
@@ -697,25 +728,35 @@ ol {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 12px 0;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--te-card-border);
+  border-radius: 8px;
+}
+.result-list li:hover {
+  background: var(--te-hover-bg);
 }
 .result-list li > div {
   display: grid;
   flex: 1;
   min-width: 120px;
+  gap: 2px;
 }
 .result-list span {
   color: var(--te-neutral-500);
+  font-size: 12px;
 }
 .facet-panel {
-  padding-top: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--te-card-border);
+  background: color-mix(in srgb, var(--te-neutral-500, #888) 4%, transparent);
 }
 .facet-panel li {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 0;
+  padding: 6px 4px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--te-card-border) 60%, transparent);
 }
 nav {
   margin-top: 10px;

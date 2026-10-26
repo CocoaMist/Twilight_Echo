@@ -17,6 +17,7 @@ import type { MusicCredit, MusicCreditsQuery } from '../../../../shared/musicCre
 import type { MusicArtwork } from '../../../../shared/musicArtwork.ts'
 import type {
   EntityMetadataDetail,
+  EntityMetadataJob,
   EntityMetadataOverride,
   EntityMetadataPolicyView
 } from '../../../../shared/entityMetadata.ts'
@@ -29,6 +30,8 @@ import * as ratingsModel from '../music-ratings/personalRatingsView.ts'
 import * as identityInboxModel from './identityInboxView.ts'
 import * as tasksModel from './metadataTasksView.ts'
 import * as requeryModel from './metadataRequeryView.ts'
+import * as updateModel from '../song-list/artistMetadataUpdate.ts'
+import * as providerLabels from '../../../../shared/metadataProviders.ts'
 import * as taskContract from '../../../../shared/entityMetadataTasks.ts'
 import * as inboxLabels from '../library-inbox/libraryInbox.ts'
 
@@ -105,11 +108,18 @@ test('compiled persistent task controls read actual consumers, cancel only one a
   const f = taskFixture(t)
   const active = ref(true), filter = ref<'all' | 'active' | 'attention'>('all')
   let counts = { active: 0, visible: 0 }
-  const ui = mount(t, () => h(f.List, { active: active.value, filter: filter.value, onCounts: value => { counts = value } }))
+  const ui = mount(t, () => h(f.List, { active: active.value, filter: filter.value, expanded: true, onCounts: value => { counts = value } }))
   await settle()
   assert.equal(counts.active, 1)
   assert.equal(f.commands.length, 0)
-  assert.match(ui.text(), /清空通知不删除这些持久记录/)
+  assert.match(ui.text(), /后台查询 1 条/)
+  assert.doesNotMatch(ui.text(), /需处理/)
+  const beforeRefresh = f.db.sql.prepare('SELECT total_changes() n').get()!.n
+  const taskReads = f.queries.filter(q => q.name === 'metadata.entity.tasks').length
+  ui.button('刷新状态').props.onClick(); await settle()
+  assert.equal(f.queries.filter(q => q.name === 'metadata.entity.tasks').length, taskReads + 1)
+  assert.equal(f.db.sql.prepare('SELECT total_changes() n').get()!.n, beforeRefresh)
+  assert.equal(f.commands.length, 0, 'refresh reads saved progress without starting a scan or lookup')
   ui.button('当前需求（2）').props.onClick(); await settle()
   assert.match(ui.text(), /显式需求 · one/)
   assert.equal(ui.nodes().filter(n => n.tag === 'button' && n.text.trim() === '取消此项需求').length, 2)
@@ -117,7 +127,7 @@ test('compiled persistent task controls read actual consumers, cancel only one a
   assert.deepEqual(f.commands[0], { name: 'metadata.entity.cancel', query: { jobId: f.job.id, batchId: 'one', generation: f.job.generation } })
   assert.equal(f.db.metadataJobs({ jobId: f.job.id }).items[0].state, 'queued')
   assert.match(ui.text(), /显式需求 · two/)
-  ui.button('核对身份').props.onClick(); await settle()
+  ui.button('管理身份').props.onClick(); await settle()
   assert.equal(f.queries.find(q => q.name === 'identification.detail')!.query.entityId, f.entity.id)
   assert.equal(f.commands.length, 1, 'opening review must not enqueue identification')
   const reads = f.queries.length
@@ -129,8 +139,104 @@ test('compiled persistent task controls read actual consumers, cancel only one a
   f.snapshot.value = { ...f.snapshot.value, entityMetadataRevision: 2 }; await settle()
   assert.equal(counts.active, 0, 'closing the dropdown must not stop persistent counts')
   filter.value = 'attention'; active.value = true; await settle()
-  assert.match(ui.text(), /失败/)
+  assert.match(ui.text(), /查询未成功/)
   assert.match(ui.text(), /fixture_failure/)
+  assert.ok(ui.button('重新查询'))
+  assert.doesNotMatch(ui.text(), /核对身份/)
+})
+
+test('task records start folded without demand or identity reads; retry is a distinct explicit action', async t => {
+  const f = taskFixture(t)
+  const work = f.db.metadataClaim(3000)!
+  f.db.metadataFinish(work, { state: 'failed', reason: 'metadata_http_503' }, 3001)
+  const ui = mount(t, () => h(f.List, { active: true, filter: 'all' }))
+  await settle()
+  assert.equal(ui.nodes().filter(n => n.tag === 'article').length, 0)
+  assert.equal(f.queries.some(q => ['metadata.entity.demands', 'identification.detail'].includes(q.name)), false)
+  assert.equal(f.commands.length, 0)
+  ui.nodes().find(n => n.tag === 'details' && n.props.class === 'task-records')!.props.onToggle({ target: { open: true } })
+  await settle()
+  assert.match(ui.text(), /查询未成功/)
+  assert.doesNotMatch(ui.text(), /核对身份/)
+  ui.button('重新查询').props.onClick()
+  await settle()
+  assert.equal(f.commands.length, 1)
+  assert.equal(f.commands[0].name, 'identification.start')
+  assert.equal(f.commands[0].query.entityId, f.entity.id)
+  assert.match(f.commands[0].query.batchId, /^retry:/)
+})
+
+test('background task and demand refreshes keep the painted list without inserting loading rows', async t => {
+  const f = taskFixture(t)
+  const query = f.core.query
+  const pending: Array<() => void> = []
+  f.core.query = async (name, payload) => {
+    const result = await query(name, payload)
+    if (name === 'metadata.entity.tasks' || name === 'metadata.entity.demands')
+      await new Promise<void>(resolve => pending.push(resolve))
+    return result
+  }
+  const ui = mount(t, () => h(f.List, { active: true, filter: 'all', expanded: true }))
+  const release = async () => {
+    assert.ok(pending.length)
+    pending.splice(0).forEach(resolve => resolve())
+    await settle()
+  }
+  await settle()
+  assert.match(ui.text(), /正在读取资料任务/)
+  await release()
+  const row = ui.nodes().find(node => node.tag === 'article')!
+  ui.button('当前需求（2）').props.onClick(); await settle()
+  assert.match(ui.text(), /正在读取当前需求/)
+  await release()
+  const demands = ui.nodes().find(node => node.props['aria-label'] === '任务当前需求')!
+  const painted = ui.text()
+  for (let revision = 2; revision <= 4; revision++) {
+    f.snapshot.value = { ...f.snapshot.value, entityMetadataRevision: revision }
+    await settle()
+    assert.equal(pending.length, 2)
+    assert.equal(ui.text(), painted, 'background reads must not add or remove visible content')
+    assert.equal(ui.nodes().find(node => node.tag === 'article'), row)
+    assert.equal(ui.nodes().find(node => node.props['aria-label'] === '任务当前需求'), demands)
+    assert.equal(ui.nodes().find(node => node.props['aria-label'] === '音乐资料持久任务')!.props['aria-busy'], true)
+    assert.equal(demands.props['aria-busy'], true)
+    await release()
+    assert.equal(demands.props['aria-busy'], false)
+    assert.equal(ui.text(), painted)
+  }
+  f.db.metadataClaim(3000)
+  f.snapshot.value = { ...f.snapshot.value, entityMetadataRevision: 5 }
+  await settle()
+  assert.equal(ui.text(), painted)
+  await release()
+  assert.match(ui.text(), /后台查询 1 条/)
+  assert.equal(ui.nodes().find(node => node.tag === 'article'), row)
+  assert.equal(ui.nodes().some(node => node.tag === 'span' && node.text === '进行中'), true)
+  assert.equal(f.commands.length, 0)
+})
+
+test('refreshing a saved empty task page does not flash an empty panel or visible count', async t => {
+  const f = taskFixture(t)
+  let release: (() => void) | undefined
+  let hold = false
+  f.core.query = async (_name, payload) => {
+    if (hold) await new Promise<void>(resolve => { release = resolve })
+    return f.db.metadataTasks(payload)
+  }
+  let visible = -1
+  const ui = mount(t, () => h(f.List, {
+    active: true, filter: 'attention', onCounts: value => { visible = value.visible }
+  }))
+  await settle()
+  assert.equal(visible, 0)
+  assert.equal(ui.nodes().some(node => node.props['aria-label'] === '音乐资料持久任务'), false)
+  hold = true
+  f.snapshot.value = { ...f.snapshot.value, entityMetadataRevision: 2 }
+  await settle()
+  assert.equal(visible, 0)
+  assert.equal(ui.nodes().some(node => node.props['aria-label'] === '音乐资料持久任务'), false)
+  release!(); await settle()
+  assert.equal(visible, 0)
 })
 
 test('the original TaskCenter includes persistent counts while closed and clearing notices does not cancel or erase jobs', async t => {
@@ -490,7 +596,7 @@ test('compiled review disables stale or conflicting confirmations and keeps both
   await settle()
   ui.button('复核此候选').props.onClick()
   await settle()
-  assert.match(ui.text(), /确认后将替换上方当前身份/)
+  assert.match(ui.text(), /“确认替换关联”会替换上方当前身份/)
   assert.match(ui.text(), /42/)
   assert.match(ui.text(), /99/)
   assert.equal(ui.button('确认替换关联').props.disabled, false)
@@ -510,6 +616,59 @@ test('compiled review disables stale or conflicting confirmations and keeps both
   assert.ok(replacement.id)
 })
 
+test('compiled review adds an explicitly confirmed NCM fallback without replacing the current MB identity', async t => {
+  const f = identityFixture(t)
+  const [mb] = f.db.identificationPublish(f.db.identificationInput(f.entity.id), [{
+    provider: 'musicbrainz', name: 'Same name', summary: 'Original person', matcherVersion: 'fixture',
+    references: [{provider:'musicbrainz',kind:'artist',idType:'mbid',value:'151bb385-1af0-40b6-9269-bf2ed982311f'}],
+    evidence:{origin:'search',matches:[],missing:['review'],conflicts:[],incomplete:true,provenance:'fixture'}
+  }], 1001)
+  f.db.identificationDecide({candidateId:mb.id,revision:mb.revision,linkRevision:mb.linkRevision,decision:'confirm'},1002)
+  const target=f.db.identificationDetail(f.entity.id).link!.targetId
+  f.publish('42')
+  const ui=mount(t,()=>h(f.Panel,{entityId:f.entity.id,scope:'local'}))
+  await settle()
+  assert.equal(f.commands.length,0)
+  ui.button('复核此候选').props.onClick();await settle()
+  assert.match(ui.text(),/共享此身份的曲库条目/)
+  const action=ui.button('确认同一身份，补充网易云引用')
+  assert.equal(action.props.disabled,false)
+  action.props.onClick();await settle()
+  assert.equal(f.commands.length,1)
+  assert.equal(f.commands[0].query.attachToCurrent,true)
+  const result=f.db.identificationDetail(f.entity.id)
+  assert.equal(result.link!.targetId,target)
+  assert.deepEqual(result.references.map(r=>r.provider).sort(),['musicbrainz','ncm'])
+})
+
+test('compact decisions count source entities once, open evidence explicitly and remove resolved chores', async t => {
+  const f = identityFixture(t)
+  f.publish('84')
+  const Inbox = component('./IdentityReviewInbox.vue', {
+    './identityInboxView.ts': identityInboxModel,
+    './identityReviewView.ts': identityModel,
+    './IdentityReviewPanel.vue': { default: f.Panel },
+    '../../stores/coreConnection.ts': { useCoreConnection: () => f.core }
+  })
+  const ui = mount(t, () => h(Inbox, { compact: true }))
+  await settle()
+  assert.match(ui.text(), /1 个条目待确认/)
+  assert.match(ui.text(), /2 个候选/)
+  assert.equal(f.queries.find(q => q.name === 'identification.inbox')!.query.unresolvedOnly, true)
+  assert.equal(f.queries.some(q => q.name === 'identification.detail'), false)
+  assert.equal(f.commands.length, 0)
+  ui.button('查看候选').props.onClick()
+  await settle()
+  assert.equal(f.queries.find(q => q.name === 'identification.detail')!.query.entityId, f.entity.id)
+  ui.button('复核此候选').props.onClick()
+  await settle()
+  ui.button('确认关联').props.onClick()
+  await settle()
+  assert.match(ui.text(), /暂时没有需要你决定的事/)
+  assert.doesNotMatch(ui.text(), /个条目待确认/)
+  assert.equal(f.db.identificationInbox({}).total, 1, 'remaining candidates remain available in advanced tools')
+})
+
 test('the original inbox switches between file problems and durable entity review without reclassifying tracks or selecting the first name', async (t) => {
   const f = identityFixture(t)
   const Inbox = component('./IdentityReviewInbox.vue', {
@@ -519,19 +678,23 @@ test('the original inbox switches between file problems and durable entity revie
     '../../stores/coreConnection.ts': { useCoreConnection: () => f.core }
   })
   const Dialog = component('../library-inbox/LibraryInboxDialog.vue', {
+    './LibraryHealthPanel.vue': { __esModule: true, default: { render: () => null } },
     '../music-metadata/IdentityReviewInbox.vue': { default: Inbox },
     '@renderer/components/LocalLibraryTagManager.vue': { default: { render: () => null } },
     '@renderer/app/useDismissLayer.ts': { useEscapeToClose() {}, useFocusTrap() {} },
     '@renderer/components/library-inbox/libraryInbox.ts': inboxLabels,
     '@renderer/stores/coreConnection.ts': {
-      useCoreConnection: () => ({ ...f.core, attach: () => new Promise(() => {}) })
+      useCoreConnection: () => ({ ...f.core, attach: async () => {} })
     }
   })
   const ui = mount(t, () => h(Dialog, { tracks: [], rescan: async () => {}, scanning: false }))
+  await settle()
+  ui.button('文件问题').props.onClick()
+  await settle()
   assert.ok(ui.button('检查疑似重复'))
   ui.button('音乐资料复核').props.onClick()
   await settle()
-  assert.equal(f.commands.length, 0)
+  assert.equal(f.commands.filter(c => c.name !== 'library.inbox.refresh').length, 0)
   assert.equal(f.queries.filter((q) => q.name === 'identification.detail').length, 0)
   assert.match(ui.text(), /1 个候选/)
   ui.nodes()
@@ -555,7 +718,7 @@ test('the original inbox switches between file problems and durable entity revie
   ui.button('文件问题').props.onClick()
   await settle()
   assert.ok(ui.button('检查疑似重复'))
-  assert.equal(f.commands.length, 0)
+  assert.equal(f.commands.filter(c => c.name !== 'library.inbox.refresh').length, 0)
 })
 const detail = (revision = 0): EntityMetadataDetail => ({
   entityId: 'artist-a',
@@ -753,6 +916,7 @@ test('compiled artwork uses the existing image loader, shows actual scope and at
     },
     '../utils/coverDiagnostics.ts': { recordCoverDiagnostic() {} },
     '../utils/coverLoader.ts': {
+      readCachedCover: () => null,
       clearLocalCoverDataCache() {},
       invalidateRemoteCoverGrant() {},
       resolveCover: async (handle: string) => {
@@ -932,6 +1096,7 @@ test('the original track dialog mounts credits for local and streaming tracks an
 
 test('compiled introduction controls edit, keep a conflicting draft, confirm clear/reset, and submit only through the original command', async (t) => {
   const current = shallowRef<EntityMetadataDetail | null>(detail())
+  const available = ref(true)
   const calls: Array<{ name: string; request: EntityMetadataOverride }> = []
   const Editor = component('./IntroductionEditor.vue', {
     './entityIntroductionEditor.ts': editorModel,
@@ -955,11 +1120,18 @@ test('compiled introduction controls edit, keep a conflicting draft, confirm cle
       scope: 'local-artist-en-epoch1',
       selected: 'artist-a',
       detail: current.value,
-      available: true,
+      available: available.value,
       language: 'en',
       refresh: async () => {}
     })
   )
+  const editButton = ui.button('编辑介绍')
+  available.value = false
+  await settle()
+  assert.equal(ui.button('编辑介绍'), editButton, 'refresh disables the existing control instead of removing its row')
+  assert.equal(editButton.props.disabled, true)
+  available.value = true
+  await settle()
   ui.button('编辑介绍').props.onClick()
   await settle()
   assert.equal(ui.button('保存介绍').props.disabled, true)
@@ -1097,6 +1269,7 @@ test('compiled settings controls use actual capabilities, retain unavailable cho
 test('compiled personal metadata controls select a source and save, clear and reset user-owned image bytes', async t => {
   const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII='
   const current = shallowRef<EntityMetadataDetail>({ ...detail(), sourcePreference: { provider: 'platform.ncm', available: false }, sourceOptions: ['wikipedia'] })
+  const available = ref(true)
   const calls: Array<{ name: string; request: any }> = []
   const Editor = component('./PersonalMetadataEditor.vue', {
     './entityPersonalMetadataEditor.ts': personalEditorModel,
@@ -1129,8 +1302,16 @@ test('compiled personal metadata controls select a source and save, clear and re
   globalThis.Image = Bitmap as unknown as typeof Image
   t.after(() => { globalThis.FileReader = previousReader; globalThis.Image = previousImage })
   const ui = mount(t, () => h(Editor, { scope: 'local-artist', selected: 'artist-a', detail: current.value,
-    language: 'en', available: true, refresh: async () => {} }))
+    language: 'en', available: available.value, refresh: async () => {} }))
   assert.match(ui.text(), /首选资料源当前没有可用介绍/)
+  const sourceChoice = ui.nodes().find(n => n.tag === 'select')!
+  available.value = false
+  await settle()
+  assert.equal(ui.nodes().find(n => n.tag === 'select'), sourceChoice)
+  assert.equal(sourceChoice.props.disabled, true)
+  assert.match(ui.text(), /首选资料源当前没有可用介绍/)
+  available.value = true
+  await settle()
   ui.nodes().find(n => n.tag === 'select')!.props.onChange({ target: { value: 'wikipedia' } })
   await settle()
   ui.button('保存资料源首选').props.onClick(); await settle()
@@ -1158,6 +1339,88 @@ test('compiled personal metadata controls select a source and save, clear and re
   assert.equal(calls.length, 4, 'a failed browser decode never publishes corrupt picture bytes')
 })
 
+test('compiled album updates use confirmed native IDs, submit durable tasks and read back their status', async t => {
+  const snapshot = shallowRef({ entityMetadataRevision: 1 })
+  const selected = ref('album-a')
+  const writes: Array<{ name: string; request: any }> = []
+  const jobs: EntityMetadataJob[] = []
+  const policy = { enabled: true, sources: [
+    { provider: 'vocadb', enrichment: [{ provider: 'vocadb', kind: 'album_project', reason: null }] },
+    { provider: 'musicbrainz', enrichment: [{ provider: 'musicbrainz-details', kind: 'album_project', reason: null }] }
+  ] }
+  const Controls = component('./MetadataUpdateControls.vue', {
+    '../../stores/coreConnection.ts': { useCoreConnection: () => ({
+      state: snapshot,
+      query: async (name: string, query: any) => {
+        if (name === 'metadata.entity.policy') return policy
+        if (name === 'metadata.entity.jobs') return { items: jobs, total: jobs.length }
+        assert.equal(name, 'identification.detail')
+        return { entityId: query.entityId, kind: 'album_project', references: query.entityId === 'album-a'
+          ? [{ provider: 'vocadb', kind: 'album_project', idType: 'native', value: '10' }] : [] }
+      },
+      command: async (name: string, request: any) => {
+        writes.push({ name, request })
+        assert.equal(name, 'metadata.entity.enrich')
+        const task = { id: 'native-album-job', provider: request.provider, type: 'enrich', state: 'queued', generation: 1 } as EntityMetadataJob
+        jobs.push(task)
+        return task
+      }
+    }) },
+    '../song-list/artistMetadataUpdate.ts': updateModel,
+    '../../../../shared/metadataProviders.ts': providerLabels,
+    './metadataTasksView.ts': tasksModel
+  })
+  const ui = mount(t, () => h(Controls, { entityId: selected.value, kind: 'album_project', language: 'zh-Hans', scope: selected.value }))
+  await settle()
+  assert.equal(writes.length, 0)
+  assert.equal(ui.button('更新资料').props.disabled, false)
+  ui.button('更新资料').props.onClick(); await settle()
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].request.provider, 'vocadb')
+  assert.equal(writes[0].request.entityId, 'album-a')
+  assert.match(ui.text(), /VocaDB.*排队/)
+  jobs[0] = { ...jobs[0], state: 'completed' }
+  snapshot.value = { entityMetadataRevision: 2 }; await settle()
+  assert.match(ui.text(), /已完成/)
+  selected.value = 'album-without-identity'; await settle()
+  assert.equal(ui.button('更新资料').props.disabled, true)
+})
+
+test('album metadata can omit public and manual artwork without removing the introduction or standalone artwork', async t => {
+  const state = shallowRef({ page: { revision: 1, total: 1, offset: 0, items: [] }, samples: {},
+    selected: null, detail: { ...detail(), name: 'Album',
+      introduction: { value: 'Album introduction', language: 'en', origin: 'manual', attribution: null },
+      artwork: [{ handle: 'cover-handle' }], manualArtwork: { dataUrl: 'manual-cover' } },
+    loading: false, detailLoading: false, error: '', detailError: '', detailNotice: '' })
+  const noop = { default: { setup: () => () => null } }
+  const Panel = component('./EntityMetadataPanel.vue', {
+    '../../stores/coreConnection.ts': { useCoreConnection: () => ({ state: shallowRef({ epoch: 'one' }) }) },
+    '../../stores/useSettingsStore.ts': { useSettingsStore: () => ({ settings: shallowRef({ musicIdentification: { language: 'en' } }) }) },
+    '../../app/useLocale.ts': { useLocale: () => ({ locale: ref('en-US') }) },
+    './entityMetadataView.ts': { createEntityMetadataView: () => ({ state, dispose() {} }),
+      observeEntityMetadataView: () => () => {}, METADATA_REFERENCE_PAGE_SIZE: 6 },
+    './AlbumMetadataDialog.vue': noop,
+    './MetadataAttribution.vue': noop, './IntroductionEditor.vue': noop, './PersonalMetadataEditor.vue': noop,
+    './MetadataUpdateControls.vue': noop, './IdentityReviewPanel.vue': noop,
+    '../music-preferences/PersonalPreferencesPanel.vue': noop,
+    './EntityArtwork.vue': { default: { render: () => h('img', { src: 'public-cover' }) } },
+    '../../../../shared/entityMetadata.ts': { validMusicBrainzArtistId: () => false }
+  })
+  const showArtwork = ref<boolean | undefined>(false)
+  const ui = mount(t, () => h(Panel, { target: { kind: 'release', sourceProvider: 'local',
+    context: { type: 'collection', collection: 'albums', id: 'album-a' } }, showArtwork: showArtwork.value,
+    albumSummary: { name: 'Album', durationText: '3 分钟', formatText: 'FLAC' } }))
+  assert.equal(ui.nodes().filter(n => n.tag === 'img').length, 0)
+  assert.equal(ui.nodes().some(n => n.props.class === 'overview-artwork-col'), false)
+  assert.match(ui.text(), /Album introduction/)
+  assert.match(ui.text(), /FLAC/)
+  ui.button('专辑作品').props.onClick(); await settle()
+  assert.equal(ui.nodes().filter(n => n.tag === 'img').length, 0)
+  assert.match(ui.text(), /Album introduction/)
+  showArtwork.value = undefined; await settle()
+  assert.deepEqual(ui.nodes().filter(n => n.tag === 'img').map(n => n.props.src), ['public-cover', 'manual-cover'])
+})
+
 test('compiled entity panel honours imported manual clear and conflict without resurrecting native page fallback', async t => {
   const state = shallowRef({ page: { revision: 1, total: 1, offset: 0, items: [] }, samples: {},
     selected: { id: 'artist-a', kind: 'artist', title: 'Artist' }, detail: detail(),
@@ -1169,7 +1432,9 @@ test('compiled entity panel honours imported manual clear and conflict without r
     '../../app/useLocale.ts': { useLocale: () => ({ locale: ref('en-US') }) },
     './entityMetadataView.ts': { createEntityMetadataView: () => ({ state, refresh: async () => {}, refreshDetail: async () => {}, dispose() {} }),
       observeEntityMetadataView: () => () => {}, METADATA_REFERENCE_PAGE_SIZE: 6 },
+    './AlbumMetadataDialog.vue': noop,
     './MetadataAttribution.vue': noop, './IntroductionEditor.vue': noop, './PersonalMetadataEditor.vue': noop,
+    './MetadataUpdateControls.vue': noop,
     './EntityArtwork.vue': noop, './IdentityReviewPanel.vue': noop, '../music-preferences/PersonalPreferencesPanel.vue': noop,
     '../../../../shared/entityMetadata.ts': { validMusicBrainzArtistId: () => false }
   })

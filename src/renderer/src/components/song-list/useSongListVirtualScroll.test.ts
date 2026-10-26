@@ -3,6 +3,50 @@ import test from 'node:test'
 import { computed, effectScope, nextTick, ref } from 'vue'
 import { useSongListVirtualScroll } from './useSongListVirtualScroll.ts'
 
+test('new artist queries and sections start at the content controls; saved views and new artists retain their contract', async () => {
+  const scope = effectScope()
+  const identity = ref('artist:scroll-reset-test')
+  const section = ref('overview')
+  const search = ref('')
+  const scroll = scope.run(() =>
+    useSongListVirtualScroll({
+      displayTracks: computed(() => []),
+      resetSources: [],
+      shouldResetOnSearch: computed(() => true),
+      debouncedSearchQuery: search,
+      viewIdentity: computed(() => identity.value),
+      viewKey: computed(() => JSON.stringify([identity.value, section.value, search.value])),
+      resetScrollTop: () => Math.min(container.scrollTop, 620)
+    })
+  )!
+  const container = { clientHeight: 700, scrollTop: 0 } as HTMLElement
+  scroll.containerRef.value = container
+  scroll.restoreScrollAndMeasure()
+  await nextTick()
+  container.scrollTop = 620
+  scroll.onScroll({ target: container } as unknown as Event)
+  section.value = 'songs'
+  await nextTick()
+  await nextTick()
+  assert.equal(container.scrollTop, 620, 'switching tabs must not hide them behind the hero')
+  container.scrollTop = 1900
+  scroll.onScroll({ target: container } as unknown as Event)
+  search.value = 'duet'
+  await nextTick()
+  await nextTick()
+  assert.equal(container.scrollTop, 620, 'a new search starts at controls, not the hero or old row')
+  search.value = ''
+  await nextTick()
+  await nextTick()
+  assert.equal(container.scrollTop, 1900, 'clearing a query restores its saved unfiltered position')
+  identity.value = 'artist:another-scroll-reset-test'
+  await nextTick()
+  scroll.restoreScrollAndMeasure()
+  await nextTick()
+  assert.equal(container.scrollTop, 0, 'a different artist still opens at its header')
+  scope.stop()
+})
+
 test('returning from an album restores its parent offset after the transition, ignoring temporary scroll events', async () => {
   const scope = effectScope()
   const key = ref('test:albums')

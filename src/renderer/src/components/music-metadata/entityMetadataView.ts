@@ -63,9 +63,9 @@ export function createEntityMetadataView(api: EntityMetadataReadApi) {
     detailRequest: AbortController | null = null
   let disposed = false
   let expiryTimer: ReturnType<typeof setTimeout> | undefined
-  function applyExpiry(detail: EntityMetadataDetail, request: AbortController) {
+  function applyExpiry(detail: EntityMetadataDetail) {
     clearTimeout(expiryTimer)
-    if (disposed || detailRequest !== request) return
+    if (disposed || state.value.detail !== detail) return
     const expired = detail.facts.filter(f => f.usage?.expiresAt !== undefined && f.usage.expiresAt <= Date.now())
     const facts = detail.facts.filter(f => !expired.includes(f))
     const expiredIntroduction = detail.introduction?.origin === 'external' && expired.some(f =>
@@ -76,20 +76,21 @@ export function createEntityMetadataView(api: EntityMetadataReadApi) {
     const next = expired.length ? { ...detail, facts, introduction: expiredIntroduction ? null : detail.introduction,
       sourceOptions: options, ...(detail.sourcePreference ? { sourcePreference: { ...detail.sourcePreference,
         available: !detail.sourcePreference.provider || options.includes(detail.sourcePreference.provider) } } : {}) } : detail
-    state.value = { ...state.value, detail: next, detailLoading: false,
+    state.value = { ...state.value, detail: next,
       detailNotice: expired.length ? '部分自动资料已到期，请重新读取。' : state.value.detailNotice }
     const expiry = Math.min(...facts.flatMap(f => f.usage?.expiresAt === undefined ? [] : [f.usage.expiresAt]))
-    if (Number.isFinite(expiry)) expiryTimer = setTimeout(() => applyExpiry(next, request), Math.min(2147483647, Math.max(1, expiry - Date.now())))
+    if (Number.isFinite(expiry)) expiryTimer = setTimeout(() => applyExpiry(next), Math.min(2147483647, Math.max(1, expiry - Date.now())))
   }
-  async function select(entity: CatalogEntity | null) {
-    clearTimeout(expiryTimer)
+  async function select(entity: CatalogEntity | null, preserveDetail = true) {
+    const sameEntity = preserveDetail && !!entity && entity.id === state.value.selected?.id
+    if (!sameEntity) clearTimeout(expiryTimer)
     detailRequest?.abort()
     const request = new AbortController()
     detailRequest = request
     state.value = {
       ...state.value,
       selected: entity,
-      detail: null,
+      detail: sameEntity ? state.value.detail : null,
       detailError: '',
       detailNotice: '',
       detailLoading: !!entity
@@ -97,20 +98,30 @@ export function createEntityMetadataView(api: EntityMetadataReadApi) {
     if (!entity || !current || disposed) return
     try {
       const detail = await api.detail(entity.id, language, current.sourceProvider, request.signal)
-      if (!disposed && detailRequest === request) applyExpiry(detail, request)
+      if (!disposed && detailRequest === request) {
+        state.value = { ...state.value, detail, detailLoading: false }
+        applyExpiry(detail)
+      }
     } catch (error) {
-      if (!disposed && detailRequest === request)
-        state.value = { ...state.value, detailError: message(error), detailLoading: false }
+      if (!disposed && detailRequest === request) {
+        clearTimeout(expiryTimer)
+        state.value = { ...state.value, detail: null, detailError: message(error), detailLoading: false }
+      }
     }
   }
-  async function load(offset = 0, revision?: number) {
+  async function load(offset = 0, revision?: number, preservePage = false) {
     if (!current || disposed) return
     pageRequest?.abort()
     const request = new AbortController(),
       previous = state.value.selected
     pageRequest = request
-    void select(null)
-    state.value = { ...state.value, loading: true, error: '' }
+    detailRequest?.abort()
+    detailRequest = null
+    if (!preservePage) {
+      clearTimeout(expiryTimer)
+      state.value = empty()
+    }
+    state.value = { ...state.value, loading: true, detailLoading: false, error: '', detailError: '' }
     try {
       const page = await api.catalog(
         {
@@ -145,13 +156,16 @@ export function createEntityMetadataView(api: EntityMetadataReadApi) {
         )
       )
       if (disposed || pageRequest !== request) return
-      state.value = { ...empty(), page, samples }
+      state.value = { ...state.value, page, samples, loading: false }
       const selected =
         page.items.find((item) => item.id === previous?.id) ??
         (page.total === 1 ? page.items[0] : null)
       await select(selected ?? null)
     } catch (error) {
-      if (!disposed && pageRequest === request) state.value = { ...empty(), error: message(error) }
+      if (!disposed && pageRequest === request) {
+        clearTimeout(expiryTimer)
+        state.value = { ...empty(), error: message(error) }
+      }
     }
   }
   return {
@@ -169,8 +183,8 @@ export function createEntityMetadataView(api: EntityMetadataReadApi) {
     },
     select,
     page: (offset: number) => load(offset, state.value.page?.revision),
-    refresh: () => load(state.value.page?.offset ?? 0),
-    refreshDetail: () => select(state.value.selected),
+    refresh: () => load(state.value.page?.offset ?? 0, undefined, true),
+    refreshDetail: (preserveDetail = true) => select(state.value.selected, preserveDetail),
     dispose() {
       clearTimeout(expiryTimer)
       disposed = true
@@ -186,7 +200,7 @@ export function createEntityMetadataView(api: EntityMetadataReadApi) {
 export function observeEntityMetadataView(
   view: ReturnType<typeof createEntityMetadataView>,
   input: {
-    target(): EntityMetadataContext
+    target(): EntityMetadataContext | null
     language(): EntityMetadataLanguage
     snapshot(): Pick<
       CoreSnapshot,
@@ -215,8 +229,11 @@ export function observeEntityMetadataView(
   )
   const stopDetail = watch(
     [() => input.snapshot()?.entityMetadataRevision, () => input.snapshot()?.settingsRevision],
-    () => {
-      if (!view.state.value.loading) void view.refreshDetail()
+    (value, previous) => {
+      // A settings change may revoke a source's display permission. Unlike
+      // background task progress, it must withdraw the old content immediately.
+      const settingsChanged = value[1] !== previous[1]
+      if (settingsChanged || !view.state.value.loading) void view.refreshDetail(!settingsChanged)
     }
   )
   return () => {

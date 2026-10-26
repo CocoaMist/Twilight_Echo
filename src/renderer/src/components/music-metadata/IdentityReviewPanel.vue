@@ -120,6 +120,11 @@ async function run(action: () => Promise<void>) {
         }}
       </p>
       <IdentityReferences :references="state.identity.references" />
+      <p v-if="state.identity.link?.state !== 'confirmed'" class="identity-hint">
+        {{ state.candidates?.total
+          ? '已找到候选，但名称相同不足以自动确认。请核对人物、曲目与外部引用，再选择“复核此候选”。'
+          : '尚无已保存候选。可先联网重新识别；若资料源仍未收录，请使用手动图片和介绍。' }}
+      </p>
       <div class="identity-actions">
         <button type="button" :disabled="!ready" @click="run(view.start)">联网重新识别</button>
         <button
@@ -257,7 +262,11 @@ async function run(action: () => Promise<void>) {
           {{ identityEvidenceLabel(conflict) }}
         </p>
         <p v-if="state.preview.action === 'replace'" class="identity-warning">
-          确认后将替换上方当前身份；介绍、图片和人员信息会按新身份重新读取。
+          “确认替换关联”会替换上方当前身份；介绍、图片和人员信息会按新身份重新读取。
+        </p>
+        <p v-if="state.preview.canAttachToCurrent" class="identity-hint">
+          若确认这是同一人物或同一具体发行，可补充网易云引用而不替换原身份。
+          补充后，共享此身份的曲库条目均可使用网易云兜底资料。
         </p>
         <p v-if="state.preview.candidate.suppressed" class="identity-warning">
           此身份曾被拒绝或解除；手动确认会允许再次关联。
@@ -277,6 +286,14 @@ async function run(action: () => Promise<void>) {
           @choose="view.choosePreference"
         />
         <div class="identity-actions">
+          <button
+            v-if="state.preview.canAttachToCurrent"
+            type="button"
+            :disabled="!view.canAttachToCurrent.value || historyBusy"
+            @click="run(() => view.decide('confirm', true))"
+          >
+            确认同一身份，补充网易云引用
+          </button>
           <button type="button" :disabled="!canConfirm" @click="run(() => view.decide('confirm'))">
             {{ state.preview.action === 'replace' ? '确认替换关联' : '确认关联' }}
           </button>

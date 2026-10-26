@@ -21,7 +21,12 @@ export function component(path: string, imports: Record<string, unknown>): Compo
   const require = createRequire(import.meta.url),
     module = { exports: {} as { default: Component } }
   new Function('require', 'module', 'exports', code)(
-    (name: string) => (Object.hasOwn(imports, name) ? imports[name] : require(name)),
+    (name: string) =>
+      Object.hasOwn(imports, name)
+        ? imports[name]
+        : name.endsWith('.vue')
+          ? { default: { render: () => null } }
+          : require(name),
     module,
     module.exports
   )

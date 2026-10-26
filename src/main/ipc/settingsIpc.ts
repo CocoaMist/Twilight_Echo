@@ -80,8 +80,11 @@ async function authorizeSettingsPathPatch(
 }
 
 export function registerSettingsIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('dialog:openFolder', async (event) => {
+  ipcMain.handle('dialog:openFolder', async (event, options?: { deferImport?: boolean }) => {
     assertTrustedIpcSender(event, 'dialog IPC')
+    if (options !== undefined && (!options || typeof options !== 'object' ||
+      Object.keys(options).some(key => key !== 'deferImport') || typeof options.deferImport !== 'boolean'))
+      throw new Error('Invalid folder picker options')
     const win = BrowserWindow.getFocusedWindow()
     if (!win) return null
     const lastLibraryFolder =
@@ -92,6 +95,10 @@ export function registerSettingsIpc(ipcMain: IpcMain): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const folder = await grantUserSelectedLibraryRoot(result.filePaths[0])
+    if (options?.deferImport) {
+      await updateAppSettings({ lastLibraryFolder: folder })
+      return folder
+    }
     const libraryFolders = await resolveAuthorizedLibraryRootSettings([
       ...runtime.appSettings.libraryFolders,
       folder

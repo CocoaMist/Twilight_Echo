@@ -291,7 +291,7 @@ test('refresh preserves an actual choice but clears it if membership disappears;
   view.dispose()
 })
 
-test('metadata invalidation clears cached introduction immediately, then shows an explicit clear instead of stale text', async () => {
+test('same-entity refresh retains the painted introduction while busy, then applies an explicit clear', async () => {
   const changed = deferred<EntityMetadataDetail>()
   let reads = 0
   const view = createEntityMetadataView(
@@ -299,7 +299,8 @@ test('metadata invalidation clears cached introduction immediately, then shows a
   )
   await view.setContext(target, 'en')
   const refreshing = view.refreshDetail()
-  assert.equal(view.state.value.detail, null)
+  assert.equal(view.state.value.detail?.introduction?.value, 'Introduction a')
+  assert.equal(view.state.value.detailLoading, true)
   changed.resolve({
     ...detail('a'),
     introduction: null,
@@ -309,6 +310,69 @@ test('metadata invalidation clears cached introduction immediately, then shows a
   assert.equal(view.state.value.detail!.introduction, null)
   assert.equal(view.state.value.detail!.override!.mode, 'clear')
   view.dispose()
+})
+
+test('reference refresh preserves selection and prose continuously, including repeated background revisions', async (t) => {
+  const changed = deferred<CatalogPage>()
+  let reads = 0
+  const view = createEntityMetadataView(api({ catalog: async () => ++reads === 1 ? page(['a']) : changed.promise }))
+  t.after(view.dispose)
+  await view.setContext(target, 'en')
+  const painted = view.state.value.detail
+  const states: typeof view.state.value[] = []
+  const { watch } = await import('vue')
+  const stop = watch(view.state, state => states.push(state), { flush: 'sync' })
+  t.after(stop)
+  const first = view.refresh()
+  const latest = view.refresh()
+  assert.equal(view.state.value.loading, true)
+  assert.equal(view.state.value.selected?.id, 'a')
+  assert.equal(view.state.value.detail, painted)
+  changed.resolve(page(['a']))
+  await Promise.all([first, latest])
+  assert.ok(states.every(state => state.selected?.id === 'a' && state.detail?.entityId === 'a'))
+  assert.equal(view.state.value.loading, false)
+  assert.equal(view.state.value.detailLoading, false)
+})
+
+test('retained external prose still expires while its replacement is pending', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 })
+  const changed = deferred<EntityMetadataDetail>()
+  const attribution = { provider: 'platform.ncm', externalId: '42', revision: '1', retrievedAt: 1,
+    url: 'https://example.com', license: '', licenseUrl: '', attribution: 'NCM' }
+  let reads = 0
+  const view = createEntityMetadataView(api({ detail: async id => ++reads > 1 ? changed.promise : ({
+    ...detail(id), introduction: { value: 'Temporary', language: 'en', origin: 'external', attribution },
+    facts: [{ field: 'introduction', value: 'Temporary', language: 'en', attribution,
+      usage: { display: true, cache: true, crossSource: true, export: false, expiresAt: 1010 } }]
+  }) }))
+  t.after(view.dispose)
+  await view.setContext(target, 'en')
+  const refreshing = view.refreshDetail()
+  t.mock.timers.tick(10)
+  assert.equal(view.state.value.detail?.introduction, null)
+  assert.equal(view.state.value.detailLoading, true)
+  changed.resolve(detail('a'))
+  await refreshing
+})
+
+test('settings changes withdraw policy-bound prose immediately instead of retaining its old permission', async (t) => {
+  const changed = deferred<EntityMetadataDetail>()
+  const snapshot = shallowRef({ epoch: 'one', catalogRevision: 1, libraryRevision: 1,
+    entityMetadataRevision: 1, settingsRevision: 1 })
+  let reads = 0
+  const view = createEntityMetadataView(api({ detail: async id => ++reads === 1 ? detail(id) : changed.promise }))
+  const readDetail = (): EntityMetadataDetail | null => view.state.value.detail
+  const stop = observeEntityMetadataView(view, { target: () => target, language: () => 'en', snapshot: () => snapshot.value })
+  t.after(() => { stop(); view.dispose() })
+  await tick()
+  assert.ok(view.state.value.detail?.introduction)
+  snapshot.value = { ...snapshot.value, settingsRevision: 2 }
+  await nextTick()
+  assert.equal(view.state.value.detail, null)
+  changed.resolve({ ...detail('a'), introduction: null })
+  await tick()
+  assert.equal(readDetail()?.introduction, null)
 })
 
 test('failed detail and stale pagination remain visible errors; explicit retry reads fresh context', async () => {
