@@ -84,6 +84,10 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      # Core-backed behavior tests launch the compiled utility services.
+      - name: Production build
+        run: pnpm run build
+
       - name: Test product behavior
         # Avoid Windows user TEMP aliases giving Vite fixtures multiple module identities.
         env:
@@ -121,9 +125,6 @@ jobs:
             ${{ runner.temp }}/duplicate-detection-benchmark.json
             ${{ runner.temp }}/duplicate-detection-benchmark.manifest.json
           if-no-files-found: warn
-
-      - name: Production build
-        run: pnpm run build
 
       - name: Test sandboxed Core window bridge
         run: node --test scripts/core-window-bridge.test.cjs

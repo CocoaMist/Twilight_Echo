@@ -228,6 +228,15 @@ test('required Windows CI runs complete product outcomes with native fixtures an
   // These checks already run inside test:product, and build includes typecheck.
   assert.doesNotMatch(workflow, /run: pnpm run (?:test:quality-policy|typecheck)\b/)
   assert.match(workflow, /product-quality-gate\.json/)
+  assert.equal(
+    (workflow.match(/name: Production build/g) ?? []).length,
+    1,
+    'CI should compile the production services once'
+  )
+  assert.ok(
+    workflow.indexOf('name: Production build') < workflow.indexOf('name: Test product behavior'),
+    'Core-backed behavior fixtures need compiled utility services before they start'
+  )
   for (const script of [
     'test:plugins',
     'test:playlist-lifecycle',
