@@ -7,7 +7,13 @@ import {
   type SourceVariant,
   type LogicalTrackModel
 } from './logicalTrackModel.ts'
-import type { UnifiedSearchSources } from './musicSearchSources.ts'
+import { extractTrackSearchSignals, type UnifiedSearchSources } from './musicSearchSources.ts'
+import { versionSourceKey } from './trackSourceIdentity.ts'
+import {
+  prepareSearchQuery,
+  scoreTrackSearchRelevance,
+  type SearchPersonalSignals
+} from './searchRelevance.ts'
 
 export interface UnifiedSearchProvider {
   id: string
@@ -85,6 +91,7 @@ export interface UnifiedSearchOptions {
   providers: UnifiedSearchProvider[]
   limit?: number
   offset?: number
+  getSearchSignals?: (track: Track) => SearchPersonalSignals | undefined
   searchProviderSongs: (
     providerId: string,
     keywords: string,
@@ -107,7 +114,7 @@ export function createUnifiedMusicSearch(
   identity: LogicalTrackModel,
   sources: UnifiedSearchSources
 ) {
-  const { buildLogicalTracks, clampReliability } = identity
+  const { buildLogicalTracks, clampReliability, preferredSourceKey } = identity
   const { compareSearchItems, searchUnifiedLocalPage, searchUnifiedNetworkPage, toSearchItem } =
     sources
   async function unifiedSearchSongs(options: UnifiedSearchOptions): Promise<UnifiedSearchResult> {
@@ -177,10 +184,65 @@ export function createUnifiedMusicSearch(
     await options.localSource?.confirm(local, options.signal)
     if (options.signal?.aborted) throw new DOMException('Search was cancelled', 'AbortError')
 
-    const items = [...local.items, ...network.items, ...providerItems].sort(compareSearchItems)
+    const rawItems = [...local.items, ...network.items, ...providerItems].sort(compareSearchItems)
+    const preparedQuery = prepareSearchQuery(query)
+    const logicalItems = buildLogicalMusicItemsFromSearchItems(rawItems)
+
+    const isPreferred = (track: Track): boolean =>
+      preferredSourceKey(track) === versionSourceKey(track)
+    const scoreTrack = (track: Track): number =>
+      scoreTrackSearchRelevance(track, preparedQuery, {
+        searchFileName: true,
+        signals: options.getSearchSignals?.(track) ?? extractTrackSearchSignals(track)
+      }).total
+
+    const groupMetaByTrack = new Map<Track, { preferred: boolean; score: number }>()
+    const groupMeta = new Map<LogicalMusicItem, { preferred: boolean; score: number }>()
+    for (const group of logicalItems) {
+      let preferred = false
+      let maxScore = -Infinity
+      for (const variant of group.variants) {
+        if (isPreferred(variant.track)) preferred = true
+        const s = scoreTrack(variant.track)
+        if (s > maxScore) maxScore = s
+      }
+      const meta = { preferred, score: Number.isFinite(maxScore) ? maxScore : 0 }
+      groupMeta.set(group, meta)
+      for (const variant of group.variants) {
+        groupMetaByTrack.set(variant.track, meta)
+      }
+    }
+
+    logicalItems.sort((left, right) => {
+      const leftMeta = groupMeta.get(left)!
+      const rightMeta = groupMeta.get(right)!
+      return (
+        Number(rightMeta.preferred) - Number(leftMeta.preferred) ||
+        rightMeta.score - leftMeta.score ||
+        compareSearchItems(
+          { kind: 'track', ...left.variants[0] },
+          { kind: 'track', ...right.variants[0] }
+        )
+      )
+    })
+
+    const items = [...rawItems].sort((left, right) => {
+      const leftMeta = groupMetaByTrack.get(left.track)
+      const rightMeta = groupMetaByTrack.get(right.track)
+      const leftPref = leftMeta ? leftMeta.preferred : isPreferred(left.track)
+      const rightPref = rightMeta ? rightMeta.preferred : isPreferred(right.track)
+      const leftScore = leftMeta ? leftMeta.score : scoreTrack(left.track)
+      const rightScore = rightMeta ? rightMeta.score : scoreTrack(right.track)
+      return (
+        Number(rightPref) - Number(leftPref) ||
+        rightScore - leftScore ||
+        compareSearchItems(left, right)
+      )
+    })
+
     return {
       items,
-      logicalItems: buildLogicalMusicItemsFromSearchItems(items),
+      logicalItems,
       health,
       total,
       hasMore,

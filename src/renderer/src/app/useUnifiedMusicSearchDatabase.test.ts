@@ -58,8 +58,10 @@ test('production unified search queries Core with an empty renderer, coalesces s
   assert.equal(search.items.value[0].track.id, 'local:200')
   assert.equal('filePath' in search.items.value[0].track, false)
   assert.equal(f.queries.length, 1)
+  // Keep this edit inside the same relevance window; a longer title may
+  // legitimately move outside the deep page under the relevance ranking.
   const saved = f.db.patchTracks([
-    { id: 'local:210', expectedVersion: 1, patch: { title: '晴天 0210 edited' } }
+    { id: 'local:210', expectedVersion: 1, patch: { title: '晴天 021X' } }
   ])
   for (let i = 0; i < 500; i++) f.publish({ libraryRevision: saved.revision })
   for (let i = 0; i < 50 && (search.loading.value || f.queries.length < 2); i++) await tick()
@@ -68,7 +70,7 @@ test('production unified search queries Core with an empty renderer, coalesces s
   assert.equal((f.queries[1].payload as { offset: number }).offset, 200)
   assert.equal(
     search.items.value.find((item) => item.track.id === 'local:210')?.track.title,
-    '晴天 0210 edited'
+    '晴天 021X'
   )
   unmounts.splice(0).forEach((unmount) => unmount())
   assert.equal(search.items.value.length, 0)

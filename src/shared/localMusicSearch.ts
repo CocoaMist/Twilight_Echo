@@ -6,6 +6,7 @@ import type {
 } from './providerSearch.ts'
 import { getTrackSearchBlob } from './trackSearchText.ts'
 import { getPinyinInitials } from './pinyinInitials.ts'
+import { SymSpellIndex, getMaxSymSpellTolerance } from './searchRelevance.ts'
 
 export interface LocalAlbumSearchItem {
   id?: string
@@ -123,34 +124,48 @@ export function searchLocalStreamingAlbums(
 ): { albums: MediaProviderAlbumSummary[]; total: number } {
   const queries = keywords.trim().split(/\s+/u).map(normalizeLocalStreamingQuery).filter(Boolean)
   if (!queries.length) return { albums: [], total: 0 }
-  const result = collectPagedMatches(
-    albums,
-    keywords,
-    limit,
-    offset,
-    (album) => {
-      if (!album.id) return false
-      let text = albumSearchText.get(album)
-      if (text === undefined) {
-        text = [
-          normalizeLocalStreamingQuery(album.name),
-          normalizeLocalStreamingQuery(album.artist ?? ''),
-          getPinyinInitials(album.name),
-          getPinyinInitials(album.artist ?? '')
-        ].join('\u0000')
-        albumSearchText.set(album, text)
-      }
-      return queries.every((query) => text.includes(query))
-    },
-    (album): MediaProviderAlbumSummary => ({
-      id: album.id!,
-      name: album.name,
-      artist: album.artist,
-      cover: album.cover,
-      coverSource: album.coverSource,
-      trackCount: album.trackCount
-    })
-  )
+  const runSearch = (activeQueries: string[]) =>
+    collectPagedMatches(
+      albums,
+      keywords,
+      limit,
+      offset,
+      (album) => {
+        if (!album.id) return false
+        let text = albumSearchText.get(album)
+        if (text === undefined) {
+          text = [
+            normalizeLocalStreamingQuery(album.name),
+            normalizeLocalStreamingQuery(album.artist ?? ''),
+            getPinyinInitials(album.name),
+            getPinyinInitials(album.artist ?? '')
+          ].join('\u0000')
+          albumSearchText.set(album, text)
+        }
+        return activeQueries.every((query) => text.includes(query))
+      },
+      (album): MediaProviderAlbumSummary => ({
+        id: album.id!,
+        name: album.name,
+        artist: album.artist,
+        cover: album.cover,
+        coverSource: album.coverSource,
+        trackCount: album.trackCount
+      })
+    )
+  let result = runSearch(queries)
+  if (result.total === 0 && queries.some((q) => getMaxSymSpellTolerance(q) > 0)) {
+    const symSpell = new SymSpellIndex()
+    for (const album of albums) {
+      if (!album.id) continue
+      symSpell.addText(album.name, 3)
+      if (album.artist) symSpell.addText(album.artist, 2)
+    }
+    const suggestion = symSpell.suggestQuery(keywords)
+    if (suggestion) {
+      result = runSearch(suggestion.tokens)
+    }
+  }
   return { albums: result.items, total: result.total }
 }
 
@@ -163,19 +178,31 @@ export function searchLocalStreamingArtists(
   const query = normalizeLocalStreamingQuery(keywords.trim())
   if (!query) return { artists: [], total: 0 }
 
-  const result = collectPagedMatches(
-    artists,
-    query,
-    limit,
-    offset,
-    (artist, q) => normalizeLocalStreamingQuery(artist.name).includes(q),
-    (artist): MediaProviderArtistSummary => ({
-      id: artist.name,
-      name: artist.name,
-      picUrl: artist.cover,
-      musicSize: artist.trackCount
-    })
-  )
+  const runSearch = (activeQuery: string) =>
+    collectPagedMatches(
+      artists,
+      activeQuery,
+      limit,
+      offset,
+      (artist, q) => normalizeLocalStreamingQuery(artist.name).includes(q),
+      (artist): MediaProviderArtistSummary => ({
+        id: artist.name,
+        name: artist.name,
+        picUrl: artist.cover,
+        musicSize: artist.trackCount
+      })
+    )
+  let result = runSearch(query)
+  if (result.total === 0 && getMaxSymSpellTolerance(query) > 0) {
+    const symSpell = new SymSpellIndex()
+    for (const artist of artists) {
+      symSpell.addText(artist.name, 3)
+    }
+    const suggestion = symSpell.suggestQuery(keywords)
+    if (suggestion) {
+      result = runSearch(normalizeLocalStreamingQuery(suggestion.correctedQuery))
+    }
+  }
 
   return { artists: result.items, total: result.total }
 }
