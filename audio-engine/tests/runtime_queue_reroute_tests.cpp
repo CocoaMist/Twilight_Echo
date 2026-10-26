@@ -5161,6 +5161,7 @@ struct FFmpegDecoder::Impl {
   void* interruptContext = nullptr;
   bool opened = false;
   FFmpegDecoder::ResamplerQuality quality = FFmpegDecoder::ResamplerQuality::Native;
+  FFmpegDecoder::ResamplerPhase phase = FFmpegDecoder::ResamplerPhase::Linear;
 
   bool injectedReadFailure(std::string* error) {
     if (positionFrames < 4096 || profile.stream.source.find("read-failure") == std::string::npos) return false;
@@ -5238,6 +5239,14 @@ bool FFmpegDecoder::setOutputFormat(const AudioFormat& format, std::string* erro
 
 void FFmpegDecoder::setResamplerQuality(ResamplerQuality quality) {
   impl_->quality = quality;
+}
+
+void FFmpegDecoder::setResamplerPhase(ResamplerPhase phase) {
+  impl_->phase = phase;
+}
+
+FFmpegDecoder::ResamplerPhase FFmpegDecoder::resamplerPhase() const {
+  return impl_->phase;
 }
 
 FFmpegDecoder::ResamplerEngine FFmpegDecoder::resamplerEngine() const {

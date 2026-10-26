@@ -88,7 +88,9 @@ export const CORE_PLAYBACK_FIELDS = [
   'autoMixStrategy',
   'autoMixPlanId',
   'autoMixOutputSeconds',
-  'autoMixNextSourceSeconds'
+  'autoMixNextSourceSeconds',
+  'renderPerformance',
+  'clipCount'
 ] as const satisfies readonly (keyof PlaybackInfo)[]
 export type CoreUpcomingTrack = Pick<
   AudioEngineQueueItem,

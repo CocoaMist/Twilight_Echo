@@ -6,6 +6,7 @@ import {
   mergeDspOutputStage,
   normalizeDspScenes,
   resolveDspScene,
+  resolveEffectiveTargetSampleRate,
   type DspGraphConfig,
   type DspGraphStatus,
   type DspOutputStageConfig,
@@ -257,19 +258,33 @@ export class DspOrchestrator {
   }
 
   refreshResolvedDspScene() {
+    const context = this.dspSceneContext()
     const resolution = resolveDspScene(
       this.dspScenes,
-      this.dspSceneContext(),
+      context,
       this.dspPinnedSceneId
     )
     this.activeDspSceneId = resolution.scene?.id ?? null
     this.activeDspGraph = this.outputStageOverride
       ? { ...resolution.graph, outputStage: this.outputStageOverride }
       : resolution.graph
+    const rateMode = this.activeDspGraph.outputStage.targetSampleRateMode
+    if (rateMode === 'max-pcm' || rateMode === 'power-of-2') {
+      this.activeDspGraph = {
+        ...this.activeDspGraph,
+        outputStage: {
+          ...this.activeDspGraph.outputStage,
+          targetSampleRate: resolveEffectiveTargetSampleRate(
+            this.activeDspGraph.outputStage,
+            context.sampleRate
+          )
+        }
+      }
+    }
     const outputConfig = this.host.getOutputConfig?.()
     if (
       outputConfig?.playbackPolicy === 'continuity-first' &&
-      this.dspSceneContext().sourceKind === 'pcm'
+      context.sourceKind === 'pcm'
     ) {
       this.activeDspGraph = {
         ...this.activeDspGraph,

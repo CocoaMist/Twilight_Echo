@@ -1688,9 +1688,11 @@ TAE_Result TwilightAudioEngine::applyDspState(
 
   const DspConfig nextConfig = DspChain::parseConfigJson(processingJson);
   DspConfig previousConfig;
+  std::string previousGraphJson;
   {
     std::lock_guard lock(mutex_);
     previousConfig = dspConfig_;
+    previousGraphJson = dspGraphJson_;
   }
 
   std::string error;
@@ -1701,6 +1703,27 @@ TAE_Result TwilightAudioEngine::applyDspState(
         "dsp-state");
     return TAE_RESULT_INVALID_ARGUMENT;
   }
+
+  auto outputStageChangedForPcmReroute = [](const std::string& prevState, const std::string& nextState) {
+    auto extractStage = [](const std::string& json) {
+      const std::string graph = json_utils::fieldObject(json, "graph");
+      const std::string root = graph.empty() ? json : graph;
+      return json_utils::fieldObject(root, "outputStage");
+    };
+    const std::string prevStage = extractStage(prevState);
+    const std::string nextStage = extractStage(nextState);
+    const int prevRate = static_cast<int>(std::clamp(
+        json_utils::fieldNumber(prevStage, "targetSampleRate").value_or(0.0), 0.0, 768000.0));
+    const int nextRate = static_cast<int>(std::clamp(
+        json_utils::fieldNumber(nextStage, "targetSampleRate").value_or(0.0), 0.0, 768000.0));
+    if (prevRate != nextRate) return true;
+    const std::string prevQuality = json_utils::fieldString(prevStage, "resamplerQuality").value_or("native");
+    const std::string nextQuality = json_utils::fieldString(nextStage, "resamplerQuality").value_or("native");
+    if (prevQuality != nextQuality) return true;
+    const std::string prevPhase = json_utils::fieldString(prevStage, "resamplerPhase").value_or("linear");
+    const std::string nextPhase = json_utils::fieldString(nextStage, "resamplerPhase").value_or("linear");
+    return prevPhase != nextPhase;
+  };
 
   std::string rerouteReason;
   double reroutePosition = 0.0;
@@ -1753,6 +1776,27 @@ TAE_Result TwilightAudioEngine::applyDspState(
           reroutePosition = info_.positionSeconds;
           rerouteState = info_.state;
         }
+      }
+      const int nextTargetRate = [&]() {
+        const std::string graph = json_utils::fieldObject(stateJson, "graph");
+        const std::string root = graph.empty() ? stateJson : graph;
+        const std::string stage = json_utils::fieldObject(root, "outputStage");
+        return static_cast<int>(std::clamp(
+            json_utils::fieldNumber(stage, "targetSampleRate").value_or(0.0), 0.0, 768000.0));
+      }();
+      const int desiredPcmRate = nextTargetRate > 0 ? nextTargetRate : info_.sourceSampleRate;
+      const bool exclusiveRateMismatch =
+          (info_.outputBackend == "asio" || info_.outputBackend == "wasapi-exclusive" ||
+           info_.outputBackend == "coreaudio-exclusive" || info_.outputInfo.exclusive) &&
+          !outputConfig_.continuityFirst &&
+          desiredPcmRate > 0 && info_.outputSampleRate > 0 &&
+          info_.outputSampleRate != desiredPcmRate;
+      if (rerouteReason.empty() &&
+          (!info_.isDsd || info_.dsdMode == "pcm") &&
+          (outputStageChangedForPcmReroute(previousGraphJson, stateJson) || exclusiveRateMismatch)) {
+        rerouteReason = "DSP output stage changed";
+        reroutePosition = info_.positionSeconds;
+        rerouteState = info_.state;
       }
       if (rerouteReason.empty() &&
           !shouldReroutePipelineLocked(&rerouteReason, &reroutePosition, &rerouteState)) {
@@ -1810,8 +1854,12 @@ TAE_Result TwilightAudioEngine::setOutputConfig(const std::string& outputConfigJ
       publishStateLocked();
       return TAE_RESULT_OK;
     }
-    routePending = (outputRoutePending_ || outputConfig_.continuityFirst != parsed.continuityFirst ||
-                    (parsed.continuityFirst && outputConfig_.continuitySampleRate != parsed.continuitySampleRate)) &&
+    const bool outputTopologyChanged =
+        outputConfig_.continuityFirst != parsed.continuityFirst ||
+        (parsed.continuityFirst && outputConfig_.continuitySampleRate != parsed.continuitySampleRate) ||
+        outputConfig_.routingMode != parsed.routingMode ||
+        outputConfig_.pcmToDsdMode != parsed.pcmToDsdMode;
+    routePending = (outputRoutePending_ || outputTopologyChanged) &&
                    pipeline_ && info_.state != PlaybackState::Stopped;
   }
   if (routePending && pipeline_) pipeline_->stop();

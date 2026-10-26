@@ -27,6 +27,7 @@ class DspChain {
   void prepare(const AudioFormat& format);
   void setTrackContext(const DspTrackContext& context);
   void process(float* samples, size_t frameCount);
+  void processDouble(double* samples, size_t frameCount);
   void reset();
   DspStatus status();
   DspConfig config() const;

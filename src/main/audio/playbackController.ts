@@ -1818,6 +1818,21 @@ export class PlaybackController {
     outputInfo.recoveryCount = canonicalOutput?.recoveryCount ?? info.recoveryCount ?? 0
     outputInfo.latencyInfo = latencyInfo
     outputInfo.diagnostics = diagnostics
+    const renderPerformance =
+      canonicalOutput?.renderPerformance ??
+      info.renderPerformance ??
+      this.playbackInfo.outputInfo?.renderPerformance
+    if (renderPerformance) {
+      outputInfo.renderPerformance = renderPerformance
+    }
+    const rawClipCount =
+      info.clipCount ??
+      canonicalOutput?.nativeDsp?.graph?.meter?.clipCount ??
+      this.playbackInfo.clipCount
+    const clipCount =
+      typeof rawClipCount === 'number' && Number.isFinite(rawClipCount)
+        ? Math.max(0, Math.trunc(rawClipCount))
+        : undefined
     const analysisStatus = this.host.getAutoMixAnalysisStatus?.()
     const showAnalysisStatus =
       info.autoMixMode &&
@@ -1890,6 +1905,8 @@ export class PlaybackController {
       streamTitle: typeof info.streamTitle === 'string' ? info.streamTitle : '',
       perfectReason: outputInfo.perfectReason,
       nativePlaybackActive: this.nativePlaybackActive,
+      ...(renderPerformance ? { renderPerformance } : {}),
+      ...(clipCount !== undefined ? { clipCount } : {}),
       ...(showAnalysisStatus
         ? { autoMixState: analysisStatus.state, autoMixReason: analysisStatus.reason }
         : {})

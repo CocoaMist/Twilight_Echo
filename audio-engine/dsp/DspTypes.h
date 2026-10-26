@@ -101,6 +101,20 @@ enum class DspResamplerQuality {
   SoxrVhq
 };
 
+enum class DspResamplerPhase {
+  Linear,
+  Minimum,
+  LinearSmooth,
+  MinimumSmooth
+};
+
+enum class DspTargetSampleRateMode {
+  Device,
+  Fixed,
+  MaxPcm,
+  PowerOf2
+};
+
 enum class DspDitherMode {
   Off,
   Tpdf,
@@ -269,8 +283,12 @@ struct DspConfig {
 
   bool meterEnabled = false;
 
+  bool headroomEnabled = false;
+  double headroomGainDb = -3.0;
   int outputTargetSampleRate = 0;
+  DspTargetSampleRateMode targetSampleRateMode = DspTargetSampleRateMode::Device;
   DspResamplerQuality resamplerQuality = DspResamplerQuality::Native;
+  DspResamplerPhase resamplerPhase = DspResamplerPhase::Linear;
   DspDitherMode ditherMode = DspDitherMode::Off;
   bool outputSafetyClamp = true;
 };
@@ -282,6 +300,8 @@ struct DspTrackContext {
 
 struct DspStatus {
   bool dspActive = false;
+  bool headroomActive = false;
+  double headroomGainDb = 0.0;
   bool replayGainActive = false;
   bool loudnormActive = false;
   bool eqActive = false;

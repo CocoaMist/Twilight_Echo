@@ -46,6 +46,46 @@ std::string errorJson(const std::string& message, bool available) {
 }
 
 #if defined(TAE_HAS_FFMPEG) && defined(TAE_HAS_EBUR128)
+constexpr size_t kWaveformBins = 2000;
+constexpr size_t kEnvelopeBlockFrames = 256;
+constexpr float kSilenceThresholdLinear = 0.00025118864f; // -72 dBFS
+
+std::string encodeBase64(const std::vector<uint8_t>& bytes) {
+  static constexpr char kTable[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((bytes.size() + 2) / 3) * 4);
+  for (size_t i = 0; i < bytes.size(); i += 3) {
+    const uint32_t b0 = bytes[i];
+    const uint32_t b1 = (i + 1 < bytes.size()) ? bytes[i + 1] : 0U;
+    const uint32_t b2 = (i + 2 < bytes.size()) ? bytes[i + 2] : 0U;
+    const uint32_t triple = (b0 << 16U) | (b1 << 8U) | b2;
+    out.push_back(kTable[(triple >> 18U) & 0x3FU]);
+    out.push_back(kTable[(triple >> 12U) & 0x3FU]);
+    out.push_back((i + 1 < bytes.size()) ? kTable[(triple >> 6U) & 0x3FU] : '=');
+    out.push_back((i + 2 < bytes.size()) ? kTable[triple & 0x3FU] : '=');
+  }
+  return out;
+}
+
+std::string buildWaveformPeaksBase64(const std::vector<float>& blockPeaks) {
+  if (blockPeaks.empty()) return {};
+  std::vector<uint8_t> quantized(kWaveformBins, 0);
+  const size_t n = blockPeaks.size();
+  for (size_t bin = 0; bin < kWaveformBins; ++bin) {
+    const size_t startIdx = (bin * n) / kWaveformBins;
+    const size_t endIdx = std::max(startIdx + 1, ((bin + 1) * n) / kWaveformBins);
+    float maxPeak = 0.0f;
+    for (size_t i = startIdx; i < endIdx && i < n; ++i) {
+      maxPeak = std::max(maxPeak, blockPeaks[i]);
+    }
+    const float clamped = std::clamp(maxPeak, 0.0f, 1.0f);
+    const float perceptual = std::sqrt(clamped);
+    quantized[bin] = static_cast<uint8_t>(std::clamp(std::lround(perceptual * 255.0f), 0L, 255L));
+  }
+  return encodeBase64(quantized);
+}
+
 struct EburDeleter {
   void operator()(ebur128_state* state) const { ebur128_destroy(&state); }
 };
@@ -57,6 +97,10 @@ struct Measurement {
   size_t frames = 0;
   double integratedLufs = 0.0;
   double truePeakDb = 0.0;
+  double loudnessRangeLu = 0.0;
+  double noiseStartMs = 0.0;
+  double noiseEndMs = 0.0;
+  std::string waveformPeaks;
 };
 
 bool measureSegment(const std::string& source, double start, double end, double limit,
@@ -89,9 +133,10 @@ bool measureSegment(const std::string& source, double start, double end, double 
   }
   result.sampleRate = std::max(1, format.sampleRate);
   result.channels = std::clamp(format.channelCount, 1, 8);
-  result.state.reset(ebur128_init(static_cast<unsigned int>(result.channels),
-                                static_cast<unsigned long>(result.sampleRate),
-                                EBUR128_MODE_I | EBUR128_MODE_TRUE_PEAK));
+  result.state.reset(ebur128_init(
+      static_cast<unsigned int>(result.channels),
+      static_cast<unsigned long>(result.sampleRate),
+      EBUR128_MODE_I | EBUR128_MODE_TRUE_PEAK | EBUR128_MODE_LRA));
   if (!result.state) {
     error = "failed to initialize libebur128";
     return false;
@@ -114,6 +159,13 @@ bool measureSegment(const std::string& source, double start, double end, double 
   }
   constexpr size_t kChunkFrames = 4096;
   std::vector<float> chunk(kChunkFrames * static_cast<size_t>(result.channels));
+  std::vector<float> blockPeaks;
+  blockPeaks.reserve(65536);
+  float currentBlockPeak = 0.0f;
+  size_t currentBlockFrames = 0;
+  bool foundNonSilent = false;
+  size_t firstNonSilentFrame = 0;
+  size_t lastNonSilentFrame = 0;
   size_t skipped = 0;
   while (skipped < startFrame) {
     error.clear();
@@ -126,6 +178,7 @@ bool measureSegment(const std::string& source, double start, double end, double 
     skipped += read;
     if (!graph.empty()) chain.process(chunk.data(), read);
   }
+  const size_t chCount = static_cast<size_t>(result.channels);
   while (!decoder.eof()) {
     if (maxFrames > 0 && result.frames >= maxFrames) break;
     const size_t want = maxFrames > 0 ? std::min(kChunkFrames, maxFrames - result.frames) : kChunkFrames;
@@ -135,11 +188,35 @@ bool measureSegment(const std::string& source, double start, double end, double 
     if (read == 0) break;
     if (!graph.empty()) {
       chain.process(chunk.data(), read);
-      for (size_t sample = 0; sample < read * static_cast<size_t>(result.channels); ++sample) {
+      for (size_t sample = 0; sample < read * chCount; ++sample) {
         if (!std::isfinite(chunk[sample]) || std::abs(chunk[sample]) >= 0.999999f) {
           error = "processed signal clips; reduce EQ preamp before matching";
           return false;
         }
+      }
+    }
+    for (size_t f = 0; f < read; ++f) {
+      float framePeak = 0.0f;
+      const size_t base = f * chCount;
+      for (size_t c = 0; c < chCount; ++c) {
+        const float v = chunk[base + c];
+        if (std::isfinite(v)) {
+          framePeak = std::max(framePeak, std::abs(v));
+        }
+      }
+      if (framePeak >= kSilenceThresholdLinear) {
+        const size_t globalFrame = result.frames + f;
+        if (!foundNonSilent) {
+          foundNonSilent = true;
+          firstNonSilentFrame = globalFrame;
+        }
+        lastNonSilentFrame = globalFrame;
+      }
+      currentBlockPeak = std::max(currentBlockPeak, framePeak);
+      if (++currentBlockFrames >= kEnvelopeBlockFrames) {
+        blockPeaks.push_back(currentBlockPeak);
+        currentBlockPeak = 0.0f;
+        currentBlockFrames = 0;
       }
     }
     if (ebur128_add_frames_float(result.state.get(), chunk.data(), read) != EBUR128_SUCCESS) {
@@ -147,6 +224,9 @@ bool measureSegment(const std::string& source, double start, double end, double 
       return false;
     }
     result.frames += read;
+  }
+  if (currentBlockFrames > 0) {
+    blockPeaks.push_back(currentBlockPeak);
   }
   if (end > 0.0 && result.frames < maxFrames) {
     error = "file ended before the requested CUE boundary";
@@ -157,6 +237,10 @@ bool measureSegment(const std::string& source, double start, double end, double 
       !std::isfinite(result.integratedLufs)) {
     error = "not enough non-silent PCM for integrated loudness measurement";
     return false;
+  }
+  double lra = 0.0;
+  if (ebur128_loudness_range(result.state.get(), &lra) == EBUR128_SUCCESS && std::isfinite(lra)) {
+    result.loudnessRangeLu = std::max(0.0, lra);
   }
   double peak = 0.0;
   for (int channel = 0; channel < result.channels; ++channel) {
@@ -169,16 +253,37 @@ bool measureSegment(const std::string& source, double start, double end, double 
     peak = std::max(peak, channelPeak);
   }
   result.truePeakDb = peak <= 1.0e-12 ? -120.0 : 20.0 * std::log10(peak);
+  if (foundNonSilent) {
+    result.noiseStartMs =
+        std::round((static_cast<double>(firstNonSilentFrame) * 1000.0) / result.sampleRate);
+    result.noiseEndMs =
+        std::round((static_cast<double>(lastNonSilentFrame + 1) * 1000.0) / result.sampleRate);
+  } else {
+    result.noiseStartMs = 0.0;
+    result.noiseEndMs =
+        std::round((static_cast<double>(result.frames) * 1000.0) / result.sampleRate);
+  }
+  if (graph.empty()) {
+    result.waveformPeaks = buildWaveformPeaksBase64(blockPeaks);
+  }
   return true;
 }
 
 void writeMeasurement(std::ostream& json, double lufs, double peakDb, const Measurement* track = nullptr,
-                      bool processed = false) {
+                      bool processed = false, double albumLra = 0.0) {
   json << "{\"integratedLufs\":" << std::round(lufs * 1000.0) / 1000.0
        << ",\"truePeakDb\":" << std::round(peakDb * 1000.0) / 1000.0;
   if (track) {
+    json << ",\"loudnessRangeLu\":" << std::round(track->loudnessRangeLu * 1000.0) / 1000.0
+         << ",\"noiseStartMs\":" << static_cast<int64_t>(track->noiseStartMs)
+         << ",\"noiseEndMs\":" << static_cast<int64_t>(track->noiseEndMs);
+    if (!track->waveformPeaks.empty()) {
+      json << ",\"waveformPeaks\":\"" << json_utils::escape(track->waveformPeaks) << "\"";
+    }
     json << ",\"sampleRate\":" << track->sampleRate << ",\"channels\":" << track->channels
          << ",\"analyzedFrames\":" << track->frames;
+  } else if (std::isfinite(albumLra) && albumLra >= 0.0) {
+    json << ",\"loudnessRangeLu\":" << std::round(albumLra * 1000.0) / 1000.0;
   }
   json << ",\"source\":\"analyzed\",\"analyzedAt\":\"" << isoTimestampUtc()
        << "\",\"algorithmVersion\":" << kAlgorithmVersion
@@ -260,7 +365,12 @@ std::string analyzeLoudnessJson(const std::string& source, const std::string& op
     double lufs = 0.0;
     if (ebur128_loudness_global_multiple(states.data(), states.size(), &lufs) != EBUR128_SUCCESS ||
         !std::isfinite(lufs)) return errorJson("failed to compute complete album loudness", true);
-    writeMeasurement(json, lufs, peakDb);
+    double albumLra = 0.0;
+    if (ebur128_loudness_range_multiple(states.data(), states.size(), &albumLra) != EBUR128_SUCCESS ||
+        !std::isfinite(albumLra)) {
+      albumLra = 0.0;
+    }
+    writeMeasurement(json, lufs, peakDb, nullptr, false, std::max(0.0, albumLra));
   } else {
     json << "null";
   }

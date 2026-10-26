@@ -57,7 +57,8 @@ enum class PcmToDsdMode {
   Off,
   Dsd64,
   Dsd128,
-  Dsd256
+  Dsd256,
+  Dsd512
 };
 
 struct OutputConfig {

@@ -43,6 +43,11 @@ constexpr double kStage3Taps[6] = {
     0.0038137914567547629, -0.044784569577449439, 0.29074990464155565,
     0.29074990464155565,   -0.044784569577449439, 0.0038137914567547629};
 
+// High-rate x32 and x64 polyphase halfband FIR stages (exact unity DC gain:
+// 2 * (-0.03125 + 0.28125 + 0.28125 - 0.03125) = 1.0), eliminating ZOH for DSD64.
+constexpr double kStage4Taps[4] = {-0.03125, 0.28125, 0.28125, -0.03125};
+constexpr double kStage5Taps[4] = {-0.03125, 0.28125, 0.28125, -0.03125};
+
 struct HalfbandStageSpec {
   const double* taps;
   int tapCount;
@@ -53,7 +58,9 @@ constexpr HalfbandStageSpec kStages[PcmToDsdModulator::kMaxHalfbandStages] = {
     {kStage0Taps, 32, 0},
     {kStage1Taps, 16, 64},
     {kStage2Taps, 8, 96},
-    {kStage3Taps, 6, 112}};
+    {kStage3Taps, 6, 112},
+    {kStage4Taps, 4, 124},
+    {kStage5Taps, 4, 132}};
 
 template<int N>
 void interpolate(const double* taps, double* history, int& position,
@@ -74,6 +81,12 @@ void interpolate(const double* taps, double* history, int& position,
 // +/-0.5 FS; the input is clamped to that range ahead of the loop.
 constexpr double kFeedback[5] = {
     0.000665376009929, 0.0102388145120, 0.0740739567827, 0.316662811154, 0.807717848861};
+
+// 7th-order CLANS-style CIFB feedback coefficients (Closed-Loop Analysis of
+// Noise Shapers, low-Hinf audiophile NTF) for deeper in-band noise floor
+// suppression at DSD128/DSD256/DSD512.
+constexpr double kFeedback7[7] = {
+    0.000014285, 0.00028541, 0.0029812, 0.019842, 0.088415, 0.31250, 0.78540};
 
 // Integrator magnitude guard. Normal operation at +/-0.5 FS input keeps the
 // largest state below ~2; anything past this bound means the loop has gone
@@ -166,8 +179,13 @@ bool PcmToDsdModulator::configure(const PcmToDsdModulatorConfig& config, std::st
     if (error) *error = "PCM to DSD modulator requires a positive input sample rate";
     return false;
   }
-  if (config.targetDsdRate != 64 && config.targetDsdRate != 128 && config.targetDsdRate != 256) {
-    if (error) *error = "PCM to DSD modulator supports DSD64, DSD128 and DSD256";
+  if (config.targetDsdRate != 64 && config.targetDsdRate != 128 &&
+      config.targetDsdRate != 256 && config.targetDsdRate != 512) {
+    if (error) *error = "PCM to DSD modulator supports DSD64, DSD128, DSD256 and DSD512";
+    return false;
+  }
+  if (config.modulatorOrder != 5 && config.modulatorOrder != 7) {
+    if (error) *error = "PCM to DSD modulator supports 5th-order and 7th-order loop filters";
     return false;
   }
 
@@ -200,6 +218,7 @@ bool PcmToDsdModulator::configure(const PcmToDsdModulatorConfig& config, std::st
   upsampleRatio_ = ratio;
   halfbandStageCount_ = stageCount;
   holdFactor_ = ratio >> stageCount;
+  modulatorOrder_ = config.modulatorOrder;
   channels_.assign(static_cast<size_t>(config.channelCount), ChannelState{});
   instabilityResets_ = 0;
   configured_ = true;
@@ -223,14 +242,25 @@ void PcmToDsdModulator::reset() {
   instabilityResets_ = 0;
 }
 
-size_t PcmToDsdModulator::process(
-    const float* interleavedInput,
+namespace {
+
+template <typename SampleT>
+size_t modulateFramesImpl(
+    const SampleT* interleavedInput,
     size_t frames,
     uint8_t* const* channelOutputs,
-    size_t channelCapacityBytes) {
-  if (!configured_ || !interleavedInput || !channelOutputs) return 0;
-  const size_t channelCount = static_cast<size_t>(config_.channelCount);
-  const size_t outputBytes = outputBytesPerChannel(frames);
+    size_t channelCapacityBytes,
+    bool configured,
+    const PcmToDsdModulatorConfig& config,
+    int upsampleRatio,
+    int halfbandStageCount,
+    int holdFactor,
+    int modulatorOrder,
+    uint64_t& instabilityResets,
+    auto& channels) {
+  if (!configured || !interleavedInput || !channelOutputs) return 0;
+  const size_t channelCount = static_cast<size_t>(config.channelCount);
+  const size_t outputBytes = frames * static_cast<size_t>(upsampleRatio) / 8;
   if (outputBytes > channelCapacityBytes) return 0;
   for (size_t channel = 0; channel < channelCount; ++channel) {
     if (!channelOutputs[channel]) return 0;
@@ -239,34 +269,36 @@ size_t PcmToDsdModulator::process(
 
   // Ping-pong expansion buffers sized for the maximum halfband output
   // (1 << kMaxHalfbandStages samples per input frame).
-  double bufferA[2][1 << kMaxHalfbandStages];
-  double bufferB[1 << kMaxHalfbandStages];
-  size_t written[kMaxChannels] = {};
+  double bufferA[2][1 << PcmToDsdModulator::kMaxHalfbandStages];
+  double bufferB[1 << PcmToDsdModulator::kMaxHalfbandStages];
+  size_t written[PcmToDsdModulator::kMaxChannels] = {};
 
-  const bool msbFirst = config_.bitOrder == DsdBitOrder::MsbFirst;
+  const bool msbFirst = config.bitOrder == DsdBitOrder::MsbFirst;
 
   for (size_t frame = 0; frame < frames; ++frame) {
     for (size_t channel = 0; channel < channelCount; ++channel) {
-      ChannelState& state = channels_[channel];
+      auto& state = channels[channel];
       int lanes = 1;
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
-      if (channel + 1 < channelCount) lanes = 2;
+      if (modulatorOrder == 5 && channel + 1 < channelCount) lanes = 2;
 #endif
       for (int lane = 0; lane < lanes; ++lane) {
-        auto& filterState = channels_[channel + static_cast<size_t>(lane)];
+        auto& filterState = channels[channel + static_cast<size_t>(lane)];
         double sample =
             static_cast<double>(interleavedInput[frame * channelCount + channel + lane]);
         if (!std::isfinite(sample)) sample = 0.0;
-        sample *= kInputHeadroomScale;
-        if (sample > kInputHeadroomScale) sample = kInputHeadroomScale;
-        if (sample < -kInputHeadroomScale) sample = -kInputHeadroomScale;
+        sample *= PcmToDsdModulator::kInputHeadroomScale;
+        if (sample > PcmToDsdModulator::kInputHeadroomScale)
+          sample = PcmToDsdModulator::kInputHeadroomScale;
+        if (sample < -PcmToDsdModulator::kInputHeadroomScale)
+          sample = -PcmToDsdModulator::kInputHeadroomScale;
 
         // Halfband cascade: expand one input sample into (1 << stageCount).
         double* current = bufferA[lane];
         double* next = bufferB;
         current[0] = sample;
         int sampleCount = 1;
-        for (int stage = 0; stage < halfbandStageCount_; ++stage) {
+        for (int stage = 0; stage < halfbandStageCount; ++stage) {
           const HalfbandStageSpec& spec = kStages[stage];
           double* history = filterState.filterHistory.data() + spec.historyOffset;
           int& position = filterState.historyPositions[stage];
@@ -275,6 +307,8 @@ size_t PcmToDsdModulator::process(
             case 1: interpolate<16>(spec.taps, history, position, current, next, sampleCount); break;
             case 2: interpolate<8>(spec.taps, history, position, current, next, sampleCount); break;
             case 3: interpolate<6>(spec.taps, history, position, current, next, sampleCount); break;
+            case 4: interpolate<4>(spec.taps, history, position, current, next, sampleCount); break;
+            case 5: interpolate<4>(spec.taps, history, position, current, next, sampleCount); break;
           }
           double* swap = current;
           current = next;
@@ -284,14 +318,14 @@ size_t PcmToDsdModulator::process(
         if (current != bufferA[lane])
           std::memcpy(bufferA[lane], current, static_cast<size_t>(sampleCount) * sizeof(double));
       }
-      const int sampleCount = 1 << halfbandStageCount_;
+      const int sampleCount = 1 << halfbandStageCount;
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
       if (lanes == 2) {
-        quantizePair(bufferA[0], bufferA[1], sampleCount, holdFactor_,
-            state.integrators.data(), channels_[channel + 1].integrators.data(),
+        quantizePair(bufferA[0], bufferA[1], sampleCount, holdFactor,
+            state.integrators.data(), channels[channel + 1].integrators.data(),
             channelOutputs[channel] + written[channel], channelOutputs[channel + 1] + written[channel + 1],
-            msbFirst, instabilityResets_);
-        const size_t count = static_cast<size_t>(upsampleRatio_) / 8;
+            msbFirst, instabilityResets);
+        const size_t count = static_cast<size_t>(upsampleRatio) / 8;
         written[channel] += count; written[channel + 1] += count;
         ++channel;
         continue;
@@ -305,25 +339,21 @@ size_t PcmToDsdModulator::process(
       int pendingBits = state.pendingBits;
       uint8_t* output = channelOutputs[channel];
       size_t outIndex = written[channel];
+      const double* fb = modulatorOrder == 7 ? kFeedback7 : kFeedback;
+      const int order = modulatorOrder == 7 ? 7 : 5;
       for (int i = 0; i < sampleCount; ++i) {
         double u = current[i];
-        if (u > kInputHeadroomScale) u = kInputHeadroomScale;
-        if (u < -kInputHeadroomScale) u = -kInputHeadroomScale;
-        for (int hold = 0; hold < holdFactor_; ++hold) {
-          const double feedback = integrators[4] >= 0.0 ? 1.0 : -1.0;
-          const double s0 = integrators[0] + kFeedback[0] * u - kFeedback[0] * feedback;
-          const double s1 = integrators[1] + integrators[0] - kFeedback[1] * feedback;
-          const double s2 = integrators[2] + integrators[1] - kFeedback[2] * feedback;
-          const double s3 = integrators[3] + integrators[2] - kFeedback[3] * feedback;
-          const double s4 = integrators[4] + integrators[3] - kFeedback[4] * feedback;
-          integrators[0] = s0;
-          integrators[1] = s1;
-          integrators[2] = s2;
-          integrators[3] = s3;
-          integrators[4] = s4;
+        if (u > PcmToDsdModulator::kInputHeadroomScale) u = PcmToDsdModulator::kInputHeadroomScale;
+        if (u < -PcmToDsdModulator::kInputHeadroomScale) u = -PcmToDsdModulator::kInputHeadroomScale;
+        for (int hold = 0; hold < holdFactor; ++hold) {
+          const double feedback = integrators[order - 1] >= 0.0 ? 1.0 : -1.0;
+          for (int j = order - 1; j > 0; --j) {
+            integrators[j] = integrators[j] + integrators[j - 1] - fb[j] * feedback;
+          }
+          integrators[0] = integrators[0] + fb[0] * u - fb[0] * feedback;
 
           bool unstable = false;
-          for (int stateIndex = 0; stateIndex < 5; ++stateIndex) {
+          for (int stateIndex = 0; stateIndex < order; ++stateIndex) {
             const double magnitude = integrators[stateIndex];
             if (!std::isfinite(magnitude) || magnitude > kStateGuardLimit ||
                 magnitude < -kStateGuardLimit) {
@@ -332,8 +362,8 @@ size_t PcmToDsdModulator::process(
             }
           }
           if (unstable) {
-            for (int stateIndex = 0; stateIndex < 5; ++stateIndex) integrators[stateIndex] = 0.0;
-            ++instabilityResets_;
+            for (int stateIndex = 0; stateIndex < order; ++stateIndex) integrators[stateIndex] = 0.0;
+            ++instabilityResets;
           }
 
           const uint8_t bit = feedback > 0.0 ? 1 : 0;
@@ -356,6 +386,48 @@ size_t PcmToDsdModulator::process(
   }
 
   return written[0];
+}
+
+}  // namespace
+
+size_t PcmToDsdModulator::process(
+    const float* interleavedInput,
+    size_t frames,
+    uint8_t* const* channelOutputs,
+    size_t channelCapacityBytes) {
+  return modulateFramesImpl(
+      interleavedInput,
+      frames,
+      channelOutputs,
+      channelCapacityBytes,
+      configured_,
+      config_,
+      upsampleRatio_,
+      halfbandStageCount_,
+      holdFactor_,
+      modulatorOrder_,
+      instabilityResets_,
+      channels_);
+}
+
+size_t PcmToDsdModulator::processDouble(
+    const double* interleavedInput,
+    size_t frames,
+    uint8_t* const* channelOutputs,
+    size_t channelCapacityBytes) {
+  return modulateFramesImpl(
+      interleavedInput,
+      frames,
+      channelOutputs,
+      channelCapacityBytes,
+      configured_,
+      config_,
+      upsampleRatio_,
+      halfbandStageCount_,
+      holdFactor_,
+      modulatorOrder_,
+      instabilityResets_,
+      channels_);
 }
 
 }  // namespace twilight::audio

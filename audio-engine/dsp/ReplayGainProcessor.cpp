@@ -36,6 +36,19 @@ void ReplayGainProcessor::process(float* samples, size_t frameCount) {
   replaygain::applyReplayGain(samples, sampleCount, gainLinear_, config_.replayGainClip);
 }
 
+void ReplayGainProcessor::processDouble(double* samples, size_t frameCount) {
+  if (!active_ || !samples || frameCount == 0) return;
+
+  const size_t sampleCount = frameCount * static_cast<size_t>(std::max(1, format_.channelCount));
+  for (size_t i = 0; i < sampleCount; ++i) {
+    double scaled = samples[i] * gainLinear_;
+    if (config_.replayGainClip) {
+      scaled = std::clamp(scaled, -1.0, 1.0);
+    }
+    samples[i] = scaled;
+  }
+}
+
 void ReplayGainProcessor::reset() {
 }
 
