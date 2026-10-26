@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { createCoreAudioUi } from '@renderer/stores/player/coreAudioUi.ts'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import SettingsGroup from './SettingsGroup.vue'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
@@ -25,6 +27,7 @@ import {
   sacdProgramModeOptions
 } from './types.ts'
 
+const coreAudio = createCoreAudioUi(useCoreConnection())
 const emit = defineEmits<{
   openEqualizer: []
   openDspRack: []
@@ -85,7 +88,7 @@ const dspOutputText = computed(() => {
 const outputFormatText = computed(() => {
   const info = outputInfo.value
   if (!info) return '等待音频引擎'
-  const format = info.actualOutputFormat || playbackInfo.value?.actualOutputFormat || ''
+  const format = info.actualOutputFormat || ''
   const rate =
     info.actualSampleRate || info.outputSampleRate || playbackInfo.value?.actualSampleRate || 0
   const bitDepth =
@@ -300,9 +303,8 @@ function vst3ErrorMessage(error: unknown): string {
 }
 
 async function refreshVst3Catalog(): Promise<void> {
-  if (!window.api?.audioEngine?.getVst3Catalog) return
   try {
-    vst3Catalog.value = await window.api.audioEngine.getVst3Catalog()
+    vst3Catalog.value = await coreAudio.getVst3Catalog()
     vst3Error.value = ''
   } catch (error) {
     vst3Error.value = vst3ErrorMessage(error)
@@ -313,7 +315,7 @@ async function toggleVst3Enabled(): Promise<void> {
   if (vst3Busy.value || !vst3Catalog.value || !vst3PlatformSupported.value) return
   vst3Busy.value = true
   try {
-    vst3Catalog.value = await window.api.audioEngine.setVst3Enabled(!vst3Catalog.value.enabled)
+    vst3Catalog.value = await coreAudio.setVst3Enabled(!vst3Catalog.value.enabled)
     vst3Error.value = ''
   } catch (error) {
     vst3Error.value = vst3ErrorMessage(error)
@@ -326,9 +328,9 @@ async function addVst3SearchPath(): Promise<void> {
   if (vst3Busy.value || !vst3Catalog.value) return
   vst3Busy.value = true
   try {
-    const selected = await window.api.audioEngine.selectVst3SearchPath()
+    const selected = await coreAudio.selectVst3SearchPath()
     if (selected && !vst3SearchPaths.value.includes(selected)) {
-      vst3Catalog.value = await window.api.audioEngine.setVst3SearchPaths([
+      vst3Catalog.value = await coreAudio.setVst3SearchPaths([
         ...vst3SearchPaths.value,
         selected
       ])
@@ -345,7 +347,7 @@ async function removeVst3SearchPath(path: string): Promise<void> {
   if (vst3Busy.value || !vst3Catalog.value) return
   vst3Busy.value = true
   try {
-    vst3Catalog.value = await window.api.audioEngine.setVst3SearchPaths(
+    vst3Catalog.value = await coreAudio.setVst3SearchPaths(
       vst3SearchPaths.value.filter((candidate) => candidate !== path)
     )
     vst3Error.value = ''
@@ -360,7 +362,7 @@ async function rescanVst3Plugins(): Promise<void> {
   if (vst3Scanning.value || !vst3Enabled.value) return
   vst3Scanning.value = true
   try {
-    vst3Catalog.value = await window.api.audioEngine.scanVst3Plugins()
+    vst3Catalog.value = await coreAudio.scanVst3Plugins()
     vst3Error.value = ''
   } catch (error) {
     vst3Error.value = vst3ErrorMessage(error)

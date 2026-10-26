@@ -1,10 +1,44 @@
 #include "IAsioHost.h"
+#include "DeviceCapabilityCache.h"
 
+#if defined(_WIN32) && defined(_WIN64) && defined(TAE_ENABLE_ASIO)
+#include "windows/AsioDriverCatalog.h"
+#endif
+
+#include <cstdlib>
 #include <memory>
 #include <sstream>
+#include <string_view>
 
 namespace twilight::audio {
 namespace {
+
+#if defined(_WIN32) && defined(_WIN64) && defined(TAE_ENABLE_ASIO)
+bool asioEnabled() {
+  const char* value = std::getenv("TWILIGHT_DISABLE_ASIO");
+  return !value || std::string_view(value) != "1";
+}
+
+std::vector<AsioDeviceInfo> enumerateCatalogAsioDevices() {
+  if (!asioEnabled()) return {};
+  std::vector<AsioDeviceInfo> devices;
+  for (const auto& entry : asio_windows::AsioDriverCatalog::enumerate()) {
+    AsioDeviceInfo device;
+    device.id = entry.id;
+    device.name = entry.displayName;
+    device.driverName = entry.displayName;
+    if (const auto cached = DeviceCapabilityCache::instance().get(device.id)) {
+      AsioDeviceInfo merged = *cached;
+      merged.id = device.id;
+      merged.name = device.name;
+      if (merged.driverName.empty()) merged.driverName = device.driverName;
+      device = std::move(merged);
+    }
+    devices.push_back(std::move(device));
+  }
+  return devices;
+}
+#endif
 
 std::string jsonEscape(const std::string& value) {
   std::string escaped;
@@ -76,7 +110,12 @@ std::string enumerateAsioDevicesJson() {
   std::ostringstream json;
   json << '[';
   bool first = true;
-  for (const auto& device : createIsolatedAsioHost()->enumerateDevices()) {
+#if defined(_WIN32) && defined(_WIN64) && defined(TAE_ENABLE_ASIO)
+  const auto devices = enumerateCatalogAsioDevices();
+#else
+  const auto devices = createIsolatedAsioHost()->enumerateDevices();
+#endif
+  for (const auto& device : devices) {
     if (!first) json << ',';
     first = false;
     json << "{\"id\":\"" << jsonEscape(device.id) << "\",\"label\":\""

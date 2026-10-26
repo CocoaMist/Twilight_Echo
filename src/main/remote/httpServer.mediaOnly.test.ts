@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-const httpServerSource = readFileSync(new URL('./httpServer.ts', import.meta.url), 'utf8')
+const httpServerSource = readFileSync(
+  new URL('../../core/cast/httpServer.ts', import.meta.url),
+  'utf8'
+)
 const remoteIpcSource = readFileSync(new URL('./remoteIpc.ts', import.meta.url), 'utf8')
 const playerStoreSource = readFileSync(
   new URL('../../renderer/src/stores/usePlayerStore.ts', import.meta.url),

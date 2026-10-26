@@ -79,7 +79,18 @@ const studioLabels: Record<string, string> = {
   'typography.rounded': '歌词字体',
   'typography.sans': '正文字体',
   'typography.metaWeight': '辅助文字粗细',
+  'surface.player': '播放页纯色底色',
+  'playback.backdrop.tempo': '流体光影流转周期',
+  'playback.cover.scale': '封面缩放比例',
+  'playback.stage.spread': '封面与歌词间距',
+  'playback.stage.span': '播放舞台展开度',
   'playback.cover.surface': '封面底色',
+  'playback.cover.border': '封面外框颜色',
+  'playback.lyrics.karaoke': '逐字歌词高亮',
+  'playback.lyrics.density': '歌词行距间隔',
+  'playback.lyrics.activeScale': '当前歌词放大比例',
+  'playback.lyrics.inactiveOpacity': '未唱歌词不透明度',
+  'playback.lyrics.inactiveBlur': '远端歌词景深模糊',
   'playback.backdrop.scrim': '播放页背景遮暗',
   'motion.enter': '进入动画节奏',
   'motion.soft': '切换动画节奏',
@@ -102,9 +113,16 @@ export const studioModeLabels: Record<string, string> = {
   'library.selection': '歌曲选中样式',
   'library.titleOverlay': '显示标题底色',
   'player.layout': '播放器布局',
+  'player.backdrop': '播放页背景模式',
   'player.controls': '播放按钮样式',
   'player.titleAlign': '歌曲标题对齐',
+  'player.lyricsAlign': '播放页歌词对齐',
+  'player.lyricHighlight': '当前歌词底板样式',
+  'player.timeStyle': '播放页顶部胶囊',
+  'player.stageAlign': '播放舞台垂直对齐',
   'player.progress': '播放进度条样式',
+  'artwork.frame': '封面外框样式',
+  'artwork.spin': '黑胶唱盘旋转',
   'artwork.transition': '切歌时的封面动画',
   'artwork.shadow': '显示封面阴影',
   'equalizer.panel': '均衡器背景',
@@ -135,12 +153,14 @@ export function studioTokenLabel(label: string, id = ''): string {
 
 export function studioTokenGroup(id: string): string {
   if (id.startsWith('playback.lyrics.')) return '歌词颜色'
+  if (id.startsWith('playback.stage.')) return '舞台与间距'
   if (id.startsWith('playback.equalizer.')) return '均衡器'
   if (id.startsWith('playback.control.')) return '播放按钮'
   if (id.startsWith('playback.progress.') || id.startsWith('playback.time.')) return '进度与时间'
   if (id.startsWith('playback.track.') || id.startsWith('playback.text.')) return '歌曲信息'
   if (id.startsWith('playback.cover.') || id.startsWith('playback.artwork.')) return '专辑封面'
-  if (id.startsWith('playback.backdrop.')) return '播放页背景'
+  if (id === 'surface.player' || id === 'playback.accent' || id.startsWith('playback.backdrop.'))
+    return '播放页背景'
   if (id.startsWith('typography.')) return '文字外观'
   if (id.startsWith('motion.')) return '动画节奏'
   if (id.startsWith('shape.') || id.startsWith('layout.')) return '圆角与尺寸'

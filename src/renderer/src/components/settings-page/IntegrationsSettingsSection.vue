@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import SettingsGroup from './SettingsGroup.vue'
 import type { RemoteControlStatus } from '../../../../shared/remoteControl.ts'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
+
+const core = useCoreConnection()
 
 const props = defineProps<{
   discordEnabled: boolean
@@ -52,11 +55,7 @@ const discordStatusText = computed(() => {
 async function refreshRemoteStatus(): Promise<void> {
   remoteStatusError.value = ''
   try {
-    if (!window.api?.remote?.getStatus) {
-      remoteStatus.value = null
-      return
-    }
-    remoteStatus.value = await window.api.remote.getStatus()
+    remoteStatus.value = await core.query('remote.status', {})
   } catch (err) {
     remoteStatusError.value = err instanceof Error ? err.message : String(err)
   }
@@ -113,12 +112,9 @@ async function toggleRemote(): Promise<void> {
   remoteStatusError.value = ''
   try {
     const next = !props.remoteEnabled
-    emit('update:remoteEnabled', next)
-    if (window.api?.remote?.setEnabled) {
-      remoteStatus.value = await window.api.remote.setEnabled(next)
-    } else {
-      await refreshRemoteStatus()
-    }
+    remoteStatus.value = (await core.command('remote.setEnabled', {
+      enabled: next
+    })) as RemoteControlStatus
   } catch (err) {
     remoteStatusError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -130,8 +126,7 @@ async function rotateRemotePin(): Promise<void> {
   remoteBusy.value = true
   remoteStatusError.value = ''
   try {
-    if (!window.api?.remote?.rotatePin) return
-    const result = await window.api.remote.rotatePin()
+    const result = (await core.command('remote.rotatePin', {})) as { status: RemoteControlStatus }
     remoteStatus.value = result.status
   } catch (err) {
     remoteStatusError.value = err instanceof Error ? err.message : String(err)
@@ -222,6 +217,7 @@ onBeforeUnmount(() => {
             role="switch"
             :aria-checked="props.remoteEnabled"
             :aria-busy="remoteBusy"
+            :disabled="remoteBusy"
             @click="toggleRemote"
           ></button>
         </div>

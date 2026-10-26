@@ -17,7 +17,7 @@ import {
 } from '../../utils/playbackQueueVirtualization.ts'
 
 export function usePlaybackQueueVirtualScroll(
-  queue: Ref<Track[]>,
+  queue: Readonly<Ref<readonly Track[]>>,
   queueIndex: Ref<number>,
   open: Ref<boolean>
 ) {

@@ -466,6 +466,21 @@ html:not([data-theme='dark']) :is(.audio-workspace, .settings-preview-page) {
     color: var(--te-image-control-muted) !important;
     opacity: 0.55;
   }
+  /* The accent chip keeps a translucent brand fill on opaque pages; over a
+   * wallpaper its ink follows the image text tone, so the translucent fill can
+   * land on a light pixel and drop below readable contrast. Pair it with the
+   * same opaque image surface the other settings controls use. */
+  html[data-te-settings-image-palette='on']
+    body.te-settings-surface
+    .settings-preview-page:not([data-appearance-workspace='customize'])
+    .brand-soft-button {
+    background: color-mix(
+      in srgb,
+      var(--te-control-accent) 16%,
+      var(--te-image-control-surface)
+    ) !important;
+    color: var(--te-image-control-text) !important;
+  }
 
   /* Keep ordinary cards coordinated; an explicitly edited card remains authoritative. */
   :is(
@@ -864,12 +879,34 @@ html:not([data-theme='dark']) :is(.audio-workspace, .settings-preview-page) {
     --te-control-accent-text: var(--te-overlay-settings-text);
     color: var(--te-overlay-settings-text) !important;
   }
+  /* Accent chips paint their own tone-matched scrim, including over an image
+     reading wash. Keep their ink aligned with that scrim. */
+  html:is([data-te-settings-text-tone='light'], [data-te-settings-text-tone='dark'])
+    .settings-preview-page
+    .brand-soft-button {
+    color: var(--te-control-accent-text) !important;
+  }
   /* Legacy translucent panels need enough of their theme surface behind the
      theme foreground; wallpaper contrast cannot protect text inside them. */
   html:is([data-te-settings-text-tone='light'], [data-te-settings-text-tone='dark'])
     .settings-preview-page
     :is(.accordion-preview, .output-diagnostic-panel, .watcher-status-row) {
     background: var(--te-overlay-surface) !important;
+  }
+  /* The accent chip keeps its wallpaper-following ink, so its translucent brand
+     fill cannot guarantee contrast on an image pixel of the opposite tone.
+     Composite the fill over a scrim that opposes the chosen text tone: the
+     manual tone says what ink the wallpaper must carry, the scrim guarantees
+     the chip itself always delivers it. */
+  html[data-te-settings-text-tone='light'] .settings-preview-page .brand-soft-button {
+    background: color-mix(in srgb, var(--te-control-accent) 14%, rgba(0, 0, 0, 0.74)) !important;
+  }
+  html[data-te-settings-text-tone='dark'] .settings-preview-page .brand-soft-button {
+    background: color-mix(
+      in srgb,
+      var(--te-control-accent) 14%,
+      rgba(255, 255, 255, 0.88)
+    ) !important;
   }
   /* A custom background replaces the dark artwork stage. Its theme text tone
      must follow the app tone too, including chrome outside the playing page. */

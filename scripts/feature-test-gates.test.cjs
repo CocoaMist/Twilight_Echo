@@ -3,6 +3,7 @@ const { readFileSync, readdirSync } = require('node:fs')
 const { join, relative } = require('node:path')
 const test = require('node:test')
 const { PRODUCT_SCRIPTS } = require('./run-product-quality-gate.cjs')
+const appearanceTests = require('./run-appearance-tests.cjs')
 
 const root = join(__dirname, '..')
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -24,7 +25,6 @@ const lyricsTests = [
   'src/shared/desktopLyrics.test.ts',
   'src/renderer/src/desktop-lyrics/desktopLyricsClock.test.ts',
   'src/renderer/src/desktop-lyrics/DesktopLyricsApp.behavior.test.ts',
-  'src/renderer/src/app/useDesktopLyricsPublisher.test.ts',
   'src/renderer/src/utils/lyrics.test.ts',
   'src/renderer/src/utils/lyricSourceResolution.test.ts',
   'src/renderer/src/utils/lyricSpring.test.ts',
@@ -134,12 +134,27 @@ test('lyrics management gate owns every core, persistence, source, and real UI b
   assert.equal(typeof command, 'string')
   assert.match(command, /^node --experimental-strip-types --test /)
   for (const file of lyricsTests) assert.match(command, new RegExp(escapeRegExp(file)))
+  assert.match(packageJson.scripts['test:core'], /src\/core\/lyrics\/service\.test\.ts/)
+  assert.match(
+    packageJson.scripts['test:core'],
+    /src\/main\/coreProcess\/systemPlayerBridge\.test\.ts/
+  )
 })
 
 test('radio and remote gate owns library watcher, radio, podcast, cover, and remote control tests', () => {
   const command = packageJson.scripts['test:radio-remote']
   assert.equal(typeof command, 'string')
   for (const file of radioRemoteTests) assert.match(command, new RegExp(escapeRegExp(file)))
+})
+
+test('library database gate retains narrow date publication, ordinary scan cancellation and actual worker recovery', () => {
+  const command = packageJson.scripts['test:library-database']
+  for (const file of [
+    'src/main/library/libraryDatabaseReleaseDate.test.ts',
+    'src/main/library/libraryDatabaseScan.test.ts',
+    'src/main/library/libraryDatabaseScanCoordinator.test.ts'
+  ]) assert.ok(command.includes(file), `${file} must run in the library database gate`)
+  assert.match(packageJson.scripts['test:no-real-device'], /pnpm run test:library-database(?: &&|$)/)
 })
 
 test('network source gate owns profile, path, cache, metadata, and adapter tests', () => {
@@ -243,12 +258,20 @@ test('required Windows CI runs complete product outcomes with native fixtures an
   )
 })
 
-test('CI keeps Windows checks automatic and package workflows manual', () => {
+test('CI keeps Windows checks automatic and packaging restricted to release tags or manual dispatch', () => {
   assert.doesNotMatch(workflow, /mac-release:|runs-on: (?:macos|ubuntu)|build:(?:mac|linux)/)
   for (const file of ['build-linux.yml', 'build-macos.yml']) {
     const packaging = readFileSync(join(root, '.github', 'workflows', file), 'utf8')
     const triggers = packaging.match(/^on:\r?\n([\s\S]*?)(?=^[^\s#])/m)?.[1]
-    assert.equal(triggers?.trim(), 'workflow_dispatch:', `${file} must only run manually`)
+    assert.ok(triggers, `${file} must declare its release triggers`)
+    assert.deepEqual(
+      [...triggers.matchAll(/^  ([\w_]+):/gm)].map((match) => match[1]).sort(),
+      ['push', 'workflow_dispatch'],
+      `${file} must only run for release tags or manual dispatch`
+    )
+    const push = triggers.match(/^  push:\r?\n([\s\S]*?)(?=^  \w+:|(?![\s\S]))/m)?.[1]
+    assert.match(push ?? '', /^    tags:\r?\n      - 'v\*'\s*$/)
+    assert.match(triggers, /^      release_tag:\r?\n/m)
   }
   const macPackaging = readFileSync(join(root, '.github', 'workflows', 'build-macos.yml'), 'utf8')
   assert.match(macPackaging, /runner: macos-15-intel/)
@@ -277,6 +300,9 @@ test('Windows no-device and release gates cannot omit product suites or the live
   assert.match(noDevice, /pnpm run test:network-sources/)
   assert.match(noDevice, /pnpm run test:tag-duplicate-management/)
   assert.match(noDevice, /pnpm run test:themes/)
+  assert.match(noDevice, /pnpm run test:core &&/)
+  assert.match(noDevice, /pnpm run build && pnpm run test:core:electron$/)
+  assert.match(noDevice, /pnpm run test:appearance-workspace(?: &&|$)/)
   assert.match(noDevice, /pnpm run test:duplicate-detection-benchmark/)
   assert.match(noDevice, /pnpm run benchmark:duplicate-detection:ci/)
   assert.match(windowsReleaseGate, /pnpm run test:playlist-lifecycle/)
@@ -289,12 +315,27 @@ test('Windows no-device and release gates cannot omit product suites or the live
   assert.match(windowsReleaseGate, /pnpm run benchmark:duplicate-detection:ci/)
 })
 
-test('every repository test file is explicitly owned by a package test script', () => {
-  const testCommands = Object.entries(packageJson.scripts)
-    .filter(([name]) => name.startsWith('test:'))
-    .map(([, command]) => command)
-    .join('\n')
-  const missing = recursivelyOwnedTestFiles.filter((file) => !testCommands.includes(file))
+test('every repository test file is explicitly owned by a package script or its registered runner', () => {
+  assert.equal(
+    packageJson.scripts['test:appearance-workspace'],
+    'node scripts/run-appearance-tests.cjs'
+  )
+  const delegated = [...appearanceTests.unit, ...appearanceTests.ui]
+  assert.equal(
+    new Set(delegated).size,
+    delegated.length,
+    'appearance runner cannot repeat a test file'
+  )
+  for (const file of delegated) {
+    assert.ok(recursivelyOwnedTestFiles.includes(file), `${file} must exist in the repository`)
+  }
+  const owned = new Set(
+    Object.entries(packageJson.scripts)
+      .filter(([name]) => name.startsWith('test:'))
+      .flatMap(([, command]) => command.split(/\s+/))
+  )
+  for (const file of delegated) owned.add(file)
+  const missing = recursivelyOwnedTestFiles.filter((file) => !owned.has(file))
   assert.deepEqual(missing, [], `Unowned test files: ${missing.join(', ')}`)
 })
 
@@ -306,7 +347,9 @@ test('CI and the final integrated gate retain all newly owned regression suites'
     'test:cross-cutting-regressions',
     'test:radio-remote',
     'test:network-sources',
-    'test:themes'
+    'test:core',
+    'test:themes',
+    'test:appearance-workspace'
   ]) {
     assert.ok(PRODUCT_SCRIPTS.includes(script), `${script} must remain a product outcome`)
     assert.match(
@@ -327,11 +370,29 @@ test('Windows release documentation fail-closes on every newly owned regression 
     'test:cross-cutting-regressions',
     'test:radio-remote',
     'test:network-sources',
-    'test:themes'
+    'test:core',
+    'test:themes',
+    'test:appearance-workspace'
   ]) {
     assert.match(commandBlock, new RegExp(`^pnpm run ${escapeRegExp(script)}$`, 'm'))
     assert.match(explanation, new RegExp('`' + escapeRegExp(script) + '`'))
   }
+})
+
+test('native Core integration follows application build and staged audio in the integrated gate', () => {
+  assert.ok(
+    finalIntegratedGate.indexOf("id = 'build'") <
+      finalIntegratedGate.indexOf("-Id 'test-core-electron'")
+  )
+  assert.ok(
+    finalIntegratedGate.indexOf("-Id 'native-build'") <
+      finalIntegratedGate.indexOf("-Id 'test-core-electron'")
+  )
+  assert.match(
+    finalIntegratedGate,
+    /Invoke-GateStage -Id 'test-core-electron' -Command 'corepack pnpm@11\.7\.0 run test:core:electron'/
+  )
+  assert.match(workflow, /run: node --test scripts\/core-window-bridge\.test\.cjs/)
 })
 
 function collectTestFiles(directory) {

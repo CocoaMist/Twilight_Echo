@@ -1,11 +1,43 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
+import { coreSnapshot } from '../coreTestFixtures.ts'
+import { disposeCoreConnection } from '../coreConnection.ts'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
 import { createLibraryUnifiedSearch } from './libraryUnifiedSearch.ts'
 import { unifiedSearchSongs } from '../../utils/unifiedMusicSearch.ts'
 import { versionSourceKey } from '../../../../shared/trackSourceIdentity.ts'
 import { searchLocalStreamingSongs } from '../../components/streaming-page/localStreamingSearch.ts'
+
+// This private compatibility-helper suite keeps its version lookup on Core too.
+// Production consumers are covered separately by useUnifiedMusicSearchDatabase.
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: {
+    api: {
+      core: {
+        onMessage: () => () => {},
+        onStatus: () => () => {},
+        connect: async () => ({
+          ok: true,
+          value: {
+            connectionId: 'legacy-search-reference',
+            snapshot: coreSnapshot({ versionsRevision: 0 })
+          }
+        }),
+        request: async () => ({ ok: true, value: { revision: 0, total: 0, offset: 0, items: [] } }),
+        cancel: async () => ({ ok: true, value: undefined }),
+        disconnect: async () => ({ ok: true, value: undefined })
+      }
+    }
+  }
+})
+test.after(() => {
+  disposeCoreConnection()
+  if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+  else Reflect.deleteProperty(globalThis, 'window')
+})
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 function assertAborted(value: unknown): void {

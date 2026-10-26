@@ -3,16 +3,17 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ts from 'typescript'
 import { toProviderIpcArgs } from '../providers/mediaProvider.ts'
 
 const source = readFileSync(new URL('./useProviderStore.ts', import.meta.url), 'utf8')
 
-function providerStoreFixture(list: () => Promise<unknown[]>) {
-  const listeners: Array<() => void> = []
+function providerStoreFixture(list: () => Promise<unknown[]>, options?: { listen?: boolean }) {
+  let intervals = 0
+  const coreState = ref({ epoch: 'core', pluginsRevision: 0, phase: 'ready' })
   const exports: {
-    useProviderStore?: () => {
+    useProviderStore?: (options?: { listen?: boolean }) => {
       syncProviders: () => Promise<void>
       hasProvider: (id: string) => boolean
     }
@@ -24,22 +25,48 @@ function providerStoreFixture(list: () => Promise<unknown[]>) {
     {
       exports,
       require: (id: string) => {
-        if (id === 'vue') return { computed, ref }
+        if (id === 'vue') return { computed, ref, watch }
+        if (id === './coreConnection.ts')
+          return { useCoreConnection: () => ({ state: coreState, query: list }) }
         if (id === '@renderer/providers/mediaProvider') return { toProviderIpcArgs }
         throw new Error(`Unexpected dependency: ${id}`)
       },
       window: {
-        setInterval: () => 1,
+        setInterval: () => ++intervals,
         clearInterval: () => {},
-        api: {
-          providers: { list },
-          plugins: { onChanged: (listener: () => void) => listeners.push(listener) }
-        }
+        api: {}
       }
     }
   )
-  return { store: exports.useProviderStore!(), changed: () => listeners.forEach((fn) => fn()) }
+  return {
+    store: exports.useProviderStore!(options),
+    listen: () => exports.useProviderStore!(),
+    intervals: () => intervals,
+    changed: () => {
+      coreState.value.pluginsRevision++
+    }
+  }
 }
+
+test('preview provider readers install no lifecycle watcher or health polling', async () => {
+  let reads = 0
+  const f = providerStoreFixture(
+    async () => {
+      reads++
+      return []
+    },
+    { listen: false }
+  )
+  f.changed()
+  assert.equal(reads, 0)
+  assert.equal(f.intervals(), 0)
+  f.listen()
+  f.listen()
+  f.changed()
+  await Promise.resolve()
+  assert.equal(reads, 1, 'live consumers still share one lifecycle listener')
+  assert.equal(f.intervals(), 1)
+})
 
 test('provider navigation waits for fresh lifecycle state when a list is already pending', async () => {
   let resolve!: (value: unknown[]) => void
@@ -90,16 +117,12 @@ test('homepage section arguments cross IPC after provider metadata becomes react
   )
   const callProvider = runInNewContext(`${stripTypeScriptTypes(functionSource)}\ncallProvider`, {
     toProviderIpcArgs,
-    window: {
-      api: {
-        providers: {
-          call: async (_provider: string, _method: string, args: unknown[]) => {
-            received.push(structuredClone(args))
-            return []
-          }
-        }
+    useCoreConnection: () => ({
+      command: async (_operation: string, request: { args: unknown[] }) => {
+        received.push(structuredClone(request.args))
+        return []
       }
-    }
+    })
   }) as (id: string, method: string, args: unknown[]) => Promise<unknown>
   for (const section of metadata.value.ui.streamingSections) {
     await callProvider('kugou', section.method, section.args)

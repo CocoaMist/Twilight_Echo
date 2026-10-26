@@ -202,7 +202,12 @@ export class LibraryDatabaseSelections {
     session.ready = true
     return { ready: true, snapshot: { ...session.snapshot } }
   }
-  read(id: string, cursor = 0, projection: 'tracks' | 'files' = 'tracks'): LibrarySelectionPage {
+  read(
+    id: string,
+    cursor = 0,
+    projection: 'tracks' | 'files' = 'tracks',
+    requireCurrent = false
+  ): LibrarySelectionPage {
     const session = this.get(id)
     if (!session.ready) throw new Error('Track selection is not ready')
     if (
@@ -222,6 +227,22 @@ export class LibraryDatabaseSelections {
       WHERE r.lease=? AND r.seq>=? ORDER BY r.seq LIMIT ?`
       )
       .all(id, cursor, LIBRARY_PAGE_SIZE)
+    if (requireCurrent) {
+      const current = this.owner.sql.prepare('SELECT seq,version,file_key FROM tracks WHERE id=?')
+      for (const row of rows) {
+        const track = JSON.parse(String(row.payload)),
+          actual = current.get(track.id)
+        if (
+          !actual ||
+          Number(actual.seq) !== Number(row.instance) ||
+          Number(actual.version) !== Number(row.version) ||
+          actual.file_key !== normalizeLibraryFilePath(track.filePath)
+        )
+          throw Object.assign(new Error('曲目在选择后已变化，请重新选择'), {
+            code: 'STALE_REVISION'
+          })
+      }
+    }
     const next = rows.length ? Number(rows[rows.length - 1].seq) + 1 : session.count
     const more =
       next < session.count &&

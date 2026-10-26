@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
-import { getNativeAddonCandidates, loadNativeBindingWithDiagnostics } from './nativeBinding.ts'
+import {
+  getNativeAddonCandidates,
+  loadNativeBindingWithDiagnostics,
+  rendererFallbackAllowed
+} from './nativeBinding.ts'
+
+test('the legacy fallback capability stays false even in an old diagnostic environment', (t) => {
+  const old = process.env.TWILIGHT_ENABLE_HTMLAUDIO_FALLBACK
+  process.env.TWILIGHT_ENABLE_HTMLAUDIO_FALLBACK = '1'
+  t.after(() => {
+    if (old === undefined) delete process.env.TWILIGHT_ENABLE_HTMLAUDIO_FALLBACK
+    else process.env.TWILIGHT_ENABLE_HTMLAUDIO_FALLBACK = old
+  })
+  assert.equal(rendererFallbackAllowed(), false)
+})
 
 test('packaged utility workers load only the addon beside their own archive', () => {
   const resources = join(process.cwd(), 'fixture-evaluation', 'resources')

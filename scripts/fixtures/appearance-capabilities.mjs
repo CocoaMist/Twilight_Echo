@@ -1,3 +1,4 @@
+import { installCorePluginFixture } from '@renderer/extensions/corePlugins.fixture.ts'
 import { createApp, h, ref, nextTick } from 'vue'
 import AppearancePage from '@renderer/components/AppearancePage.vue'
 import PlayerBarSettings from '@renderer/components/settings-page/PlayerBarSettings.vue'
@@ -103,7 +104,7 @@ const startup = {
   themeBootstrap: { library: plain(library) }
 }
 settingsStore.hydrateStartupSnapshot(startup)
-const boot = bootstrapThemeRuntime(startup)
+const boot = installCorePluginFixture().then(() => bootstrapThemeRuntime(startup))
 const target = ref({
   revision: 1,
   appearanceTab: 'adjust',

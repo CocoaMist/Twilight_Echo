@@ -170,10 +170,14 @@ const regionLayers: Record<string, AppearanceLayer> = {
   controls: 'content',
   background: 'content',
   card: 'content',
+  'player-page': 'content',
   navigation: 'navigation',
   'player-bar': 'player',
   material: 'title'
 }
+export type PlayerPageTarget = 'stage' | 'cover' | 'lyrics'
+const playerTarget = ref<PlayerPageTarget>('stage')
+const playerStageRect = shallowRef<EditorRect>()
 const selectedOutline = ref<SVGPolygonElement>()
 const layerContextPath = ref<SVGPathElement>()
 const keyboardOutline = ref<SVGPolygonElement>()
@@ -255,7 +259,8 @@ watch(
 )
 const focusedPart = computed(() =>
   regions.value.some((region) => region.id === selectedRegion.value) &&
-  selectedRegion.value !== 'inner-panel'
+  selectedRegion.value !== 'inner-panel' &&
+  !(selectedRegion.value === 'player-page' && playerTarget.value === 'stage')
     ? selectedRegion.value
     : undefined
 )
@@ -292,12 +297,22 @@ const regionViews = computed(() =>
   [
     ...regions.value
       .filter((region) => region.id !== 'card' && region.id !== 'controls')
-      .map((region) => ({
-        ...region,
-        key: region.id,
-        nativeRect: nativeNodes.find((node) => node.id === region.id)?.rect,
-        surface: undefined as AppearanceSurface | undefined
-      })),
+      .map((region) => {
+        const stageRect =
+          region.id === 'player-page' && playerStageRect.value
+            ? playerStageRect.value
+            : region.rect
+        return {
+          ...region,
+          rect: stageRect,
+          key: region.id,
+          nativeRect:
+            region.id === 'player-page' && playerStageRect.value
+              ? playerStageRect.value
+              : nativeNodes.find((node) => node.id === region.id)?.rect,
+          surface: undefined as AppearanceSurface | undefined
+        }
+      }),
     ...surfaceHits.value
       .filter((surface) => surface.interactive !== false)
       .filter(
@@ -321,7 +336,11 @@ const regionViews = computed(() =>
             ? '调整内容卡片'
             : surface.id === 'navigation'
               ? '调整侧边栏材质'
-              : '调整控件材质',
+              : surface.id === 'player-page'
+                ? surface.pose === 'player-cover'
+                  ? '调整播放页封面'
+                  : '调整播放页歌词'
+                : '调整控件材质',
         rect: surface.rect,
         nativeRect: surface.rect,
         surface
@@ -333,17 +352,24 @@ const regionViews = computed(() =>
       return {
         ...region,
         isTarget:
-          !region.surface ||
-          sameEditorRect(
-            region.rect,
-            nativeNodes.find((node) => node.id === region.id)?.rect ?? region.rect
-          ),
+          region.id === 'player-page'
+            ? region.surface
+              ? (region.surface.pose === 'player-cover' && playerTarget.value === 'cover') ||
+                (region.surface.pose === 'player-lyrics' && playerTarget.value === 'lyrics')
+              : playerTarget.value === 'stage'
+            : !region.surface ||
+              sameEditorRect(
+                region.rect,
+                nativeNodes.find((node) => node.id === region.id)?.rect ?? region.rect
+              ),
         style: {
           ...rectStyle(native ?? region.rect),
           zIndex:
-            region.id === 'controls' || region.id === 'card'
-              ? '2'
-              : String(APPEARANCE_LAYER_ORDER.indexOf(regionLayers[region.id])),
+            region.id === 'player-page' && region.surface
+              ? '3'
+              : region.id === 'controls' || region.id === 'card'
+                ? '2'
+                : String(APPEARANCE_LAYER_ORDER.indexOf(regionLayers[region.id])),
           '--appearance-region-pose': native
             ? appearancePartTransform(region.surface?.pose ?? region.id, layerPose().spacing)
             : 'none'
@@ -353,7 +379,12 @@ const regionViews = computed(() =>
 )
 const selectedPolygon = computed(() =>
   layerPolygons.value
-    .find((polygon) => polygon.id === selectedRegion.value && polygon.id !== 'inner-panel')
+    .find(
+      (polygon) =>
+        polygon.id === selectedRegion.value &&
+        polygon.id !== 'inner-panel' &&
+        !(polygon.id === 'player-page' && playerTarget.value === 'stage')
+    )
     ?.points.map((point) => `${point.x},${point.y}`)
     .join(' ')
 )
@@ -443,7 +474,11 @@ function paintContextTools(camera: EditorCamera): void {
   )
   let x = maxX,
     y = padding
-  if (node && node.id !== 'inner-panel') {
+  if (
+    node &&
+    node.id !== 'inner-panel' &&
+    !(node.id === 'player-page' && playerTarget.value === 'stage')
+  ) {
     const rect = {
       left: camera.x + node.rect.left * camera.scale,
       top: camera.y + node.rect.top * camera.scale,
@@ -487,7 +522,7 @@ watch(contextTools, (element, previous) => {
   contextToolsObserver.observe(element)
 })
 watch(
-  [revealed, selectedRegion, layeredPresentation],
+  [revealed, selectedRegion, playerTarget, layeredPresentation],
   () => void nextTick().then(() => paintContextTools(engine.snapshot().camera))
 )
 const parallax = createEditorParallax({
@@ -712,9 +747,48 @@ function viewportKeydown(event: KeyboardEvent): void {
   else return
   event.preventDefault()
 }
+function setPlayerTarget(target: PlayerPageTarget): void {
+  playerTarget.value = target
+  const expectedPose =
+    target === 'cover' ? 'player-cover' : target === 'lyrics' ? 'player-lyrics' : undefined
+  const surface = expectedPose
+    ? surfaceHits.value.find((item) => item.id === 'player-page' && item.pose === expectedPose)
+    : undefined
+  preferredSurface = surface
+  const stageRect = playerStageRect.value
+  if (surface) {
+    nativeNodes = nativeNodes.map((node) =>
+      node.id === 'player-page'
+        ? { ...node, rect: surface.rect, pose: surface.pose, focus: 'part' as const }
+        : node
+    )
+  } else if (stageRect) {
+    nativeNodes = nativeNodes.map((node) =>
+      node.id === 'player-page'
+        ? { ...node, rect: stageRect, pose: undefined, focus: 'scene' as const }
+        : node
+    )
+  }
+  updatePresentationFocus()
+  presentScene()
+  engine.focus('player-page')
+  syncCameraZoom()
+  void nextTick().then(() => paintContextTools(engine.snapshot().camera))
+}
 function selectRegion(region: RegionId, event: MouseEvent, surface?: AppearanceSurface): void {
   event.stopPropagation()
   if (!previewIsActive() || !revealed.value || performance.now() < suppressClickUntil) return
+  if (region === 'player-page') {
+    const nextTarget: PlayerPageTarget =
+      surface?.pose === 'player-cover'
+        ? 'cover'
+        : surface?.pose === 'player-lyrics'
+          ? 'lyrics'
+          : 'stage'
+    setPlayerTarget(nextTarget)
+    emit('region', 'player-page', event)
+    return
+  }
   if (surface && surface.id !== 'navigation') {
     preferredSurface = surface
     nativeNodes = nativeNodes.map((node) =>
@@ -735,13 +809,20 @@ function resetFocus(event: MouseEvent): void {
     previewIsActive() &&
     revealed.value &&
     performance.now() >= suppressClickUntil
-  )
+  ) {
+    if (selectedRegion.value === 'player-page' && playerTarget.value !== 'stage') {
+      setPlayerTarget('stage')
+      return
+    }
     emit('region', 'overview', event)
+  }
 }
 watch(
   selectedRegion,
-  (id) => {
+  (id, previous) => {
+    if (id !== 'player-page') playerTarget.value = 'stage'
     updatePresentationFocus()
+    if ((id === 'player-page') !== (previous === 'player-page')) scheduleUpdate()
     if (layeredPresentation.value) presentScene()
     engine.focus(id)
     syncCameraZoom()
@@ -807,6 +888,8 @@ defineExpose({
   setLayeredView,
   setViewAngles,
   setLayerSpacing,
+  playerTarget,
+  setPlayerTarget,
   toggleNavigation: () => {
     navigationExpanded.value = !navigationExpanded.value
   }
@@ -837,6 +920,8 @@ const playerGlass = computed(
     (props.draft.surfaceMaterial === 'liquidGlass' || props.draft.liquidGlass.playbarEnabled)
 )
 const sceneModel = shallowRef({
+  page: (selectedRegion.value === 'player-page' ? 'player' : props.page) as AppBackgroundPage,
+  nowPlayingBackground: settings.value.nowPlayingBackground,
   navigationExpanded: navigationExpanded.value,
   navigationGlass: navigationGlass.value,
   playerGlass: playerGlass.value,
@@ -850,11 +935,15 @@ function updateSceneModel(): void {
   // Commit a detached scene snapshot once per visible update. Camera frames never
   // invalidate the native component tree; hidden drafts wait for the next reveal.
   const previous = sceneModel.value
+  const page: AppBackgroundPage = selectedRegion.value === 'player-page' ? 'player' : props.page
+  const nowPlayingBackground = settings.value.nowPlayingBackground
   const navigationPages = normalizeNavigationPagePreferences(navigationSettings.value)
   const playerLayout = normalizePlayerBarLayout(playerSettings.value.layout)
   const appearance = cloneAppearance({ ...props.draft, playerBar: playerSettings.value })
   const pages = props.pages?.map((page) => ({ ...page, target: { ...page.target } }))
   const next = {
+    page,
+    nowPlayingBackground,
     navigationExpanded: navigationExpanded.value,
     navigationGlass: navigationGlass.value,
     playerGlass: playerGlass.value,
@@ -1398,9 +1487,32 @@ function refreshRegions(): void {
         if (shell.style.getPropertyValue(name) !== value) shell.style.setProperty(name, value)
       }
     }
-    const measured: (EditorNode & { pose?: string })[] = measureEditorNodes(doc, definitions)
-    const sceneForHits = doc.querySelector<HTMLElement>('.appearance-preview-scene')
+    // Static 3D copies share native selectors. Never measure a stale copy when
+    // a source module is hidden or removed (for example, a collapsed sidebar).
+    const sceneForHits = doc.querySelector<HTMLElement>('body > .appearance-preview-scene')
+    const hasPlayerStage = !!sceneForHits?.querySelector('.appearance-preview-player-stage')
+    const activeDefinitions = hasPlayerStage
+      ? definitions.filter((item) => item.id !== 'inner-panel')
+      : definitions
+    const measured: (EditorNode & { pose?: string })[] = sceneForHits
+      ? measureEditorNodes(sceneForHits, activeDefinitions)
+      : []
     surfaceHits.value = sceneForHits ? measureAppearanceSurfaces(sceneForHits, viewport.value) : []
+    const playerNode = measured.find((item) => item.id === 'player-page')
+    playerStageRect.value = playerNode ? { ...playerNode.rect } : undefined
+    if (playerNode && playerTarget.value !== 'stage') {
+      const expectedPose = playerTarget.value === 'cover' ? 'player-cover' : 'player-lyrics'
+      const surface = surfaceHits.value.find(
+        (item) => item.id === 'player-page' && item.pose === expectedPose
+      )
+      if (surface) {
+        Object.assign(playerNode, {
+          rect: surface.rect,
+          pose: surface.pose,
+          focus: 'part' as const
+        })
+      }
+    }
     for (const id of ['card', 'controls'] as const) {
       const surface =
         surfaceHits.value.find(
@@ -1470,9 +1582,11 @@ function update(): void {
   layerTransition.setAnimated(animated.value)
   const glass = props.draft.liquidGlass
   const functional = props.draft.surfaceMaterial === 'transparent'
+  const effectivePage: AppBackgroundPage =
+    selectedRegion.value === 'player-page' ? 'player' : props.page
   const resolvedBackground = resolveBackgroundAppearance(
     props.draft.appBackground,
-    props.page,
+    effectivePage,
     props.tone
   )
   const customBackground = !props.themeEditing && resolvedBackground.customBackground
@@ -1500,6 +1614,8 @@ function update(): void {
     'data-te-liquid-glass-coverage': 'functional',
     'data-te-app-custom-background': customBackground ? 'on' : 'off',
     'data-te-local-custom-background': customBackground ? 'on' : 'off',
+    'data-te-player-custom-background':
+      effectivePage === 'player' && customBackground ? 'on' : 'off',
     'data-te-card-custom':
       !props.themeEditing &&
       props.draft.cardAppearance.enabled &&
@@ -1581,8 +1697,24 @@ function update(): void {
             }
           : {})
       }
+  if (!props.workshopModel && !props.themeEditing && settings.value.lyricsAppearance) {
+    const la = settings.value.lyricsAppearance
+    if (la.coverSize !== 100) vars['--te-playback-cover-size'] = `${la.coverSize}%`
+    if (la.coverGap !== 40) vars['--te-lyric-cover-gap'] = `${la.coverGap}px`
+    if (la.lyricsMaxWidth !== 820) vars['--te-lyric-max-width'] = `${la.lyricsMaxWidth}px`
+    if (la.coverRadius !== 16) vars['--te-playback-cover-radius'] = `${la.coverRadius}px`
+    if (la.fontSize !== 24) {
+      vars['--te-lyric-font-size'] = `${la.fontSize}px`
+      vars['--te-playback-lyric-scale'] = `${Math.round((la.fontSize / 24) * 100)}%`
+    }
+    if (la.inactiveOpacity !== 35)
+      vars['--te-playback-lyric-inactive-opacity'] = `${la.inactiveOpacity}%`
+    if (la.translationSpacing !== 6)
+      vars['--te-playback-lyric-density'] = `${la.translationSpacing + 8}px`
+    attributes.set('data-te-player-lyrics-align', la.align ?? 'left')
+  }
   if (!props.workshopModel && !customBackground) {
-    for (const page of ['app', 'local'] as const) {
+    for (const page of ['app', 'local', 'player'] as const) {
       const color = TWILIGHT_DEFAULT_THEME.variants[previewTheme].tokens[`surface.${page}`]
       const sameTone = document.documentElement.dataset.theme === previewTheme
       vars[`--te-${page}-bg`] = sameTone ? `var(--te-theme-${page}-bg, ${color})` : color
@@ -1766,7 +1898,15 @@ watch(
   { flush: 'post' }
 )
 watch(navigationExpanded, scheduleUpdate)
-watch(() => playerSettings.value.mode, scheduleUpdate, { flush: 'post' })
+watch(
+  () => [
+    playerSettings.value.mode,
+    settings.value.nowPlayingBackground,
+    settings.value.lyricsAppearance
+  ],
+  scheduleUpdate,
+  { deep: true, flush: 'post' }
+)
 watch(() => [navigationSettings.value, playerSettings.value.layout, props.pages], scheduleUpdate, {
   deep: true,
   flush: 'post'
@@ -1957,7 +2097,10 @@ onBeforeUnmount(() => {
             :aria-pressed="region.id === selectedRegion && region.isTarget"
             :class="{
               'is-selected':
-                region.id === selectedRegion && region.isTarget && selectedRegion !== 'inner-panel'
+                region.id === selectedRegion &&
+                region.isTarget &&
+                selectedRegion !== 'inner-panel' &&
+                !(selectedRegion === 'player-page' && !region.surface)
             }"
             :aria-label="region.label"
             :title="region.label"
@@ -1982,7 +2125,13 @@ onBeforeUnmount(() => {
       @pointercancel.stop
       @wheel.stop
     >
-      <slot name="context-tools" :region="selectedRegion" :layered="layeredPresentation" />
+      <slot
+        name="context-tools"
+        :region="selectedRegion"
+        :layered="layeredPresentation"
+        :player-target="playerTarget"
+        :set-player-target="setPlayerTarget"
+      />
     </div>
     <AppearanceViewAngleControl
       v-if="layeredPresentation"

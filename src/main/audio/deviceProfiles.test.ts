@@ -420,6 +420,27 @@ test('selection remains authoritative until unmute completes', async (t) => {
   assert.equal(h.manager.getDeviceProfiles().activeProfileId, h.profile.id)
 })
 
+test('Core quit barrier prevents a later hotplug from starting automatic profile writes', async (t) => {
+  const h = harness()
+  t.after(() => h.manager.destroy())
+  await h.manager.saveDeviceProfile({ ...h.profile, autoApply: true })
+  h.setDevices([{ id: 'a', label: 'DAC A', isDefault: true }])
+  h.manager.notifyAudioDeviceOptionsChanged('platform-device-change')
+  await h.manager.quiesceAudioConfiguration()
+  h.calls.length = 0
+  h.setDevices([
+    { id: 'a', label: 'DAC A', isDefault: true },
+    { id: 'b', label: 'DAC B', isDefault: false }
+  ])
+  h.manager.notifyAudioDeviceOptionsChanged('platform-device-change')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(h.manager.getDeviceProfiles().activeProfileId, null)
+  assert.equal(
+    h.calls.some((call) => call === 'commit:headphones' || call === 'device:b'),
+    false
+  )
+})
+
 test('DSD route ACK accepts the configured secondary route only with matching native evidence', async (t) => {
   for (const reportedDevice of ['c', 'unexpected']) {
     const h = harness()

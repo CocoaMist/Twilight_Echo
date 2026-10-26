@@ -9,6 +9,6 @@ import { relaunchWithX11BackendIfNeeded } from './imeBackend'
 // 此处不会触发自重启。
 relaunchWithX11BackendIfNeeded()
 
-import { startApp } from './app/lifecycle'
+import { startCoreApp } from './app/lifecycle'
 
-startApp()
+startCoreApp()

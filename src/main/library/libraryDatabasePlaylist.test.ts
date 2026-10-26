@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -159,11 +160,12 @@ test('v5 upgrade snapshots committed WAL and installs recording indexes without 
     page = old.getTracksByIds(['one']),
     files = old.sql.prepare('SELECT file_key,content_version FROM files').all()
   old.sql.exec(
-    'DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX tracks_recording; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=5;'
+    LEGACY_QUEUE_SCHEMA_SQL +
+      'DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX tracks_recording; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=5;'
   )
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 29)
     assert.deepEqual(upgraded.exportDocument(), document)
     assert.deepEqual(upgraded.getTracksByIds(['one']), page)
     assert.equal(upgraded.queryTracks({ sort: 'lastPlayed' }).historyRevision, 1)
@@ -201,7 +203,8 @@ test('recording index DDL failures roll back and backup failures prevent schema 
     rmSync(root, { recursive: true, force: true })
   })
   old.sql.exec(
-    'DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX tracks_recording; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=5;'
+    LEGACY_QUEUE_SCHEMA_SQL +
+      'DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX tracks_recording; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=5;'
   )
   const exec = DatabaseSync.prototype.exec
   const failure = t.mock.method(

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile, writeFile, mkdtemp, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, join, relative, resolve, isAbsolute } from 'node:path'
+import { getCoreApplication } from '../app/coreApplication.ts'
 import { runtime } from '../core/runtime.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { stringifyJsonForIpcStorage } from '../security/ipcValidation.ts'
@@ -28,6 +29,17 @@ import {
   type WorkshopProject,
   type WorkshopThemeSource
 } from '../../shared/themeWorkshop.ts'
+
+/** The workshop owns editing drafts; installed packages always use Core's manager. */
+function pluginAccess() {
+  const core = getCoreApplication()
+  return core ? {
+    list: () => core.request('plugins.list', {}),
+    listExtensions: () => core.request('extensions.list', {}),
+    installFromPath: (path: string) => core.request('plugins.installSource', { path }),
+    enable: (id: string) => core.request('plugins.enable', { id })
+  } : runtime.pluginManager!
+}
 
 const MAX_BYTES = 64 * 1024 * 1024
 const editors = new Map<number, WebContents>()
@@ -74,7 +86,7 @@ async function assetData(path: string): Promise<string> {
 }
 
 async function snapshot(source: WorkshopThemeSource): Promise<WorkshopBase> {
-  const manager = runtime.pluginManager!
+  const manager = pluginAccess()
   const plugin = (await manager.list()).find((p) => p.id === source.pluginId)
   if (!plugin) throw new Error('来源主题插件已卸载')
   const extensions = await manager.listExtensions()
@@ -215,7 +227,7 @@ export function setupThemeWorkshopIpc(): void {
       return
     }
     await runtime.pluginManagerReady
-    const enabled = (await runtime.pluginManager!.list()).some(
+    const enabled = (await pluginAccess().list()).some(
       (plugin) => plugin.id === THEME_WORKSHOP_ID && plugin.enabled
     )
     if (!enabled) throw new Error('请先启用主题插件工坊')
@@ -279,8 +291,8 @@ export function setupThemeWorkshopIpc(): void {
       ])
     },
     sources: async () => {
-      const plugins = await runtime.pluginManager!.list()
-      const extensions = await runtime.pluginManager!.listExtensions()
+      const plugins = await pluginAccess().list()
+      const extensions = await pluginAccess().listExtensions()
       return extensions.flatMap((p) =>
         p.themes.map((t) => ({
           pluginId: p.pluginId,
@@ -369,8 +381,8 @@ export function setupThemeWorkshopIpc(): void {
       const work = await mkdtemp(join(tmpdir(), 'te-workshop-'))
       try {
         const pluginId = await packageProject(project, work)
-        await runtime.pluginManager!.installFromPath(work)
-        await runtime.pluginManager!.enable(pluginId)
+        await pluginAccess().installFromPath(work)
+        await pluginAccess().enable(pluginId)
         const saved = repo().saveApplied({
           ...project,
           lastApplied: { version: project.version, at: new Date().toISOString() }
@@ -386,7 +398,7 @@ export function setupThemeWorkshopIpc(): void {
     async (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => {
       assertTrustedIpcSender(event, 'theme workshop IPC')
       await runtime.pluginManagerReady
-      const plugin = (await runtime.pluginManager!.list()).find((p) => p.id === THEME_WORKSHOP_ID)
+      const plugin = (await pluginAccess().list()).find((p) => p.id === THEME_WORKSHOP_ID)
       if (!plugin?.enabled) throw new Error('请先启用主题插件工坊')
       return (handler as (...values: unknown[]) => Promise<unknown>)(...args)
     }

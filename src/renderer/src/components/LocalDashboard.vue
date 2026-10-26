@@ -4,7 +4,6 @@ import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useMusicStore } from '../stores/useMusicStore'
 import {
   getMostListenedTracks,
   getRecentTracks,
@@ -12,6 +11,7 @@ import {
   useListeningStatsStore
 } from '../stores/useListeningStatsStore'
 import { useAudioOutputDspStore } from '../stores/useAudioOutputDspStore'
+import { useCoreConnection } from '../stores/coreConnection.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import DashboardPlaybackProgress from './local-dashboard/DashboardPlaybackProgress.vue'
 import {
@@ -23,9 +23,8 @@ import {
   type DspSceneState
 } from '../../../shared/dspGraph.ts'
 import type { Track } from '../types/music'
-import { createUnifiedRecentTrackResolver } from '../utils/unifiedRecentTracks'
-import { createLibraryDashboard } from '../stores/library/libraryDashboard.ts'
-import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
+import { createCorePlayerResource } from '../stores/player/corePlayerResource.ts'
+import { readCoreDashboard } from './local-dashboard/coreDashboard.ts'
 import { getTrackSource } from '../utils/trackSourceIdentity.ts'
 import type { LibraryCollectionSummary } from '../../../shared/libraryDatabase.ts'
 import { resolveTimeGreeting } from '@renderer/utils/timeGreeting'
@@ -42,90 +41,62 @@ const props = defineProps<{ previewTracks?: Track[] }>()
 const DASHBOARD_QUEUE_WINDOW = 200
 const SHELF_SIZE = 6
 const TOP_TRACK_COUNT = 6
-const ALBUM_SHELF_SIZE = 5
-
-const { tracks: libraryTracks, albums, artists } = useMusicStore()
-const tracks = computed(
-  () => props.previewTracks ?? (databaseDashboard.value ? [] : libraryTracks.value)
-)
-const { listeningStats } = useListeningStatsStore()
+const previewTracks = computed(() => props.previewTracks ?? [])
+const { overview: statsOverview } = useListeningStatsStore()
 const playbackStore = usePlayerStore()
+const core = useCoreConnection()
 const audioOutputDspStore = useAudioOutputDspStore()
 const { currentTrack, isPlaying } = playbackStore
 const { audioProcessing, playbackInfo, outputInfo } = storeToRefs(audioOutputDspStore)
-const { playTrack, togglePlay, next, prev, setPlayMode } = playbackStore
+const { playTrack, togglePlay, next, prev } = playbackStore
 const dashboardTopStats = computed(() =>
   props.previewTracks ? [] : getMostListenedTracks(TOP_TRACK_COUNT)
 )
 const dashboardLatestStat = computed(() =>
   props.previewTracks ? undefined : getRecentTracks(1)[0]
 )
-const dashboard = createLibraryDashboard({
-  getStorageMode: () => window.api.library.getStorageMode(),
-  getHistory: () => [
-    ...new Map(
-      [
-        ...dashboardTopStats.value,
-        ...(dashboardLatestStat.value ? [dashboardLatestStat.value] : [])
-      ].map((stat) => [stat.id, stat])
-    ).values()
-  ],
-  getPreferences: () => {
-    const document = getMusicVersions()
-    return { revision: musicVersionRevision.value, versions: document.tracks.versions }
+const dashboardActionError = ref('')
+const dashboard = createCorePlayerResource(
+  () => !props.previewTracks && core.state.value?.phase === 'ready'
+    ? `${core.state.value.epoch}:${core.state.value.libraryRevision}` : '',
+  async () => {
+    const result = await readCoreDashboard(core)
+    dashboardActionError.value = ''
+    return result
   },
-  api: {
-    queryTracks: (query) => window.api.library.database.queryTracks(query),
-    queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query),
-    lookupPlaylistTracks: (request, revision) =>
-      window.api.library.database.lookupPlaylistTracks(request, revision),
-    getTracksByIds: (ids, revision) => window.api.library.database.getTracksByIds(ids, revision),
-    getMetadata: () => window.api.library.database.getMetadata()
-  }
-})
-const dashboardState = dashboard.state
-const databaseDashboard = computed(
-  () => !props.previewTracks && dashboardState.value.mode !== 'json'
+  error => { dashboardActionError.value = error instanceof Error ? error.message : String(error) }
 )
+const dashboardState = computed(() => ({ data: dashboard.value.value, loading: dashboard.loading.value }))
+const databaseDashboard = computed(() => !props.previewTracks)
 const dashboardTrackCount = computed(() =>
-  databaseDashboard.value ? (dashboardState.value.data?.total ?? 0) : tracks.value.length
+  databaseDashboard.value ? (dashboardState.value.data?.total ?? 0) : previewTracks.value.length
 )
 const dashboardAlbumCount = computed(() =>
-  databaseDashboard.value ? (dashboardState.value.data?.albumCount ?? 0) : albums.value.length
+  databaseDashboard.value ? (dashboardState.value.data?.albumCount ?? 0) : new Set(previewTracks.value.map(track => track.album)).size
 )
 const dashboardArtistCount = computed(() =>
-  databaseDashboard.value ? (dashboardState.value.data?.artistCount ?? 0) : artists.value.length
+  databaseDashboard.value ? (dashboardState.value.data?.artistCount ?? 0) : new Set(previewTracks.value.map(track => track.artist)).size
 )
 const dashboardReadPending = computed(
   () =>
     databaseDashboard.value &&
     !dashboardState.value.data &&
-    (dashboardState.value.loading ||
-      (dashboardState.value.mode === null && !dashboardState.value.error))
+    dashboardState.value.loading
 )
-const dashboardActionError = ref('')
-const dashboardError = computed(() => dashboardActionError.value || dashboardState.value.error)
+const dashboardError = dashboardActionError
 function retryDashboard(): void {
   dashboardActionError.value = ''
-  dashboard.retry()
+  void dashboard.refresh().catch(() => {})
   void waitForListeningStatsReady()
     .then(() => {
-      if (dashboardMounted) dashboard.refresh()
+      if (dashboardMounted) void dashboard.refresh().catch(() => {})
     })
     .catch((error) => {
       if (dashboardMounted)
         dashboardActionError.value = error instanceof Error ? error.message : String(error)
     })
 }
-let unsubscribeDashboard: (() => void) | undefined
 let dashboardMounted = false
-let dashboardPlayIntent = 0
-let dashboardPlayBusy = false
-let pendingDashboardPlay: { track: Track; revision: number; intent: number } | null = null
-watch([currentTrack, isPlaying], () => cancelDashboardPlay(), { flush: 'sync' })
-watch([dashboardTopStats, dashboardLatestStat, musicVersionRevision], () => {
-  if (dashboardMounted && databaseDashboard.value) dashboard.refresh()
-})
 useDomTrackLocator('locatorRoot', () => currentTrack.value?.id ?? null)
 
 const now = ref(new Date())
@@ -133,14 +104,9 @@ const now = ref(new Date())
 onMounted(() => {
   if (props.previewTracks) return
   dashboardMounted = true
-  unsubscribeDashboard = window.api.library.onChanged((change) => {
-    const revision = change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
-    dashboard.invalidate(revision)
-  })
-  dashboard.refresh(true)
   void waitForListeningStatsReady()
     .then(() => {
-      if (dashboardMounted && databaseDashboard.value) dashboard.refresh()
+      if (dashboardMounted && databaseDashboard.value) void dashboard.refresh().catch(() => {})
     })
     .catch((error) => {
       if (dashboardMounted)
@@ -163,8 +129,7 @@ onMounted(() => {
 watch(
   () => [
     isPlaying.value,
-    outputInfo.value?.nativeDsp?.graph?.revision,
-    playbackInfo.value?.outputInfo?.nativeDsp?.graph?.revision,
+    playbackStore.dspGraphStatus.value?.revision,
     audioProcessing.value
   ],
   () => {
@@ -174,9 +139,6 @@ watch(
 
 onBeforeUnmount(() => {
   dashboardMounted = false
-  cancelDashboardPlay()
-  unsubscribeDashboard?.()
-  dashboard.dispose()
   if (dspRoutePoll !== null) window.clearInterval(dspRoutePoll)
   dspRoutePoll = null
 })
@@ -195,7 +157,7 @@ const hasLibrary = computed(() => dashboardTrackCount.value > 0)
 const totalDuration = computed(() => {
   const seconds = databaseDashboard.value
     ? (dashboardState.value.data?.duration ?? 0)
-    : tracks.value.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0)
+    : previewTracks.value.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0)
   const hours = seconds / 3600
   if (hours >= 24) return { value: (hours / 24).toFixed(1), unit: '天' }
   if (hours >= 1) return { value: hours.toFixed(1), unit: '小时' }
@@ -215,21 +177,16 @@ interface RankedStat {
 
 const rankedStats = computed<RankedStat[]>(() => {
   if (props.previewTracks) return []
-  const resolveRecentTrack = databaseDashboard.value
-    ? null
-    : createUnifiedRecentTrackResolver(tracks.value)
   return dashboardTopStats.value.map((stat) => {
-    const track = databaseDashboard.value
-      ? (dashboardState.value.history.get(stat.id) ?? null)
-      : (resolveRecentTrack!(stat) ?? stat.track ?? null)
+    const track = stat.displayTrack
     return {
       id: stat.id,
       seconds: stat.seconds,
       plays: stat.plays,
       title: stat.title,
       artist: stat.artist,
-      cover: track?.cover ?? stat.cover ?? null,
-      coverSource: track?.coverSource ?? stat.coverSource ?? null,
+      cover: stat.cover ?? null,
+      coverSource: null,
       track
     }
   })
@@ -237,12 +194,7 @@ const rankedStats = computed<RankedStat[]>(() => {
 
 const lastPlayedTrack = computed<Track | null>(() => {
   if (props.previewTracks) return props.previewTracks[0] ?? null
-  const latestStat = dashboardLatestStat.value
-  if (!latestStat) return null
-  if (databaseDashboard.value) return dashboardState.value.history.get(latestStat.id) ?? null
-
-  const resolveRecentTrack = createUnifiedRecentTrackResolver(tracks.value)
-  return resolveRecentTrack(latestStat) ?? latestStat.track ?? null
+  return dashboardLatestStat.value?.displayTrack ?? null
 })
 
 const heroTrack = computed<Track | null>(() => {
@@ -253,7 +205,7 @@ const heroTrack = computed<Track | null>(() => {
   if (ranked?.track) return ranked.track
   return databaseDashboard.value
     ? (dashboardState.value.data?.first[0] ?? null)
-    : (tracks.value[0] ?? null)
+    : (previewTracks.value[0] ?? null)
 })
 
 const heroIsCurrent = computed(
@@ -289,7 +241,7 @@ const heroAudioMeta = computed(() => {
 const recentlyAdded = computed(() =>
   databaseDashboard.value
     ? (dashboardState.value.data?.recent ?? [])
-    : tracks.value.slice(-SHELF_SIZE).reverse()
+    : previewTracks.value.slice(-SHELF_SIZE).reverse()
 )
 
 const topTracks = computed<RankedStat[]>(() => {
@@ -297,14 +249,14 @@ const topTracks = computed<RankedStat[]>(() => {
   return (
     databaseDashboard.value
       ? (dashboardState.value.data?.first ?? [])
-      : tracks.value.slice(0, TOP_TRACK_COUNT)
+      : previewTracks.value.slice(0, TOP_TRACK_COUNT)
   ).map((track) => ({
     id: track.id,
     seconds: 0,
     plays: 0,
     title: track.title,
     artist: track.artist,
-    cover: track.cover,
+    cover: track.cover ?? null,
     coverSource: track.coverSource ?? null,
     track
   }))
@@ -317,107 +269,38 @@ const topMaxSeconds = computed(() =>
 const albumShelf = computed(() =>
   databaseDashboard.value
     ? (dashboardState.value.data?.albums ?? [])
-    : props.previewTracks
-      ? []
-      : [...albums.value].sort((a, b) => b.trackCount - a.trackCount).slice(0, ALBUM_SHELF_SIZE)
+    : []
 )
 
-function playDashboardTrack(track: Track | null | undefined): void {
+async function playDashboardTrack(track: Track | null | undefined): Promise<void> {
   if (!track) return
-  cancelDashboardPlay()
-  if (databaseDashboard.value) {
-    const data = dashboardState.value.data
-    if (dashboardState.value.mode !== 'sqlite' || !data) return
-    if (getTrackSource(track) !== 'local') {
-      playTrack(track, [track])
-      return
-    }
-    // A history snapshot or active track may genuinely no longer be in the
-    // library. Confirm that before preserving its old singleton entry; SQL
-    // errors and unloaded records must never masquerade as missing tracks.
-    pendingDashboardPlay = { track, revision: data.revision, intent: dashboardPlayIntent }
-    pumpDashboardPlay()
-    return
+  dashboardActionError.value = ''
+  try {
+    if (props.previewTracks) {
+      const at = previewTracks.value.findIndex(item => item.id === track.id)
+      const start = Math.max(0, at - Math.floor(DASHBOARD_QUEUE_WINDOW / 2))
+      await playTrack(track, previewTracks.value.slice(start, start + DASHBOARD_QUEUE_WINDOW))
+    } else if (getTrackSource(track) === 'local') {
+      await playbackStore.playLibraryQuery({ sort: 'playlist', contentRevision: dashboardState.value.data?.revision }, track.id)
+    } else await playTrack(track, [track])
+  } catch (error) {
+    dashboardActionError.value = error instanceof Error ? error.message : String(error)
   }
-  const sourceIndex = tracks.value.findIndex((item) => item.id === track.id)
-  if (sourceIndex < 0) {
-    playTrack(track, [track])
-    return
-  }
-  const halfWindow = Math.floor(DASHBOARD_QUEUE_WINDOW / 2)
-  const start = Math.max(0, sourceIndex - halfWindow)
-  const end = Math.min(tracks.value.length, start + DASHBOARD_QUEUE_WINDOW)
-  const queueStart = Math.max(0, end - DASHBOARD_QUEUE_WINDOW)
-  playTrack(track, tracks.value.slice(queueStart, end))
-}
-
-function cancelDashboardPlay(): void {
-  dashboardPlayIntent++
-  pendingDashboardPlay = null
-}
-
-function pumpDashboardPlay(): void {
-  if (dashboardPlayBusy || !pendingDashboardPlay || !dashboardMounted) return
-  const request = pendingDashboardPlay
-  pendingDashboardPlay = null
-  dashboardPlayBusy = true
-  void (async () => {
-    try {
-      const page = await window.api.library.database.getTracksByIds(
-        [request.track.id],
-        request.revision
-      )
-      if (!dashboardMounted || request.intent !== dashboardPlayIntent) return
-      if (page.revision !== request.revision) throw new Error('曲库已变化，请刷新首页后重试')
-      dashboardActionError.value = ''
-      if (page.tracks.some((track) => track.id === request.track.id)) {
-        void playbackStore.playLibraryQuery(
-          { sort: 'playlist', contentRevision: request.revision },
-          request.track.id
-        )
-      } else playTrack(request.track, [request.track])
-    } catch (error) {
-      if (dashboardMounted && request.intent === dashboardPlayIntent)
-        dashboardActionError.value = error instanceof Error ? error.message : String(error)
-    } finally {
-      dashboardPlayBusy = false
-      pumpDashboardPlay()
-    }
-  })()
 }
 
 function shuffleAll(): void {
-  cancelDashboardPlay()
-  if (databaseDashboard.value) {
-    if (dashboardState.value.mode === 'sqlite' && dashboardTrackCount.value > 0)
-      void playbackStore.playLibraryQuery(
-        { sort: 'playlist', contentRevision: dashboardState.value.data?.revision },
-        undefined,
-        { randomStart: true, playMode: 'shuffle' }
-      )
-    return
-  }
-  if (tracks.value.length === 0) return
-  const index = Math.floor(Math.random() * tracks.value.length)
-  setPlayMode('shuffle')
-  playDashboardTrack(tracks.value[index])
+  if (dashboardTrackCount.value === 0) return
+  void playbackStore.playLibraryQuery(
+    { sort: 'playlist', contentRevision: dashboardState.value.data?.revision },
+    undefined,
+    { randomStart: true, playMode: 'shuffle' }
+  ).catch(error => { dashboardActionError.value = error instanceof Error ? error.message : String(error) })
 }
 
-function playAlbum(album: { tracks: Track[] } | LibraryCollectionSummary): void {
-  cancelDashboardPlay()
-  if (databaseDashboard.value) {
-    if (dashboardState.value.mode === 'sqlite' && 'id' in album)
-      void playbackStore.playLibraryQuery({
-        albumId: album.id,
-        sort: 'trackNumber',
-        contentRevision: dashboardState.value.data?.revision
-      })
-    return
-  }
-  if (!('tracks' in album)) return
-  const albumTracks = album.tracks
-  if (albumTracks.length === 0) return
-  playTrack(albumTracks[0], albumTracks)
+function playAlbum(album: LibraryCollectionSummary): void {
+  void playbackStore.playLibraryQuery({
+    albumId: album.id, sort: 'trackNumber', contentRevision: dashboardState.value.data?.revision
+  }).catch(error => { dashboardActionError.value = error instanceof Error ? error.message : String(error) })
 }
 
 function formatPlays(stat: RankedStat): string {
@@ -472,7 +355,7 @@ const calendarCells = computed<(CalendarCell | null)[]>(() => {
   const month = calCursor.value.getMonth()
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const leadingBlanks = (new Date(year, month, 1).getDay() + 6) % 7
-  const days = listeningStats.value.days
+  const days = statsOverview.value?.days ?? {}
   let monthMax = 0
   for (let day = 1; day <= daysInMonth; day += 1) {
     monthMax = Math.max(monthMax, days[calDayKey(year, month, day)] ?? 0)
@@ -580,7 +463,7 @@ let dspRouteRefreshInFlight = false
 
 const embeddedDspGraphStatus = computed(
   () =>
-    outputInfo.value?.nativeDsp?.graph ?? playbackInfo.value?.outputInfo?.nativeDsp?.graph ?? null
+    playbackStore.dspGraphStatus.value ?? null
 )
 const dspGraphStatus = computed<DspGraphStatus | null>(() => {
   const embedded = embeddedDspGraphStatus.value
@@ -882,7 +765,7 @@ const dspSourceFullDetail = computed(() => {
     info.codec?.toUpperCase(),
     formatSampleRate(info.sourceSampleRate),
     info.sourceBitDepth > 0 ? `${info.sourceBitDepth} bit` : '',
-    formatChannels(info.channelCount || info.decodedChannels)
+    formatChannels(info.sourceChannels || info.decodedChannels)
   ]
     .filter(Boolean)
     .join(' · ')
@@ -949,7 +832,7 @@ async function refreshDspGraphStatus(): Promise<void> {
   if (dspRouteRefreshInFlight) return
   dspRouteRefreshInFlight = true
   try {
-    polledDspGraphStatus.value = await window.api.audioEngine.getDspGraphStatus()
+    polledDspGraphStatus.value = await core.query('audio.dsp.status', {})
     dspRouteError.value = ''
   } catch (error) {
     if (!polledDspGraphStatus.value && !embeddedDspGraphStatus.value) {
@@ -962,7 +845,7 @@ async function refreshDspGraphStatus(): Promise<void> {
 
 async function refreshDspSceneState(): Promise<void> {
   try {
-    dspSceneState.value = await window.api.audioEngine.getDspSceneState()
+    dspSceneState.value = (await core.query('audio.dsp', {})).scenes
     dspRouteError.value = ''
   } catch (error) {
     if (!dspSceneState.value) {

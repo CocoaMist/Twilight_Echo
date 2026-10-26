@@ -42,6 +42,7 @@ import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { useLocale } from '../app/useLocale.ts'
 import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
+import { useCoreConnection } from '../stores/coreConnection.ts'
 import { isTrackUnderLibraryRoot, normalizeLibraryPath } from '../stores/library/musicStoreData.ts'
 import { useExtensionRegistry } from '../extensions/registry'
 import type {
@@ -97,6 +98,7 @@ const settingsSearchQuery = ref('')
 const settingsNotice = ref('')
 const settingsError = ref('')
 const storageError = ref('')
+const core = useCoreConnection()
 const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
@@ -230,8 +232,7 @@ const {
   pauseLibraryScan,
   resumeLibraryScan,
   cancelLibraryScan,
-  cancelLibraryMetadataEnrichment,
-  refreshLibraryIndex
+  cancelLibraryMetadataEnrichment
 } = useMusicStore()
 const libraryScanCommandError = ref('')
 const libraryResetPending = ref(false)
@@ -321,7 +322,7 @@ function formatWatcherTime(iso: string | null | undefined): string {
 
 async function refreshLibraryWatcherStatus(): Promise<void> {
   try {
-    libraryWatcherStatus.value = await window.api.library.getWatcherStatus()
+    libraryWatcherStatus.value = await core.query('scan.watchers', {})
   } catch {
     libraryWatcherStatus.value = null
   }
@@ -480,7 +481,6 @@ const hasSettingsSearchNoResults = computed(
 async function setGenreSeparators(event: Event): Promise<void> {
   const value = (event.target as HTMLInputElement).value
   await updateSettings({ genreSeparators: value })
-  refreshLibraryIndex()
 }
 
 function toggleSetting(key: BooleanSettingKey): void {

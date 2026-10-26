@@ -67,6 +67,46 @@ void CrossfeedProcessor::process(float* samples, size_t frameCount) {
   }
 }
 
+void CrossfeedProcessor::processDouble(double* samples, size_t frameCount) {
+  if (!active_ || !samples || frameCount == 0 || delayLeft_.empty() || delayRight_.empty()) return;
+
+  const double strength = std::clamp(config_.crossfeedStrength, 0.0, 1.0);
+  double directGain = 1.0 - 0.08 * strength;
+  double crossGain = 0.38 * strength;
+  switch (config_.crossfeedAlgorithm) {
+    case CrossfeedAlgorithm::Bauer:
+    case CrossfeedAlgorithm::Bs2b:
+      directGain = 1.0 - 0.12 * strength;
+      crossGain = 0.24 * strength;
+      break;
+    case CrossfeedAlgorithm::Meier:
+      directGain = 1.0 - 0.05 * strength;
+      crossGain = 0.18 * strength;
+      break;
+    case CrossfeedAlgorithm::Custom:
+    default:
+      break;
+  }
+
+  for (size_t frame = 0; frame < frameCount; ++frame) {
+    const size_t index = frame * 2;
+    const double left = samples[index];
+    const double right = samples[index + 1];
+
+    const double delayedLeft = delayLeft_[delayIndex_];
+    const double delayedRight = delayRight_[delayIndex_];
+    delayLeft_[delayIndex_] = static_cast<float>(left);
+    delayRight_[delayIndex_] = static_cast<float>(right);
+    crossfeed::advanceDelayIndex(delayIndex_, delayLeft_.size());
+
+    lowpassLeft_ += alpha_ * (delayedLeft - lowpassLeft_);
+    lowpassRight_ += alpha_ * (delayedRight - lowpassRight_);
+
+    samples[index] = std::clamp(left * directGain + lowpassRight_ * crossGain, -4.0, 4.0);
+    samples[index + 1] = std::clamp(right * directGain + lowpassLeft_ * crossGain, -4.0, 4.0);
+  }
+}
+
 void CrossfeedProcessor::reset() {
   std::fill(delayLeft_.begin(), delayLeft_.end(), 0.0f);
   std::fill(delayRight_.begin(), delayRight_.end(), 0.0f);

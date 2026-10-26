@@ -1,5 +1,33 @@
 import { normalizeLibraryPath, parentDirectoryOf } from './libraryIdentity.ts'
 import { getPinyinInitial } from './pinyinInitials.ts'
+import { fileArtistCredits, type TrackIdentityTags } from './trackIdentification.ts'
+
+export function libraryArtistCredits(track: {
+  artists?: readonly { name: string; id?: string | number }[]
+  identityTags?: TrackIdentityTags
+}): { name: string; id?: string | number }[] {
+  const artists = Array.isArray(track.artists)
+    ? track.artists.filter(artist => artist && typeof artist.name === 'string' && artist.name.trim())
+    : undefined
+  return artists?.length ? [...artists] : fileArtistCredits(track.identityTags)
+}
+
+/** Structured credits describe members; the joined display credit is not another artist.
+ * Only the legacy, whitespace-delimited slash is a separator without structured tags.
+ * Punctuation inside a real name (AC/DC, Earth, Wind & Fire) stays literal.
+ */
+export function libraryArtistNames(track: {
+  artist: string
+  artists?: readonly { name: string }[]
+  identityTags?: TrackIdentityTags
+}): string[] {
+  const credits = libraryArtistCredits(track).map((artist) => artist.name.trim()).filter(Boolean)
+  if (credits?.length) return [...new Set(credits)]
+  const names = track.artist.split(/\s+\/\s+/)
+  return names.length > 1
+    ? [...new Set(names.map((name) => name.trim()).filter(Boolean))]
+    : [track.artist || '未知艺术家']
+}
 
 export function collectionIndexLetter(name: string): string | null {
   const first = name.trim().normalize('NFKD').replace(/\p{M}/gu, '').charAt(0).toUpperCase()
@@ -9,16 +37,13 @@ export function collectionIndexLetter(name: string): string | null {
 
 /** Keep full display-name links as well as individual credited artists usable. */
 export function isLibraryArtistMember(
-  track: { artist: string; artists?: readonly { name: string }[] },
+  track: { artist: string; artists?: readonly { name: string }[]; identityTags?: TrackIdentityTags },
   name: string
 ): boolean {
   const artistName = name.trim()
   if (!artistName) return false
   if ((track.artist.trim() || '未知艺术家') === artistName) return true
-  const names = track.artists?.length
-    ? track.artists.map((artist) => artist.name)
-    : track.artist.split(/\s+\/\s+/)
-  return names.some((name) => name.trim() === artistName)
+  return libraryArtistNames(track).some((name) => name.trim() === artistName)
 }
 
 export function resolveAlbumArtist(

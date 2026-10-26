@@ -12,6 +12,8 @@
  * rejection happens before `audioEngine:play` is ever reached.
  */
 export const MAX_NATIVE_QUEUE_ITEMS = 5000
+/** Legacy array sessions can derive occurrence IDs from full local paths. */
+export const MAX_QUEUE_OCCURRENCE_ID_LENGTH = 8192
 
 export interface NativeQueueCommit {
   queueToken: string

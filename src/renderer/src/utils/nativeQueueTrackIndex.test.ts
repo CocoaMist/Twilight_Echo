@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '@renderer/types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import { findNativeQueueTrackIndex } from './nativeQueueTrackIndex.ts'
 
 const queue = [

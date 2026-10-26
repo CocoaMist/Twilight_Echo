@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import type { DspScene, DspSceneRule } from '../../../../shared/dspGraph.ts'
 
+type ListRule = 'deviceIds' | 'backends' | 'channelLayouts' | 'sourceKinds'
 const scene = defineModel<DspScene>({ required: true })
 const { audioDeviceOptions, audioOutputOptions } = storeToRefs(useAudioOutputDspStore())
 const devices = computed(() => {
@@ -13,14 +14,43 @@ const devices = computed(() => {
       known.push({ value: id, label: `${id}（离线 / 未知）` })
   return known
 })
-const backends = computed(() => [
-  ...new Set([
-    ...audioOutputOptions.value.map((item) => item.id),
-    ...(scene.value.rules.backends ?? [])
-  ])
+const backends = computed(() =>
+  [
+    ...new Set([
+      ...audioOutputOptions.value.map((item) => item.id),
+      ...(scene.value.rules.backends ?? [])
+    ])
+  ].map((value) => ({ value, label: value }))
+)
+const groups = computed<
+  Array<{ key: ListRule; label: string; hint: string; options: { value: string; label: string }[] }>
+>(() => [
+  { key: 'deviceIds', label: '输出设备', hint: '不选则不限设备', options: devices.value },
+  { key: 'backends', label: '音频后端', hint: '不选则不限后端', options: backends.value },
+  {
+    key: 'channelLayouts',
+    label: '声道布局',
+    hint: '按输出声道数匹配',
+    options: ['mono', 'stereo', '5.1', '7.1'].map((value) => ({ value, label: value }))
+  },
+  {
+    key: 'sourceKinds',
+    label: '音源格式',
+    hint: 'PCM 或 DSD 音源',
+    options: [
+      { value: 'pcm', label: 'PCM' },
+      { value: 'dsd', label: 'DSD' }
+    ]
+  }
 ])
-function setList(key: keyof DspSceneRule, event: Event): void {
-  const values = [...(event.target as HTMLSelectElement).selectedOptions].map((item) => item.value)
+function selected(key: ListRule, value: string): boolean {
+  return ((scene.value.rules[key] as string[] | undefined) ?? []).includes(value)
+}
+function toggle(key: ListRule, value: string, checked: boolean): void {
+  const current = new Set((scene.value.rules[key] as string[] | undefined) ?? [])
+  if (checked) current.add(value)
+  else current.delete(value)
+  const values = [...current]
   if (values.length) scene.value.rules[key] = values as never
   else delete scene.value.rules[key]
 }
@@ -30,75 +60,79 @@ function setRate(key: 'minSampleRate' | 'maxSampleRate', event: Event): void {
   else if (Number.isFinite(input.valueAsNumber))
     scene.value.rules[key] = Math.max(0, input.valueAsNumber)
 }
+const ruleCount = computed(
+  () =>
+    (Object.keys(scene.value.rules) as Array<keyof DspSceneRule>).filter((key) => {
+      const value = scene.value.rules[key]
+      return Array.isArray(value) ? value.length > 0 : value !== undefined
+    }).length
+)
 </script>
 
 <template>
   <section class="scene-settings">
     <header class="pane-heading">
-      <h2>场景设置</h2>
-      <span class="muted">自动匹配 · 所有条件同时满足</span>
+      <div>
+        <h2>场景规则</h2>
+        <small class="muted">{{
+          ruleCount ? `${ruleCount} 项条件需同时满足` : '尚未设置条件 · 匹配任意设备与格式'
+        }}</small>
+      </div>
     </header>
-    <div class="settings-grid">
-      <label>名称<input v-model="scene.name" maxlength="64" /></label>
-      <label>优先级<input v-model.number="scene.priority" type="number" step="1" /></label>
-      <label class="switch-field"><input v-model="scene.enabled" type="checkbox" />参与匹配</label>
-      <label
-        >设备 <small>不选则不限；Ctrl / ⌘ 多选</small>
-        <select
-          multiple
-          :value="scene.rules.deviceIds ?? []"
-          @change="setList('deviceIds', $event)"
-        >
-          <option v-for="device in devices" :key="device.value" :value="device.value">
-            {{ device.label }}
-          </option>
-        </select>
-      </label>
-      <label
-        >音频后端
-        <select multiple :value="scene.rules.backends ?? []" @change="setList('backends', $event)">
-          <option v-for="backend in backends" :key="backend" :value="backend">{{ backend }}</option>
-        </select>
-      </label>
-      <label
-        >声道布局
-        <select
-          multiple
-          :value="scene.rules.channelLayouts ?? []"
-          @change="setList('channelLayouts', $event)"
-        >
-          <option v-for="layout in ['mono', 'stereo', '5.1', '7.1']" :key="layout">
-            {{ layout }}
-          </option>
-        </select>
-      </label>
-      <label
-        >源格式
-        <select
-          multiple
-          :value="scene.rules.sourceKinds ?? []"
-          @change="setList('sourceKinds', $event)"
-        >
-          <option value="pcm">PCM</option>
-          <option value="dsd">DSD</option>
-        </select>
-      </label>
-      <label
-        >最低采样率 · Hz<input
-          type="number"
-          min="0"
-          :value="scene.rules.minSampleRate"
-          placeholder="不限"
-          @change="setRate('minSampleRate', $event)"
+    <div class="rule-identity">
+      <label class="field"
+        ><span>场景名称</span><input v-model="scene.name" maxlength="64"
       /></label>
-      <label
-        >最高采样率 · Hz<input
-          type="number"
-          min="0"
-          :value="scene.rules.maxSampleRate"
-          placeholder="不限"
-          @change="setRate('maxSampleRate', $event)"
+      <label class="field narrow"
+        ><span>优先级</span><input v-model.number="scene.priority" type="number" step="1"
       /></label>
+      <label class="switch-field rule-enabled"
+        ><input v-model="scene.enabled" type="checkbox" /><span
+          ><strong>参与自动匹配</strong><small>关闭后仅能通过固定使用启用</small></span
+        ></label
+      >
+    </div>
+    <div v-for="group in groups" :key="group.key" class="rule-group">
+      <div class="rule-label">
+        <strong>{{ group.label }}</strong
+        ><small>{{ group.hint }}</small>
+      </div>
+      <div class="chip-row" role="group" :aria-label="group.label">
+        <label v-for="option in group.options" :key="option.value" class="toggle-chip"
+          ><input
+            type="checkbox"
+            :checked="selected(group.key, option.value)"
+            @change="toggle(group.key, option.value, ($event.target as HTMLInputElement).checked)"
+          /><span :title="option.label">{{ option.label }}</span></label
+        >
+        <span v-if="!group.options.length" class="muted">暂无可选项</span>
+      </div>
+    </div>
+    <div class="rule-group">
+      <div class="rule-label"><strong>采样率范围</strong><small>留空表示不限 · 单位 Hz</small></div>
+      <div class="rate-range">
+        <label class="field"
+          ><span>最低</span
+          ><input
+            type="number"
+            min="0"
+            :value="scene.rules.minSampleRate"
+            placeholder="不限"
+            aria-label="最低采样率 · Hz"
+            @change="setRate('minSampleRate', $event)"
+        /></label>
+        <span class="range-dash" aria-hidden="true">—</span>
+        <label class="field"
+          ><span>最高</span
+          ><input
+            type="number"
+            min="0"
+            :value="scene.rules.maxSampleRate"
+            placeholder="不限"
+            aria-label="最高采样率 · Hz"
+            @change="setRate('maxSampleRate', $event)"
+        /></label>
+      </div>
     </div>
   </section>
 </template>

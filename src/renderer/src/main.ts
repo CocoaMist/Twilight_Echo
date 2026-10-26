@@ -8,6 +8,8 @@ import { beginStartupSnapshot } from './app/startupSnapshot'
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { installScrollToTopButton } from './utils/scrollToTopButton'
 import { injectCachedThemeRuntime } from './app/themeRuntimeCache'
+import { initializeCoreWindow } from './app/initializeCoreWindow.ts'
+import { useCoreConnection } from './stores/coreConnection.ts'
 
 const query = new URLSearchParams(window.location.search)
 installRendererDiagnostics()
@@ -74,11 +76,18 @@ document.addEventListener(
 async function mountApp(): Promise<void> {
   if (!isSatelliteWindow) {
     try {
-      await (await import('./app/personalRestore')).applyPersonalRendererRestore()
+      await initializeCoreWindow(useCoreConnection())
     } catch (error) {
       const message = document.createElement('p')
-      message.textContent = `个人数据恢复未完成，请关闭应用后重试。${error instanceof Error ? error.message : String(error)}`
-      document.getElementById('app')?.append(message)
+      message.textContent = `Core 初始化未完成：${error instanceof Error ? error.message : String(error)}`
+      const retry = document.createElement('button')
+      retry.textContent = '重试'
+      retry.onclick = () => {
+        message.remove()
+        retry.remove()
+        void mountApp()
+      }
+      document.getElementById('app')?.append(message, retry)
       return
     }
   }

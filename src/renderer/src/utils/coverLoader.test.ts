@@ -1,9 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-const { clearCoverCache, clearRemoteCoverGrantCache, resolveCover } = (await import(
-  new URL('./coverLoader.ts', import.meta.url).href
-)) as typeof import('./coverLoader')
+const { clearCoverCache, clearRemoteCoverGrantCache, readCachedCover, resolveCover } =
+  (await import(
+    new URL('./coverLoader.ts', import.meta.url).href
+  )) as typeof import('./coverLoader')
+
+test('cached artwork is available synchronously with the same source priority and invalidation', async () => {
+  const record = globalThis as Record<string, unknown>
+  const previous = record.window
+  record.window = {
+    api: {
+      data: {
+        getCover: async () => 'data:image/png;base64,local',
+        grantRemoteCover: async () => 'twilight-media://image/remote'
+      }
+    }
+  }
+  clearCoverCache()
+  try {
+    assert.equal(readCachedCover('cover://avatar.png'), null)
+    assert.equal(readCachedCover('https://example.com/avatar'), null)
+    await resolveCover('cover://avatar.png')
+    await resolveCover(null, 'https://example.com/avatar')
+    assert.equal(
+      readCachedCover('cover://avatar.png#v=1', 'https://example.com/avatar'),
+      'data:image/png;base64,local'
+    )
+    assert.equal(
+      readCachedCover(null, 'https://example.com/avatar'),
+      'twilight-media://image/remote'
+    )
+    assert.equal(readCachedCover('data:image/png;base64,manual'), 'data:image/png;base64,manual')
+    assert.equal(readCachedCover('twilight-media://image/live'), 'twilight-media://image/live')
+    clearCoverCache()
+    assert.equal(readCachedCover('cover://avatar.png'), null)
+    assert.equal(readCachedCover(null, 'https://example.com/avatar'), null)
+  } finally {
+    record.window = previous
+    clearCoverCache()
+  }
+})
 
 test('clearing display caches prevents late IPC responses from populating a new generation', async () => {
   const record = globalThis as Record<string, unknown>

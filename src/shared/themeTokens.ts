@@ -1148,6 +1148,50 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'linear-gradient(135deg, #0f172a, #1e3a5f, #312e81, #1e3a5f, #0f172a)'
   ),
   token(
+    'playback.backdrop.tempo',
+    '--te-playback-fluid-tempo',
+    '流体光影流转周期',
+    'playback',
+    'player',
+    'number',
+    '18s',
+    '18s',
+    { min: 6, max: 36, step: 1, unit: 's' }
+  ),
+  token(
+    'playback.cover.scale',
+    '--te-playback-cover-scale',
+    '封面缩放比例',
+    'playback',
+    'player',
+    'number',
+    '100%',
+    '100%',
+    { min: 60, max: 115, step: 1, unit: '%' }
+  ),
+  token(
+    'playback.stage.spread',
+    '--te-playback-stage-spread',
+    '封面与歌词间距',
+    'playback',
+    'player',
+    'length',
+    '40px',
+    '40px',
+    { min: 16, max: 96, step: 2, unit: 'px' }
+  ),
+  token(
+    'playback.stage.span',
+    '--te-playback-stage-span',
+    '播放舞台展开度',
+    'playback',
+    'player',
+    'length',
+    '820px',
+    '820px',
+    { min: 520, max: 1120, step: 10, unit: 'px' }
+  ),
+  token(
     'playback.cover.surface',
     '--te-playback-cover-surface',
     '封面底材',
@@ -1166,6 +1210,16 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shadow',
     '0 26px 70px rgba(15, 23, 42, 0.28)',
     '0 26px 70px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.06)'
+  ),
+  token(
+    'playback.cover.border',
+    '--te-playback-cover-border',
+    '封面边框颜色',
+    'playback',
+    'player',
+    'color',
+    'rgba(255, 255, 255, 0.14)',
+    'rgba(255, 255, 255, 0.14)'
   ),
   token(
     'playback.cover.radius',
@@ -1249,6 +1303,16 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     '#ffffff'
   ),
   token(
+    'playback.lyrics.karaoke',
+    '--te-playback-lyric-karaoke',
+    '逐字歌词高亮',
+    'playback',
+    'lyrics',
+    'color',
+    '#ffffff',
+    '#ffffff'
+  ),
+  token(
     'playback.lyrics.activeSurface',
     '--te-playback-lyric-active-surface',
     '当前歌词表面',
@@ -1317,6 +1381,50 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'color',
     'rgba(255, 255, 255, 0.72)',
     'rgba(255, 255, 255, 0.72)'
+  ),
+  token(
+    'playback.lyrics.density',
+    '--te-playback-lyric-density',
+    '歌词行距间隔',
+    'playback',
+    'lyrics',
+    'length',
+    '10px',
+    '10px',
+    { min: 4, max: 28, step: 1, unit: 'px' }
+  ),
+  token(
+    'playback.lyrics.activeScale',
+    '--te-playback-lyric-active-scale',
+    '当前歌词放大比例',
+    'playback',
+    'lyrics',
+    'number',
+    '102%',
+    '102%',
+    { min: 100, max: 118, step: 1, unit: '%' }
+  ),
+  token(
+    'playback.lyrics.inactiveOpacity',
+    '--te-playback-lyric-inactive-opacity',
+    '未唱歌词不透明度',
+    'playback',
+    'lyrics',
+    'number',
+    '66%',
+    '66%',
+    { min: 20, max: 95, step: 5, unit: '%' }
+  ),
+  token(
+    'playback.lyrics.inactiveBlur',
+    '--te-playback-lyric-inactive-blur',
+    '远端歌词景深模糊',
+    'playback',
+    'lyrics',
+    'length',
+    '0.8px',
+    '0.8px',
+    { min: 0, max: 4, step: 0.2, unit: 'px' }
   ),
   token(
     'playback.control.surface',

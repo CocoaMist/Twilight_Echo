@@ -76,3 +76,15 @@ export interface DuplicateDetectionResult {
 export interface DuplicateDetectionReadApi {
   detectDuplicates(): Promise<DuplicateDetectionResult>
 }
+
+export function duplicateGroupLabel(group: DuplicateGroup): string {
+  const evidence = {
+    path: '相同路径',
+    contentHash: '相同文件 hash',
+    audioFingerprint: '相同音频指纹',
+    metadataCandidate: '相近元数据',
+    logicalTrack: '相同曲目'
+  }[group.kind]
+  const confidence = { exact: '精确', probable: '较高', possible: '待确认' }[group.confidence]
+  return `${evidence} · ${confidence}置信度`
+}

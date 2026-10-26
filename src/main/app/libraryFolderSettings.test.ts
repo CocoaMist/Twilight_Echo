@@ -37,7 +37,8 @@ for (const watchLibrary of [true, false]) {
       './windowAppearance.ts': {},
       '../cache/ncmCache': {},
       '../integrations/discord': {},
-      '../library/watcher': { applyLibraryWatchers() {} }
+      '../library/watcher': { applyLibraryWatchers() {} },
+      '../coreProcess/settingsBridge.ts': { getCoreSettingsBridge: () => null }
     }
     const exports: { updateAppSettings?: (patch: Record<string, unknown>) => Promise<unknown> } = {}
     runInNewContext(

@@ -405,6 +405,28 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '媒体库 下载 缓存 存储 genre separator 标签 分隔 元数据 流派分隔符',
     disclosureId: 'scan-diagnostics'
   },
+  ...[
+    {
+      id: 'metadata-new-imports',
+      title: '自动补全新入库资料',
+      terms: '本地 流媒体 音乐库 自动识别 新入库 隐私'
+    },
+    {
+      id: 'metadata-history',
+      title: '回填已有音乐库资料',
+      terms: '音乐库 历史 回填 补全 介绍 识别'
+    },
+    {
+      id: 'metadata-language',
+      title: '资料首选语言',
+      terms: '艺人 歌手 专辑 介绍 简体 繁体 中文 英文'
+    },
+    {
+      id: 'metadata-sources',
+      title: '资料源',
+      terms: '音乐库 MusicBrainz Wikipedia 平台 许可 介绍 补全'
+    }
+  ].map((entry) => ({ ...entry, section: 'library' as const, disclosureId: 'music-metadata' })),
   {
     id: 'watch-library',
     section: 'library',

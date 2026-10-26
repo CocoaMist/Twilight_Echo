@@ -127,6 +127,7 @@ const contextGroup = computed(
       navigation: '导航',
       material: '导航',
       'player-bar': '播放栏',
+      'player-page': '播放栏',
       card: '卡片',
       'global-font': '字体',
       'appearance-theme': '配色',
@@ -431,6 +432,8 @@ const contextColorTokens = computed(() =>
     if (token.kind !== 'color') return false
     if (props.part === 'navigation') return token.surface === 'navigation'
     if (props.part === 'player-bar') return token.surface === 'playerBar'
+    if (props.part === 'player-page')
+      return token.surface === 'player' || token.id === 'surface.player'
     if (props.part === 'card') return token.surface === 'card'
     if (props.part === 'background')
       return token.id === 'surface.app' || token.surface === 'app-background'

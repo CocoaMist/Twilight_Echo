@@ -1,106 +1,109 @@
-import { computed, readonly, ref } from 'vue'
+import { computed, effectScope, readonly, ref, watch } from 'vue'
+import type { CorePodcast, CorePodcastEpisode } from '../../../shared/coreStreams.ts'
 import {
-  DEFAULT_PODCAST_SUBSCRIPTIONS,
-  MAX_PODCAST_SUBSCRIPTIONS,
-  clonePodcastSubscriptionsDocument,
   podcastEpisodeProgressRatio,
-  podcastEpisodeTrackId,
-  parsePodcastTrackId,
-  type PodcastEpisode,
-  type PodcastSubscription,
-  type PodcastSubscriptionsDocument
+  podcastEpisodeTrackId
 } from '../../../shared/podcastSubscriptions.ts'
-import { isPersistentDataRevisionConflict } from '../../../shared/versionedPersistence.ts'
-import type { Track } from '../types/music'
+import { useCoreConnection } from './coreConnection.ts'
 
-const document = ref<PodcastSubscriptionsDocument>(
-  clonePodcastSubscriptionsDocument(DEFAULT_PODCAST_SUBSCRIPTIONS)
-)
+export { podcastEpisodeTrackId }
+
+export type PodcastEpisodeView = CorePodcastEpisode
+export type PodcastSubscriptionView = CorePodcast
+const subscriptions = ref<PodcastSubscriptionView[]>([])
 const revision = ref(0)
 const loading = ref<Promise<void> | null>(null)
 const error = ref('')
 const busy = ref(false)
+const undoTokens = new Map<string, string>()
+const loaded = ref(false)
+let observedCore: ReturnType<typeof useCoreConnection> | null = null
+const observation = effectScope(true)
+
+function observe(core: ReturnType<typeof useCoreConnection>): void {
+  if (observedCore) return
+  observedCore = core
+  observation.run(() =>
+    watch(core.state, (snapshot) => {
+      const state = snapshot?.streams
+      if (state) error.value = state.error ?? ''
+      if (loaded.value && state && state.podcastRevision !== revision.value) {
+        void readAll(state.podcastRevision).catch((err) => {
+          error.value = err instanceof Error ? err.message : String(err)
+        })
+      }
+    })
+  )
+}
+
+async function readAll(podcastRevision?: number): Promise<void> {
+  const core = useCoreConnection()
+  const revisionToRead = podcastRevision ?? core.state.value?.streams?.podcastRevision
+  if (revisionToRead == null) throw new Error('流媒体服务尚未就绪')
+  const page = await core.query('podcasts.subscriptions', {
+    revision: revisionToRead,
+    offset: 0,
+    limit: 200
+  })
+  subscriptions.value = page.items
+  revision.value = page.revision
+  loaded.value = true
+}
 
 async function ensureLoaded(): Promise<void> {
   if (loading.value) return loading.value
+  const core = useCoreConnection()
+  observe(core)
   loading.value = (async () => {
-    try {
-      const result = await window.api.podcast.loadSubscriptions()
-      if (result?.data) {
-        document.value = clonePodcastSubscriptionsDocument(result.data)
-        revision.value = result.revision
-      }
+    if (!core.state.value) await core.attach()
+    const nextRevision = core.state.value?.streams?.podcastRevision
+    if (!loaded.value || nextRevision !== revision.value) await readAll(nextRevision)
+  })()
+    .then(() => {
       error.value = ''
-    } catch (err) {
+    })
+    .catch((err) => {
       error.value = err instanceof Error ? err.message : String(err)
-    }
-  })().finally(() => {
-    loading.value = null
-  })
+      throw err
+    })
+    .finally(() => {
+      loading.value = null
+    })
   return loading.value
 }
 
-function applyDocument(next: PodcastSubscriptionsDocument, nextRevision: number): void {
-  document.value = clonePodcastSubscriptionsDocument(next)
-  revision.value = nextRevision
+async function applyResult(result: { state: { podcastRevision: number } }): Promise<void> {
+  await readAll(result.state.podcastRevision)
+  error.value = ''
 }
-
-export { parsePodcastTrackId }
-
-export function podcastEpisodeToTrack(
-  subscription: PodcastSubscription,
-  episode: PodcastEpisode
-): Track {
-  return {
-    id: podcastEpisodeTrackId(subscription.id, episode.guid),
-    title: episode.title,
-    artist: subscription.author || subscription.title || '播客',
-    album: subscription.title,
-    filePath: episode.mediaUrl,
-    fileName: episode.title,
-    duration: episode.durationSeconds || 0,
-    size: 0,
-    cover: episode.coverUrl ?? subscription.coverUrl ?? null,
-    lyrics: null,
-    source: 'podcast',
-    streamUrl: episode.mediaUrl
-  }
-}
-
-const PODCAST_DEFAULT_RATE_KEY = 'twilight.podcast.defaultPlaybackRate'
 
 export function getPodcastDefaultPlaybackRate(): number {
-  try {
-    const raw = localStorage.getItem(PODCAST_DEFAULT_RATE_KEY)
-    if (!raw) return 1
-    const n = Number(raw)
-    if (!Number.isFinite(n)) return 1
-    return Math.min(2, Math.max(0.5, Math.round(n * 100) / 100))
-  } catch {
-    return 1
-  }
+  return useCoreConnection().state.value?.streams?.defaultPlaybackRate ?? 1
 }
 
 export function setPodcastDefaultPlaybackRate(rate: number): void {
-  const rounded = Math.min(2, Math.max(0.5, Math.round(rate * 100) / 100))
-  try {
-    localStorage.setItem(PODCAST_DEFAULT_RATE_KEY, String(rounded))
-  } catch {
-    // ignore quota / private mode
-  }
+  const core = useCoreConnection(),
+    state = core.state.value?.streams
+  if (state)
+    void core.command('podcasts.defaultRate', { revision: state.preferencesRevision, rate })
 }
 
 export function usePodcastStore() {
-  const subscriptions = computed(() => document.value.subscriptions)
+  const core = useCoreConnection()
 
-  async function subscribe(feedUrl: string): Promise<PodcastSubscription> {
+  async function subscribe(feedUrl: string): Promise<PodcastSubscriptionView> {
     busy.value = true
     error.value = ''
     try {
       await ensureLoaded()
-      const result = await window.api.podcast.subscribe(feedUrl.trim())
-      applyDocument(result.document, result.revision)
-      return result.subscription
+      const result = (await core.command('podcasts.subscribe', {
+        feedUrl: feedUrl.trim(),
+        revision: revision.value
+      })) as { state: { podcastRevision: number }; id: string }
+      await applyResult(result)
+      const item = subscriptions.value.find((sub) => sub.id === result.id)
+      if (!item) throw new Error('订阅添加后未找到')
+      return item
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       throw err
@@ -109,93 +112,38 @@ export function usePodcastStore() {
     }
   }
 
-  async function unsubscribe(subscriptionId: string): Promise<PodcastSubscription | null> {
+  async function unsubscribe(id: string): Promise<PodcastSubscriptionView | null> {
     await ensureLoaded()
-    const next = clonePodcastSubscriptionsDocument(document.value)
-    const removed = next.subscriptions.find((sub) => sub.id === subscriptionId)
+    const removed = subscriptions.value.find((sub) => sub.id === id) ?? null
     if (!removed) return null
-    next.subscriptions = next.subscriptions.filter((sub) => sub.id !== subscriptionId)
-    try {
-      const saved = await window.api.podcast.saveSubscriptions(next, revision.value)
-      applyDocument(saved.data, saved.revision)
-      error.value = ''
-      return removed
-    } catch (err) {
-      if (isPersistentDataRevisionConflict(err) && err.current) {
-        applyDocument(err.current.data as PodcastSubscriptionsDocument, err.current.revision)
-      }
-      error.value = err instanceof Error ? err.message : String(err)
-      throw err
-    }
+    const result = (await core.command('podcasts.edit', {
+      revision: revision.value,
+      edit: { kind: 'unsubscribe', id }
+    })) as { state: { podcastRevision: number }; undoToken?: string }
+    if (result.undoToken) undoTokens.set(id, result.undoToken)
+    await applyResult(result)
+    return removed
   }
 
-  async function restoreSubscription(subscription: PodcastSubscription): Promise<void> {
-    try {
-      // Reload authoritative data and merge only the removed subscription. Never
-      // restore the old whole document over changes made since the removal.
-      const loaded = await window.api.podcast.loadSubscriptions()
-      if (!loaded?.data) throw new Error('无法读取当前订阅，请稍后重试')
-      applyDocument(loaded.data, loaded.revision)
-      const next = clonePodcastSubscriptionsDocument(loaded.data)
-      if (
-        next.subscriptions.some(
-          (sub) => sub.id === subscription.id || sub.feedUrl === subscription.feedUrl
-        )
-      ) {
-        throw new Error('该播客已重新订阅，已保留当前订阅和进度')
-      }
-      if (next.subscriptions.length >= MAX_PODCAST_SUBSCRIPTIONS) {
-        throw new Error('订阅数量已达上限，请先移除其他订阅后重试')
-      }
-      next.subscriptions.push(subscription)
-      const saved = await window.api.podcast.saveSubscriptions(
-        clonePodcastSubscriptionsDocument(next),
-        loaded.revision
-      )
-      applyDocument(saved.data, saved.revision)
-      error.value = ''
-    } catch (err) {
-      if (isPersistentDataRevisionConflict(err) && err.current) {
-        applyDocument(err.current.data as PodcastSubscriptionsDocument, err.current.revision)
-      }
-      error.value = err instanceof Error ? err.message : String(err)
-      throw err
-    }
+  async function restoreSubscription(removed: PodcastSubscriptionView): Promise<void> {
+    const token = undoTokens.get(removed.id)
+    if (!token) throw new Error('撤销已失效，请重新订阅')
+    const result = (await core.command('podcasts.edit', {
+      revision: revision.value,
+      edit: { kind: 'restore', token }
+    })) as { state: { podcastRevision: number } }
+    undoTokens.delete(removed.id)
+    await applyResult(result)
   }
 
-  async function refresh(subscriptionId: string): Promise<void> {
+  async function refresh(id?: string): Promise<void> {
     busy.value = true
     error.value = ''
     try {
-      const result = await window.api.podcast.refresh(subscriptionId)
-      applyDocument(result.document, result.revision)
-    } catch (err) {
-      const payload = err as {
-        document?: PodcastSubscriptionsDocument
-        revision?: number
-        message?: string
+      const result = (await core.command('podcasts.refresh', { revision: revision.value, id })) as {
+        state: { podcastRevision: number }
       }
-      if (payload?.document && typeof payload.revision === 'number') {
-        applyDocument(payload.document, payload.revision)
-      }
-      error.value = err instanceof Error ? err.message : String(err)
-      throw err
-    } finally {
-      busy.value = false
-    }
-  }
-
-  async function refreshAll(): Promise<void> {
-    busy.value = true
-    error.value = ''
-    try {
-      const next = await window.api.podcast.refreshAll()
-      document.value = clonePodcastSubscriptionsDocument(next)
-      // refreshAll mutates via per-sub saves; reload revision from disk
-      const loaded = await window.api.podcast.loadSubscriptions()
-      if (loaded) {
-        applyDocument(loaded.data, loaded.revision)
-      }
+      await applyResult(result)
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       throw err
@@ -204,31 +152,31 @@ export function usePodcastStore() {
     }
   }
 
-  async function updateEpisodeProgress(
-    subscriptionId: string,
-    episodeGuid: string,
-    progressSeconds: number
-  ): Promise<void> {
+  async function episodes(id: string): Promise<CorePodcastEpisode[]> {
     await ensureLoaded()
-    const next = clonePodcastSubscriptionsDocument(document.value)
-    const sub = next.subscriptions.find((item) => item.id === subscriptionId)
-    if (!sub) return
-    const episode = sub.episodes.find((item) => item.guid === episodeGuid)
-    if (!episode) return
-    episode.progressSeconds = Math.max(0, progressSeconds)
-    sub.updatedAt = new Date().toISOString()
-    try {
-      const saved = await window.api.podcast.saveSubscriptions(next, revision.value)
-      applyDocument(saved.data, saved.revision)
-    } catch (err) {
-      if (isPersistentDataRevisionConflict(err) && err.current) {
-        applyDocument(err.current.data as PodcastSubscriptionsDocument, err.current.revision)
-      }
-    }
+    const page = await core.query('podcasts.episodes', {
+      id,
+      revision: revision.value,
+      offset: 0,
+      limit: 200
+    })
+    return page.items
+  }
+
+  async function playEpisode(subscriptionId: string, guid: string, resume = true): Promise<void> {
+    await ensureLoaded()
+    await core.command('streams.play', {
+      kind: 'podcast',
+      id: subscriptionId,
+      guid,
+      revision: revision.value,
+      resume,
+      play: true
+    })
   }
 
   return {
-    subscriptions,
+    subscriptions: computed(() => subscriptions.value),
     revision: readonly(revision),
     error: readonly(error),
     busy: readonly(busy),
@@ -237,12 +185,12 @@ export function usePodcastStore() {
     unsubscribe,
     restoreSubscription,
     refresh,
-    refreshAll,
-    updateEpisodeProgress,
-    podcastEpisodeToTrack,
+    refreshAll: () => refresh(),
+    episodes,
+    playEpisode,
     podcastEpisodeProgressRatio,
-    parsePodcastTrackId,
-    getPodcastDefaultPlaybackRate,
-    setPodcastDefaultPlaybackRate
+    podcastEpisodeTrackId
   }
 }
+
+if (import.meta.hot) import.meta.hot.dispose(() => observation.stop())

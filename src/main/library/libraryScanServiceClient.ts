@@ -87,6 +87,7 @@ export interface LocalLibraryScanServiceClientOptions {
    */
   idleTimeoutMs?: number
   electron?: ElectronModule
+  launch?: () => UtilityProcessLike
 }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 15_000
@@ -111,6 +112,13 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   private startingScans = 0
   private stopped = false
   private unavailableError = ''
+  private cacheBarrier: Promise<void> | null = null
+  private cacheControl: {
+    id: string
+    state: 'suspended' | 'running'
+    resolve(): void
+    reject(error: Error): void
+  } | null = null
 
   constructor(options: LocalLibraryScanServiceClientOptions) {
     super()
@@ -138,7 +146,8 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
       this.pending.size > 0 ||
       this.databaseReservation ||
       this.databaseSession ||
-      this.repairSession
+      this.repairSession ||
+      this.cacheBarrier
     )
       return
     this.idleTimer = setTimeout(() => {
@@ -243,6 +252,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     if (this.startupTimer) clearTimeout(this.startupTimer)
     this.startupTimer = null
     const error = new Error('local library scan service stopped')
+    this.cacheControl?.reject(error)
     this.rejectReady?.(error)
     this.rejectReady = null
     this.resolveReady = null
@@ -262,8 +272,10 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   private start(): boolean {
     if (this.stopped) return false
     if (this.child || this.readyPromise) return true
-    const electron = this.options.electron ?? (require('electron') as ElectronModule)
-    if (!electron.utilityProcess) {
+    const electron = this.options.launch
+      ? undefined
+      : (this.options.electron ?? (require('electron') as ElectronModule))
+    if (!this.options.launch && !electron?.utilityProcess) {
       this.unavailableError = 'Electron utilityProcess is unavailable for local library scanning'
       return false
     }
@@ -273,10 +285,12 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
       this.rejectReady = reject
     })
     try {
-      const child = electron.utilityProcess.fork(this.options.serviceEntry, [], {
-        serviceName: 'twilight-local-library-scan',
-        stdio: 'pipe'
-      })
+      const child = this.options.launch
+        ? this.options.launch()
+        : electron!.utilityProcess!.fork(this.options.serviceEntry, [], {
+            serviceName: 'twilight-local-library-scan',
+            stdio: 'pipe'
+          })
       this.child = child
       child.on('message', (message) => {
         if (this.child !== child) return
@@ -301,9 +315,11 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   }
 
   private async waitUntilReady(): Promise<void> {
+    while (this.cacheBarrier) await this.cacheBarrier
     if (!this.readyPromise && !this.child && !this.unavailableError) this.start()
     if (this.unavailableError) throw new Error(this.unavailableError)
     await this.readyPromise
+    while (this.cacheBarrier) await this.cacheBarrier
   }
   private async waitForScanStartup(): Promise<void> {
     this.startingScans++
@@ -315,6 +331,11 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   }
 
   private handleMessage(message: LocalLibraryScanWorkerMessage): void {
+    if (message.kind === 'cache-ready') {
+      if (this.cacheControl?.id === message.requestId && this.cacheControl.state === message.state)
+        this.cacheControl.resolve()
+      return
+    }
     if (message.kind === 'ready') {
       if (this.startupTimer) clearTimeout(this.startupTimer)
       this.startupTimer = null
@@ -411,7 +432,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
 
   private armWatchdog(requestId: string, pending: PendingScan): void {
     if (pending.watchdog) clearTimeout(pending.watchdog)
-    if (pending.paused) return
+    if (pending.paused || this.cacheBarrier) return
     pending.watchdog = setTimeout(() => {
       if (this.pending.get(requestId) !== pending) return
       const skippedPaths = Array.from(new Set(pending.lastFilePaths))
@@ -485,6 +506,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   }
 
   private detachChild(): void {
+    this.cacheControl?.reject(new Error('Scan process detached during cache maintenance'))
     this.clearIdleTimer()
     const child = this.child
     this.child = null
@@ -522,6 +544,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     if (this.startupTimer) clearTimeout(this.startupTimer)
     this.startupTimer = null
     const error = new Error(reason)
+    this.cacheControl?.reject(error)
     this.databaseSession?.fail(error)
     this.repairSession?.fail(error)
     this.rejectReady?.(error)
@@ -640,6 +663,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
       this.scanWatchdogMs
     )
     this.repairSession = session // Reserve before worker startup yields.
+    session.setCacheSuspended(this.cacheBarrier !== null)
     const abort = () => session.fail(new Error('歌单修复已取消'))
     signal?.addEventListener('abort', abort, { once: true })
     try {
@@ -667,6 +691,68 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     } catch {
       // The request will fail through the active scan promise when the child exits.
     }
+  }
+
+  /** ACK only after actual cover writers drain; new scans wait without spawning
+   * a worker. Deliberate cache maintenance is independent of the user's Pause. */
+  async maintainCoverCache<T>(action: () => Promise<T>): Promise<T> {
+    if (this.cacheBarrier) throw new Error('Scan cover maintenance is already running')
+    if (this.stopped) throw new Error('local library scan service stopped')
+    let release!: () => void
+    this.cacheBarrier = new Promise((resolve) => {
+      release = resolve
+    })
+    this.clearIdleTimer()
+    this.databaseSession?.setCacheSuspended(true)
+    this.repairSession?.setCacheSuspended(true)
+    for (const [id, pending] of this.pending) this.armWatchdog(id, pending)
+    let child: UtilityProcessLike | null = null
+    const id = randomUUID()
+    try {
+      // Join an existing startup only. The local barrier excludes later starts.
+      await this.readyPromise
+      child = this.child
+      if (child) await this.controlCovers(child, id, 'suspended')
+      return await action()
+    } finally {
+      try {
+        if (child && this.child === child) await this.controlCovers(child, id, 'running')
+      } finally {
+        this.cacheBarrier = null
+        release()
+        this.databaseSession?.setCacheSuspended(false)
+        this.repairSession?.setCacheSuspended(false)
+        for (const [id, pending] of this.pending) this.armWatchdog(id, pending)
+        this.armIdleTimer()
+      }
+    }
+  }
+  private controlCovers(
+    child: UtilityProcessLike,
+    id: string,
+    state: 'suspended' | 'running'
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer)
+        this.cacheControl = null
+        if (error) reject(error)
+        else resolve()
+      }
+      const timer = setTimeout(
+        () => finish(new Error('Scan cover maintenance acknowledgement timed out')),
+        this.options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
+      )
+      this.cacheControl = { id, state, resolve: () => finish(), reject: finish }
+      try {
+        child.postMessage({
+          kind: state === 'suspended' ? 'cache-suspend' : 'cache-resume',
+          requestId: id
+        })
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
   }
 }
 

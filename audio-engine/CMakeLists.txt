@@ -215,9 +215,10 @@ if(TAE_ASIO_AVAILABLE)
     output/asio/AsioHelperHost.cpp
     output/asio/AsioHostQueries.cpp
     output/asio/helper/AsioHelperProcess.cpp
+    output/asio/windows/AsioDriverCatalog.cpp
   )
   target_compile_definitions(twilight_audio_engine PRIVATE TAE_ENABLE_ASIO=1)
-  target_link_libraries(twilight_audio_engine PRIVATE user32)
+  target_link_libraries(twilight_audio_engine PRIVATE user32 advapi32 ole32)
 
   add_executable(twilight_asio_helper
     output/asio/helper/AsioHelperMain.cpp
@@ -654,11 +655,12 @@ if(TAE_BUILD_TESTS)
       output/asio/AsioHostQueries.cpp
       output/asio/MockAsioHost.cpp
       output/asio/helper/AsioHelperProcess.cpp
+      output/asio/windows/AsioDriverCatalog.cpp
       core/AudioTypes.cpp
     )
     target_include_directories(twilight_asio_backend_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(twilight_asio_backend_tests PRIVATE TAE_ENABLE_ASIO=1)
-    target_link_libraries(twilight_asio_backend_tests PRIVATE user32)
+    target_link_libraries(twilight_asio_backend_tests PRIVATE user32 advapi32 ole32)
     add_dependencies(twilight_asio_backend_tests twilight_asio_helper)
     add_test(NAME twilight_asio_backend_unit COMMAND twilight_asio_backend_tests)
     add_test(NAME twilight_asio_helper_selftest COMMAND twilight_asio_helper --self-test)
@@ -666,6 +668,8 @@ if(TAE_BUILD_TESTS)
     add_executable(twilight_asio_driver_compatibility_tests
       tests/asio_driver_compatibility_tests.cpp
       output/asio/AsioFormatSupport.cpp
+      output/asio/DeviceCapabilityCache.cpp
+      output/asio/windows/AsioDriverCatalog.cpp
       output/asio/windows/AsioDriverSession.cpp
       output/asio/windows/AsioControlThread.cpp
       output/asio/windows/AsioCallbackRouter.cpp
@@ -676,7 +680,7 @@ if(TAE_BUILD_TESTS)
     )
     target_include_directories(twilight_asio_driver_compatibility_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(twilight_asio_driver_compatibility_tests PRIVATE TAE_ENABLE_ASIO=1)
-    target_link_libraries(twilight_asio_driver_compatibility_tests PRIVATE ole32 uuid user32)
+    target_link_libraries(twilight_asio_driver_compatibility_tests PRIVATE ole32 uuid advapi32 user32)
     add_test(NAME twilight_asio_driver_compatibility_unit COMMAND twilight_asio_driver_compatibility_tests)
     set_tests_properties(twilight_asio_driver_compatibility_unit PROPERTIES TIMEOUT 30)
 
@@ -712,6 +716,7 @@ if(TAE_BUILD_TESTS)
     add_executable(twilight_asio_helper_process_tests
       output/asio/helper/AsioHelperProcess.test.cpp
       output/asio/AsioHelperHost.cpp
+      output/asio/DeviceCapabilityCache.cpp
       output/asio/helper/AsioHelperProcess.cpp
       core/AudioTypes.cpp
     )
@@ -787,9 +792,10 @@ if(TAE_BUILD_TESTS)
     target_sources(twilight_output_backend_tests PRIVATE
       output/asio/AsioHelperHost.cpp
       output/asio/helper/AsioHelperProcess.cpp
+      output/asio/windows/AsioDriverCatalog.cpp
     )
     target_compile_definitions(twilight_output_backend_tests PRIVATE TAE_ENABLE_ASIO=1)
-    target_link_libraries(twilight_output_backend_tests PRIVATE user32)
+    target_link_libraries(twilight_output_backend_tests PRIVATE user32 advapi32 ole32)
     add_dependencies(twilight_output_backend_tests twilight_asio_helper)
   endif()
   add_test(NAME twilight_output_backend_unit COMMAND twilight_output_backend_tests)

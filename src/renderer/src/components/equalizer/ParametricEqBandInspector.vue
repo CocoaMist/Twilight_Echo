@@ -140,12 +140,10 @@ defineExpose({ finishInteraction })
   box-sizing: border-box;
   padding: 14px 34px 9px 14px;
   border: 1px solid var(--eq-border);
-  border-radius: 14px;
+  border-radius: 6px;
   color: var(--eq-text);
-  background: linear-gradient(165deg, var(--eq-panel-raised), var(--eq-panel));
-  box-shadow:
-    0 12px 32px var(--eq-shadow),
-    inset 0 1px color-mix(in srgb, var(--eq-highlight) 18%, transparent);
+  background: var(--eq-panel-raised);
+  box-shadow: none;
   cursor: default;
   color-scheme: var(--eq-color-scheme);
 }
@@ -231,8 +229,8 @@ defineExpose({ finishInteraction })
 }
 .precision-controls {
   display: grid;
-  grid-template-columns: 72px 92px 64px;
-  align-items: end;
+  grid-template-columns: repeat(3, 76px);
+  align-items: start;
   gap: 6px;
 }
 .inspector-actions {

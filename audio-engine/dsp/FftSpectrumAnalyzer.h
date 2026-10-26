@@ -68,6 +68,7 @@ class FftSpectrumAnalyzer {
   mutable bool spectrumDirty_ = false;
   mutable bool spectrogramDirty_ = false;
   std::uint64_t spectrumGeneration_ = 0;
+  std::uint64_t resetGeneration_ = 0;
   double peakDb_ = -120.0;
   double rmsDb_ = -120.0;
   double lufsMomentary_ = -70.0;

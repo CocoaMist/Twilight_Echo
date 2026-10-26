@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import ts from 'typescript'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { createLibraryHomeStatus } from '../../stores/library/libraryHomeStatus.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -52,7 +52,7 @@ test('home status serializes scan storms, discards superseded revisions and stop
   assert.equal(calls, 3)
 })
 
-test('production home routing distinguishes unloaded SQLite from empty JSON and exposes retry', async () => {
+test('production home routing reads Core metadata and exposes retry without renderer library access', async () => {
   const source = readFileSync(new URL('./LocalHome.vue', import.meta.url), 'utf8')
   const ast = ts.createSourceFile(
     'home.ts',
@@ -64,97 +64,69 @@ test('production home routing distinguishes unloaded SQLite from empty JSON and 
     .filter((node) => !ts.isImportDeclaration(node))
     .map((node) => node.getText(ast))
     .join('\n')
-  for (const mode of ['sqlite', 'json'] as const) {
-    let fail = mode === 'sqlite',
-      reads = 0,
-      closed = 0,
-      callback: (() => void) | undefined
-    const mounts: Array<() => void> = [],
-      unmounts: Array<() => void> = []
-    const tracks = ref<unknown[]>([])
-    const entry = runInNewContext(
-      ts.transpileModule(script + '\n;({home,homeState,emptyLibrary,homePending})', {
-        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
-      }).outputText,
-      {
-        computed,
-        defineAsyncComponent: () => ({}),
-        onMounted: (fn: () => void) => mounts.push(fn),
-        onBeforeUnmount: (fn: () => void) => unmounts.push(fn),
-        defineProps: () => ({}),
-        defineEmits: () => () => {},
-        useThemeStore: () => ({ presetLayout: ref('default') }),
-        useMusicStore: () => ({
-          tracks:
-            mode === 'json'
-              ? tracks
-              : {
-                  get value(): never {
-                    throw new Error('full renderer library access')
-                  }
-                }
-        }),
-        createLibraryHomeStatus,
-        window: {
-          api: {
-            library: {
-              getStorageMode: async () => {
-                if (fail) throw new Error('discovery offline')
-                return mode
-              },
-              onChanged: (listener: () => void) => {
-                callback = listener
-                return () => {
-                  closed++
-                }
-              },
-              database: {
-                getMetadata: async () => {
-                  reads++
-                  return metadata(reads, reads === 1 ? 405 : 0)
-                }
-              }
-            }
-          }
+  let fail = true,
+    reads = 0,
+    metadataCount = 405
+  const mounts: Array<() => void> = [],
+    unmounts: Array<() => void> = []
+  const coreState = ref<{ phase: string; epoch: string; libraryRevision: number | null }>({
+    phase: 'ready',
+    epoch: 'epoch-1',
+    libraryRevision: 1
+  })
+  const entry = runInNewContext(
+    ts.transpileModule(script + '\n;({home,homeState,emptyLibrary,homePending})', {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+    }).outputText,
+    {
+      computed,
+      watch,
+      defineAsyncComponent: () => ({}),
+      onMounted: (fn: () => void) => mounts.push(fn),
+      onBeforeUnmount: (fn: () => void) => unmounts.push(fn),
+      defineProps: () => ({}),
+      defineEmits: () => () => {},
+      useThemeStore: () => ({ presetLayout: ref('default') }),
+      useCoreConnection: () => ({
+        state: coreState,
+        query: async () => {
+          reads++
+          if (fail) throw new Error('Core offline')
+          return metadata(coreState.value.libraryRevision ?? reads, metadataCount)
         }
-      }
-    ) as {
-      home: ReturnType<typeof createLibraryHomeStatus>
-      homeState: { value: { error: string } }
-      emptyLibrary: { value: boolean }
-      homePending: { value: boolean }
+      }),
+      createLibraryHomeStatus
     }
-    assert.equal(entry.homePending.value, true)
-    for (const mount of mounts) mount()
-    await tick()
-    if (mode === 'sqlite') {
-      assert.equal(entry.homeState.value.error, 'discovery offline')
-      assert.equal(entry.emptyLibrary.value, false, 'discovery failure is not an empty library')
-      fail = false
-      entry.home.refresh()
-      await tick()
-      assert.equal(entry.homeState.value.error, '')
-      assert.equal(
-        entry.emptyLibrary.value,
-        false,
-        'SQL count selects the local dashboard with no compatibility tracks'
-      )
-      callback!()
-      await tick()
-      assert.equal(entry.emptyLibrary.value, true, 'a confirmed empty database selects online home')
-    } else {
-      assert.equal(entry.emptyLibrary.value, true)
-      tracks.value = [{}]
-      assert.equal(entry.emptyLibrary.value, false)
-      assert.equal(reads, 0)
-    }
-    assert.equal(entry.homePending.value, false)
-    for (const unmount of unmounts) unmount()
-    assert.equal(closed, 1)
-    const previous = reads
-    callback!()
-    await tick()
-    assert.equal(reads, previous)
+  ) as {
+    home: ReturnType<typeof createLibraryHomeStatus>
+    homeState: { value: { error: string } }
+    emptyLibrary: { value: boolean }
+    homePending: { value: boolean }
   }
+  assert.equal(entry.homePending.value, true)
+  for (const mount of mounts) mount()
+  await tick()
+  assert.equal(entry.homeState.value.error, 'Core offline')
+  assert.equal(entry.emptyLibrary.value, false, 'Core failure is not an empty library')
+  fail = false
+  entry.home.refresh()
+  await tick()
+  assert.equal(entry.homeState.value.error, '')
+  assert.equal(entry.emptyLibrary.value, false)
+  metadataCount = 0
+  coreState.value = { ...coreState.value, libraryRevision: 2 }
+  await tick()
+  assert.equal(
+    entry.emptyLibrary.value,
+    true,
+    'Core metadata selects online home for an empty library'
+  )
+  assert.equal(entry.homePending.value, false)
+  for (const unmount of unmounts) unmount()
+  const previous = reads
+  coreState.value = { ...coreState.value, libraryRevision: 3 }
+  await tick()
+  assert.equal(reads, previous)
   assert.match(source, /v-else-if="!preview && emptyLibrary"/)
+  assert.doesNotMatch(source, /window\.api\.library/)
 })

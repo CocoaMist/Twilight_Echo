@@ -16,6 +16,7 @@ import {
   normalizeDspScenes,
   outputStageIsActive,
   resolveDspScene,
+  resolveEffectiveTargetSampleRate,
   stereoImageIsActive,
   type DspScene
 } from './dspGraph.ts'
@@ -291,4 +292,30 @@ test('an enabled node left at its identity settings does not alter the signal', 
     } as Parameters<typeof dspGraphNodeAltersSignal>[0]),
     false
   )
+})
+
+test('headroom management, filter phase, and power-of-2 / max-pcm upsampling modes normalize and resolve accurately', () => {
+  const stage = normalizeDspOutputStage({
+    targetSampleRate: 192000,
+    targetSampleRateMode: 'power-of-2',
+    resamplerQuality: 'soxrVhq',
+    resamplerPhase: 'minimum-smooth',
+    dither: 'tpdf',
+    headroomEnabled: true,
+    headroomGainDb: -3.5,
+    safetyClamp: true
+  })
+  assert.equal(stage.headroomEnabled, true)
+  assert.equal(stage.headroomGainDb, -3.5)
+  assert.equal(stage.targetSampleRateMode, 'power-of-2')
+  assert.equal(stage.resamplerPhase, 'minimum-smooth')
+  assert.equal(outputStageIsActive(stage), true)
+
+  // Power-of-2 resolves 44.1 kHz family to 176.4 kHz (44100 * 4) and 48 kHz family to 192 kHz (48000 * 4)
+  const deviceRates = [44100, 48000, 88200, 96000, 176400, 192000]
+  assert.equal(resolveEffectiveTargetSampleRate(stage, 44100, deviceRates), 176400)
+  assert.equal(resolveEffectiveTargetSampleRate(stage, 48000, deviceRates), 192000)
+
+  const maxPcmStage = mergeDspOutputStage(stage, { targetSampleRateMode: 'max-pcm' })
+  assert.equal(resolveEffectiveTargetSampleRate(maxPcmStage, 44100, deviceRates), 192000)
 })

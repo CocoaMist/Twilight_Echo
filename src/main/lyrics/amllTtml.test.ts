@@ -17,6 +17,22 @@ test('AMLL service validates positive integer IDs', () => {
   assert.throws(() => normalizeAmlSongId('1e3'))
 })
 
+test('AMLL does not start a network request for an already cancelled lyric load', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let calls = 0
+  await assert.rejects(
+    fetchAmlTtml(99999, {
+      signal: controller.signal,
+      fetchImpl: async () => {
+        calls++
+        return new Response(fixture)
+      }
+    })
+  )
+  assert.equal(calls, 0)
+})
+
 test('AMLL service falls back from the mirror and caches successful responses', async () => {
   clearAmlTtmlCache()
   const urls: string[] = []

@@ -1,4 +1,4 @@
-import type { Track } from '@renderer/types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import { cachedSourceMatchesTrack, getTrackAudioSource } from '@renderer/utils/playerTrackUtils.ts'
 
 export function findNativeQueueTrackIndex(

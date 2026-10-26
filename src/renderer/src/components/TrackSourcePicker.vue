@@ -2,7 +2,7 @@
 import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import CoverImg from './CoverImg.vue'
 import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
-import { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
+
 import { syncPluginProviders, useMediaProviders } from '../providers/index.ts'
 import type { Track } from '../types/music'
 
@@ -13,7 +13,7 @@ const emit = defineEmits<{
 }>()
 
 const providers = useMediaProviders()
-const localSearch = useLibraryUnifiedSearch()
+
 const query = ref('')
 const results = shallowRef<Track[]>([])
 const searching = ref(false)
@@ -61,8 +61,6 @@ async function search(): Promise<void> {
     await syncPluginProviders()
     const result = await providers.searchAllSongs({
       query: text,
-      localTracks: [],
-      localSource: localSearch,
       limit: 40,
       offset: 0,
       signal: nextController.signal

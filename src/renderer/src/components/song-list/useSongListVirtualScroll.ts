@@ -21,6 +21,8 @@ type UseSongListVirtualScrollOptions = {
   debouncedSearchQuery: Ref<string>
   viewKey?: ComputedRef<string>
   viewIdentity?: ComputedRef<string>
+  /** Start a new query/section at its content controls, without revisiting a tall detail header. */
+  resetScrollTop?: () => number
   /** The full query count, independent of the bounded loaded Track window. */
   itemCount?: ComputedRef<number>
   restoreReady?: ComputedRef<boolean>
@@ -36,6 +38,7 @@ export function useSongListVirtualScroll({
   debouncedSearchQuery,
   viewKey,
   viewIdentity,
+  resetScrollTop,
   itemCount,
   restoreReady
 }: UseSongListVirtualScrollOptions): {
@@ -164,7 +167,9 @@ export function useSongListVirtualScroll({
         savePosition()
         activeKey = key
         restorePending = true
-        scrollTop.value = savedScrollPositions.get(key) ?? 0
+        scrollTop.value =
+          savedScrollPositions.get(key) ??
+          (activeIdentity === viewIdentity?.value ? Math.max(0, resetScrollTop?.() ?? 0) : 0)
         if (activeIdentity === viewIdentity?.value) restoreScrollAndMeasure()
         activeIdentity = viewIdentity?.value
       },

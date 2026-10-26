@@ -3,36 +3,14 @@ import { hostname, userInfo } from 'os'
 import * as electron from 'electron'
 import { tryParseJsonWithNestingLimit } from './jsonSafety.ts'
 
-export interface SecureValueEnvelope {
-  __twilightSecure: true
-  version: 1
-  backend: 'electron-safe-storage' | 'aes-256-gcm-machine'
-  ciphertext: string
-  iv?: string
-  tag?: string
-}
+import type { SecureValueEnvelope } from '../../shared/secureValue.ts'
+export { isSecureValueEnvelope, isSensitiveStorageKey } from '../../shared/secureValue.ts'
+export type { SecureValueEnvelope } from '../../shared/secureValue.ts'
 
 interface ElectronSafeStorage {
   isEncryptionAvailable: () => boolean
   encryptString: (plainText: string) => Buffer
   decryptString: (encrypted: Buffer) => string
-}
-
-const SENSITIVE_KEY_PATTERN =
-  /(^|[-_.:])(cookie|csrf|token|access[-_.:]?token|refresh[-_.:]?token|api[-_.:]?key|apikey|bearer|signing[-_.:]?key|client[-_.:]?secret|secret|password|passwd|credential|session|auth)([-_.:]|$)/i
-
-export function isSensitiveStorageKey(key: string): boolean {
-  return SENSITIVE_KEY_PATTERN.test(key.trim())
-}
-
-export function isSecureValueEnvelope(value: unknown): value is SecureValueEnvelope {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  return (
-    record.__twilightSecure === true &&
-    record.version === 1 &&
-    typeof record.ciphertext === 'string'
-  )
 }
 
 export function protectString(value: string, scope: string): SecureValueEnvelope {
@@ -99,22 +77,7 @@ export function unprotectJsonValue(envelope: SecureValueEnvelope, scope: string)
   return parsed.ok ? parsed.value : undefined
 }
 
-export function redactSensitiveText(value: unknown): string {
-  const text = typeof value === 'string' ? value : String(value)
-  return text
-    .replace(/(MUSIC_U=)[^;\s]+/gi, '$1[REDACTED]')
-    .replace(/(__csrf=)[^;\s]+/gi, '$1[REDACTED]')
-    .replace(/(Authorization\s*:\s*Bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
-    .replace(/((?:X-Api-Key|X-Signature)\s*:\s*)[^\s,;]+/gi, '$1[REDACTED]')
-    .replace(
-      /([?&](?:password|captcha|token|cookie|csrf|secret|api[-_]?key|apikey|signature)=)[^&\s]+/gi,
-      '$1[REDACTED]'
-    )
-    .replace(
-      /((?:password|token|cookie|secret|credential|api[-_.:]?key|apikey|bearer|signing[-_.:]?key|client[-_.:]?secret)\s*[:=]\s*)[^\s,;]+/gi,
-      '$1[REDACTED]'
-    )
-}
+export { redactSensitiveText } from '../../shared/errors/redactSensitiveText.ts'
 
 function deriveFallbackKey(scope: string): Buffer {
   const user = safeUserFingerprint()

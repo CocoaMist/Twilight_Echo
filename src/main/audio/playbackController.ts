@@ -756,6 +756,33 @@ export class PlaybackController {
     }
   }
 
+  /** False means unsupported; a lost ACK is an error, never permission to soft replay. */
+  async setLoopRangeConfirmed(start: number, end: number): Promise<boolean> {
+    const service = this.host.getAudioServiceBinding()
+    if (service?.setLoopRangeConfirmed) return service.setLoopRangeConfirmed(start, end)
+    const native = this.native
+    if (!native?.SetLoopRange) return false
+    if (native.callAsync) await native.callAsync('SetLoopRange', [start, end])
+    else native.SetLoopRange(start, end)
+    return true
+  }
+
+  async seekConfirmed(position: number): Promise<void> {
+    this.revokePlaybackEnd()
+    const target = clampQueueItemPosition(this.queue[this.playbackInfo.queueIndex], position)
+    const native = this.native
+    if (!native) throw new Error('Native audio is unavailable')
+    if (native.callAsync) await native.callAsync('Seek', [target])
+    else native.Seek(target)
+    this.playbackInfo.position = target
+    this.lastTick = this.scheduler.now()
+    this.lastNativeReportedPosition = Number.NaN
+    this.pendingNativePositionTarget = target
+    this.playbackEndEligible = this.nativePlaybackActive && this.playbackInfo.state === 'playing'
+    this.publishProperty('time-pos', target)
+    this.publishPlaybackInfo()
+  }
+
   async stop(): Promise<void> {
     this.transportRevision += 1
     this.revokePlaybackEnd()
@@ -1791,6 +1818,21 @@ export class PlaybackController {
     outputInfo.recoveryCount = canonicalOutput?.recoveryCount ?? info.recoveryCount ?? 0
     outputInfo.latencyInfo = latencyInfo
     outputInfo.diagnostics = diagnostics
+    const renderPerformance =
+      canonicalOutput?.renderPerformance ??
+      info.renderPerformance ??
+      this.playbackInfo.outputInfo?.renderPerformance
+    if (renderPerformance) {
+      outputInfo.renderPerformance = renderPerformance
+    }
+    const rawClipCount =
+      info.clipCount ??
+      canonicalOutput?.nativeDsp?.graph?.meter?.clipCount ??
+      this.playbackInfo.clipCount
+    const clipCount =
+      typeof rawClipCount === 'number' && Number.isFinite(rawClipCount)
+        ? Math.max(0, Math.trunc(rawClipCount))
+        : undefined
     const analysisStatus = this.host.getAutoMixAnalysisStatus?.()
     const showAnalysisStatus =
       info.autoMixMode &&
@@ -1863,6 +1905,8 @@ export class PlaybackController {
       streamTitle: typeof info.streamTitle === 'string' ? info.streamTitle : '',
       perfectReason: outputInfo.perfectReason,
       nativePlaybackActive: this.nativePlaybackActive,
+      ...(renderPerformance ? { renderPerformance } : {}),
+      ...(clipCount !== undefined ? { clipCount } : {}),
       ...(showAnalysisStatus
         ? { autoMixState: analysisStatus.state, autoMixReason: analysisStatus.reason }
         : {})
@@ -2099,7 +2143,11 @@ export class PlaybackController {
 
   publishPlaybackInfo(options: { dedupePositionOnly?: boolean } = {}): void {
     const fanoutKey = `${this.queueToken}:${this.createPlaybackInfoFanoutKey()}`
-    if (options.dedupePositionOnly && fanoutKey === this.lastPlaybackInfoFanoutKey) return
+    if (options.dedupePositionOnly && fanoutKey === this.lastPlaybackInfoFanoutKey) {
+      // Core still consumes native progress for listening, bookmarks and persistence.
+      this.emit('playback-sample', this.playbackSnapshot())
+      return
+    }
 
     this.lastPlaybackInfoFanoutKey = fanoutKey
     this.emit('playback-info', this.playbackSnapshot())

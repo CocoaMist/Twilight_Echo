@@ -35,11 +35,16 @@ The current explicit floors are enforced through root `pnpm-workspace.yaml` `ove
 second npm lockfile:
 
 - `form-data@4.0.6` fixes `GHSA-hmw2-7cc7-3qxx` / `CVE-2026-12143` (multipart CRLF injection).
+- `follow-redirects@1.16.1` fixes `GHSA-q3jh-wrc6-jgq8` and `GHSA-8r9p-f939-6h3c`
+  (cross-origin credential stripping and sensitive-header matching). The override covers nested Axios consumers.
 - `qs@6.16.0` fixes the tracked `qs` moderate advisories, including `GHSA-q8mj-m7cp-5q26` / `CVE-2026-8723` (comma-array stringify DoS).
-- Root `undici@^6.28.0` fixes `GHSA-p88m-4jfj-68fv` / `GHSA-vxpw-j846-p89q` (header injection and WebSocket DoS) plus `GHSA-8xcm-r25x-g524` / `GHSA-m8rv-5g2x-5cg5` / `GHSA-v3r7-h72x-cjcm` (retry desynchronization, blob body CRLF injection, cookie attribute injection).
+- Root `undici@6.28.1` fixes `GHSA-p88m-4jfj-68fv` / `GHSA-vxpw-j846-p89q` (header injection and WebSocket DoS) plus `GHSA-8xcm-r25x-g524` / `GHSA-m8rv-5g2x-5cg5` / `GHSA-v3r7-h72x-cjcm` (retry desynchronization, blob body CRLF injection, cookie attribute injection).
 - `postcss@8.5.26` fixes `GHSA-fxqj-rqcc-2cmp` (sourceMappingURL arbitrary `.map` read).
 - `nanoid@3.3.18` fixes `GHSA-28wg-ghj8-5hjv` / `GHSA-2v37-7h3g-55p8` (infinite loop in generators, via vue → postcss).
 - `ip-address@10.5.0` fixes `GHSA-mwp4-54f8-5fhr` / `GHSA-4xrf-jv44-h6hh` / `GHSA-22jq-vg5j-6vgg` (SSRF and trust-boundary bypass, via socks → pac-proxy-agent).
+
+The desktop runtime is pinned to Electron `43.7.0`, including the fix for
+`GHSA-fw47-9c62-h3vw` (HID/USB permission checks attributed to the wrong origin).
 
 `extract-zip@2.0.1` has no patched upstream release (`GHSA-jmr9-qjv8-65gv` and
 `GHSA-7pqw-9j4j-h8q3`, symlink path
@@ -74,6 +79,7 @@ pnpm run typecheck
 pnpm run test:production-audit
 pnpm run audit:production -- --output output/release-evidence/production-dependency-audit.json
 pnpm run test:plugins
+pnpm run test:core
 pnpm run test:audio-manager
 pnpm run test:radio-remote
 pnpm run test:network-sources
@@ -86,6 +92,7 @@ pnpm run test:lyrics-management
 pnpm run test:cue
 pnpm run test:local-perf
 pnpm run test:themes
+pnpm run test:appearance-workspace
 pnpm run test:dsp-graph
 pnpm run test:dsp-assets
 pnpm run test:plugin-tooling
@@ -95,7 +102,18 @@ pnpm run test:sleep-timer
 pnpm run test:cross-cutting-regressions
 pnpm run test:app
 pnpm run build
+pnpm run configure:audio-engine:mingw
+pnpm run build:audio-engine:mingw
+pnpm run test:core:electron
 ```
+
+`test:core` covers the current business owners: playback intents and occurrences, cache leases and
+maintenance, providers, library and playlist transactions, settings, and process boundaries. It runs
+inside the product gate without requiring application or native builds. `test:core:electron` uses the
+compiled application and staged Node-API audio runtime; run it after both builds above. It exercises
+real service MessagePorts, migration, zero-window playback, reconnection and recovery. The final
+integrated gate runs it after native staging. CI also exercises the sandboxed window bridge; the
+full native process suite remains required for release validation.
 
 `test:audio-manager` covers realtime playback service behavior, the isolated offline-analysis pool,
 its IPC wiring, BPM/loudness manager cancellation and cache-suppression behavior, and local-library
@@ -115,6 +133,9 @@ control, media-token authorization, and renderer cover handles. `test:themes` va
 token contract, archive preflight, scheduling, plugin runtime integration, and large-list switching.
 Its Electron backdrop-filter pixel probe uses offscreen rendering so it also runs in noninteractive
 Windows release sessions.
+`test:appearance-workspace` runs the complete appearance manifest, including persistence, draft
+navigation and Electron surface checks. The `:unit` shortcut is for local iteration and cannot
+replace this full suite in product, no-device or release gates.
 `test:network-sources` covers network source profile persistence, path validation, directory
 traversal, metadata/cache behavior, and the FTP/SFTP/SMB/WebDAV/NFS/DLNA adapter matrix.
 

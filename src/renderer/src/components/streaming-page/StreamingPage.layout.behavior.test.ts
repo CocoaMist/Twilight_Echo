@@ -120,6 +120,7 @@ defineExpose({
 const runtime = `
 import {createApp,h,nextTick,ref} from 'vue'
 import StreamingPage from '@renderer/components/StreamingPage.vue'
+import { coreSnapshot } from '@renderer/stores/coreTestFixtures.ts'
 import {installScrollToTopButton} from '@renderer/utils/scrollToTopButton.ts'
 import '@renderer/assets/base.css'
 import '@renderer/assets/primeicons.css'
@@ -127,6 +128,23 @@ import '@renderer/assets/icon-fonts.ts'
 installScrollToTopButton();
 const noop=()=>{};
 window.api={
+ core:{
+  connect:async()=>({ok:true,value:{connectionId:'layout',snapshot:coreSnapshot()}}),
+  onMessage:()=>noop,onStatus:()=>noop,disconnect:async()=>{},cancel:async()=>{},
+  request:async(_id,request)=>{
+   const pages={
+    'providers.list':[],
+    'playlists.state':{revision:0,ordinary:0,aggregate:0,likedPlaylistId:null},
+    'playlists.catalog':{revision:0,total:0,offset:0,items:[]},
+    'library.metadata':{revision:0,trackCount:0,folders:[],exclusions:[]},
+    'downloads.page':{revision:0,total:0,offset:0,items:[]},
+    'statistics.summary':{revision:0,days:{},trackCount:0,totalSeconds:0},
+    'statistics.tracks':{revision:0,total:0,offset:0,items:[]}
+   };
+   if(!(request.name in pages))throw Error('Unexpected layout request: '+request.name);
+   return {ok:true,value:pages[request.name]};
+  }
+ },
  data:{loadPlaybackBookmarks:async()=>null},
  providers:{list:async()=>[],call:async()=>[]},
  providerDownloads:{list:async()=>[],onChanged:()=>noop},

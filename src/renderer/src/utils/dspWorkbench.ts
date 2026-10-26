@@ -1,13 +1,78 @@
 import type { DspGraphNode, DspGraphStatus, DspScene } from '../../../shared/dspGraph.ts'
 
 export type DspWorkspaceTab = 'equalizer' | 'chain' | 'library' | 'monitor' | 'output'
-export const dspWorkspaceTabs: { id: DspWorkspaceTab; label: string; icon: string }[] = [
-  { id: 'monitor', label: '检测', icon: 'pi pi-wave-pulse' },
-  { id: 'equalizer', label: '均衡器', icon: 'pi pi-sliders-h' },
-  { id: 'chain', label: '效果链', icon: 'pi pi-list' },
-  { id: 'output', label: '输出与性能', icon: 'pi pi-microchip' },
-  { id: 'library', label: '资料与插件', icon: 'pi pi-folder' }
+/**
+ * How a workspace surface reaches the engine. `live` edits apply immediately,
+ * `draft` edits wait for an explicit save, `status` and `assets` never alter
+ * the signal on their own.
+ */
+export type DspWorkspaceMode = 'status' | 'live' | 'draft' | 'assets'
+export const dspWorkspaceTabs: {
+  id: DspWorkspaceTab
+  label: string
+  icon: string
+  mode: DspWorkspaceMode
+  hint: string
+}[] = [
+  {
+    id: 'monitor',
+    label: '总览',
+    icon: 'pi pi-wave-pulse',
+    mode: 'status',
+    hint: '信号、响度与链路健康'
+  },
+  {
+    id: 'equalizer',
+    label: '均衡器',
+    icon: 'pi pi-sliders-h',
+    mode: 'live',
+    hint: '实时生效 · 耳机校正与音色'
+  },
+  {
+    id: 'chain',
+    label: '效果链',
+    icon: 'pi pi-sitemap',
+    mode: 'draft',
+    hint: '场景草稿 · 保存后生效'
+  },
+  {
+    id: 'output',
+    label: '输出',
+    icon: 'pi pi-microchip',
+    mode: 'draft',
+    hint: '采样率、抖动与设备缓冲'
+  },
+  {
+    id: 'library',
+    label: '资料库',
+    icon: 'pi pi-box',
+    mode: 'assets',
+    hint: '脉冲响应、校正文件与 VST3'
+  }
 ]
+
+function compactRate(rate: number): string {
+  return `${Number((rate / 1000).toFixed(1))}k`
+}
+
+/** Human-readable conditions under which automatic matching selects a scene. */
+export function dspSceneRuleSummary(scene: DspScene | null | undefined): string[] {
+  if (!scene) return []
+  if (!scene.enabled) return ['不参与自动匹配']
+  const rules = scene.rules ?? {}
+  const summary: string[] = []
+  if (rules.deviceIds?.length) summary.push(`${rules.deviceIds.length} 个指定设备`)
+  if (rules.backends?.length) summary.push(rules.backends.join(' / '))
+  if (rules.channelLayouts?.length) summary.push(rules.channelLayouts.join(' / '))
+  if (rules.sourceKinds?.length)
+    summary.push(rules.sourceKinds.map((kind) => kind.toUpperCase()).join(' / '))
+  const min = rules.minSampleRate
+  const max = rules.maxSampleRate
+  if (min && max) summary.push(`${compactRate(min)}–${compactRate(max)} Hz`)
+  else if (min) summary.push(`≥ ${compactRate(min)} Hz`)
+  else if (max) summary.push(`≤ ${compactRate(max)} Hz`)
+  return summary.length ? summary : ['任意设备与格式']
+}
 
 export function dspApplyLabel(status: DspGraphStatus | null): string {
   if (!status) return '等待引擎'

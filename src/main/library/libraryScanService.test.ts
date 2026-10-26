@@ -25,9 +25,111 @@ import { persistLocalLibraryFileIndex, loadLocalLibraryFileIndex } from './fileI
 import { LocalLibraryIndexCoordinator } from './libraryIndexCoordinator.ts'
 import type { LocalLibraryScanRunner } from './libraryScanServiceClient.ts'
 import { loadMusicLibraryDocument, persistMusicLibraryDocument } from './libraryRepository.ts'
+import { collectTrackIdentityTags } from './trackIdentityTags.ts'
+import { legacyTrackIdentityTags, normalizeTrackIdentityTags, type TrackIdentityTags } from '../../shared/trackIdentification.ts'
+import { LOCAL_LIBRARY_METADATA_VERSION } from '../../shared/localLibraryScan.ts'
 
 const WORKER_MESSAGE_TIMEOUT_MS = 30_000
 const WORKER_TERMINATION_TIMEOUT_MS = 5_000
+
+test('identity observations keep artist roles, ID order and original precision without inventing alignment', () => {
+  const tags = collectTrackIdentityTags({
+    title: 'Title', artist: 'A & B', artists: ['A', 'B'], album: 'Album',
+    albumartist: 'Various Artists', albumartists: ['Various Artists'], genre: ['Jazz', 'Pop'],
+    musicbrainz_artistid: ['second-id', 'first-id', 'second-id'],
+    musicbrainz_albumartistid: ['compilation-id'], musicbrainz_recordingid: 'recording-id',
+    musicbrainz_trackid: 'release-track-id', musicbrainz_albumid: 'release-id',
+    musicbrainz_releasegroupid: 'project-id', isrc: ['ISRC-A', 'ISRC-B'], barcode: '0012345',
+    catalognumber: ['CAT-01', 'CAT-02'], track: { no: 3, of: 12 }, disk: { no: 2, of: 3 }
+  }, 123.456789, { title: 'filename', artist: 'filename' })
+  assert.deepEqual(tags.artist, { value: 'A & B', origin: 'audio_tag' })
+  assert.deepEqual(tags.albumArtists?.value, ['Various Artists'])
+  assert.deepEqual(tags.musicbrainz?.artistIds, ['second-id', 'first-id', 'second-id'])
+  assert.equal(tags.musicbrainz?.recordingId, 'recording-id')
+  assert.equal(tags.musicbrainz?.releaseTrackId, 'release-track-id')
+  assert.equal(tags.durationSeconds?.value, 123.456789)
+  assert.equal(tags.trackTotal?.value, 12)
+  assert.equal(tags.discTotal?.value, 3)
+  assert.deepEqual(tags.isrcs, ['ISRC-A', 'ISRC-B'])
+  assert.equal(tags.barcode, '0012345')
+  assert.equal(LOCAL_LIBRARY_METADATA_VERSION, 1, 'new optional evidence must not force a full reread')
+})
+
+test('fallback, compilation-only tags and old caches never become observed performer tags', () => {
+  const fallback = { title: 'file', artist: 'Unknown Artist' }
+  const tags = collectTrackIdentityTags({ albumartist: 'Various Artists' }, undefined, fallback)
+  assert.deepEqual(tags.artist, { value: 'Unknown Artist', origin: 'filename' })
+  assert.equal(tags.albumArtist?.origin, 'audio_tag')
+  const legacy = legacyTrackIdentityTags({ title: 'Enriched title', artist: 'Enriched artist', isrc: 'old' })
+  assert.equal(legacy.artist?.origin, 'legacy')
+  assert.equal(legacy.isrcs, undefined)
+  assert.equal(legacy.musicbrainz, undefined)
+  assert.equal(normalizeTrackIdentityTags({ version: 9 }), undefined)
+  const normalized = normalizeTrackIdentityTags({
+    ...tags, arbitraryUrl: 'https://untrusted.invalid',
+    musicbrainz: { artistIds: Array.from({ length: 100 }, () => 'x'.repeat(4000)), albumArtistIds: [] }
+  })!
+  assert.equal(normalized.truncated, true)
+  assert.ok(normalized.musicbrainz!.artistIds.length <= 64)
+  assert.ok(JSON.stringify(normalized).length < 20000)
+  assert.equal('arbitraryUrl' in normalized, false)
+})
+
+test('real scanner retains FLAC identity tags and fractional duration through CUE projection', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'twilight-identity-flac-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const filePath = join(root, 'audio.flac')
+  // Minimal STREAMINFO plus a real Vorbis-comment block; no decoder is involved.
+  const stream = Buffer.alloc(38)
+  stream.writeUIntBE(34, 1, 3)
+  stream.writeUInt16BE(4096, 4)
+  stream.writeUInt16BE(4096, 6)
+  stream.writeBigUInt64BE((8000n << 44n) | (15n << 36n) | 987654n, 14)
+  const comments = [
+    'TITLE=Tagged title', 'ARTIST=Performer', 'ALBUMARTIST=Various Artists', 'ALBUM=Album',
+    'MUSICBRAINZ_ARTISTID=a223958d-5c56-4b2c-a30a-87e357bc121b',
+    'MUSICBRAINZ_ALBUMARTISTID=89ad4ac3-39f7-470e-963a-56509c546377',
+    'MUSICBRAINZ_TRACKID=c8b031a2-8f55-4e9e-8057-561a3b9c4f38',
+    'MUSICBRAINZ_ALBUMID=22ba18ba-f1b4-45e3-b089-4dcf96b202cf',
+    'MUSICBRAINZ_RELEASEGROUPID=9fbd356f-b4b8-38e8-8871-7566068993d1',
+    'ISRC=USAAA2400001', 'BARCODE=0012345', 'CATALOGNUMBER=CAT-01', 'TRACKNUMBER=1', 'TRACKTOTAL=2'
+  ]
+  const uint = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b }
+  const body = Buffer.concat([uint(0), uint(comments.length), ...comments.flatMap((v) => {
+    const bytes = Buffer.from(v); return [uint(bytes.length), bytes]
+  })])
+  const header = Buffer.alloc(4)
+  header[0] = 0x84
+  header.writeUIntBE(body.length, 1, 3)
+  writeFileSync(filePath, Buffer.concat([Buffer.from('fLaC'), stream, header, body]))
+  const child = await startWorker()
+  try {
+    const response = await sendScan(child, { ...baseRequest(root), mode: 'full' })
+    assert.ok(response.ok)
+    const track = response.value.parsedTracks[0] as Record<string, unknown>
+    const tags = track.identityTags as TrackIdentityTags
+    assert.equal(tags.musicbrainz?.recordingId, 'c8b031a2-8f55-4e9e-8057-561a3b9c4f38')
+    assert.equal(tags.musicbrainz?.releaseId, '22ba18ba-f1b4-45e3-b089-4dcf96b202cf')
+    assert.equal(tags.albumArtist?.value, 'Various Artists')
+    assert.equal(tags.durationSeconds?.value, 123.45675)
+    assert.equal(track.duration, 123)
+    assert.deepEqual(tags.isrcs, ['USAAA2400001'])
+    writeFileSync(join(root, 'audio.cue'), 'PERFORMER "CUE artist"\nTITLE "CUE album"\nFILE "audio.flac" WAVE\nTRACK 01 AUDIO\nTITLE "One"\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nTITLE "Two"\nINDEX 01 01:00:01\n')
+    const cue = await sendScan(child, { ...baseRequest(root), mode: 'full' })
+    assert.ok(cue.ok)
+    const segment = cue.value.parsedTracks[1] as Record<string, unknown>
+    const segmentTags = segment.identityTags as TrackIdentityTags
+    assert.equal(segmentTags.scope, 'cue_track')
+    assert.equal(segmentTags.artist?.origin, 'cue')
+    assert.equal(segmentTags.musicbrainz?.recordingId, undefined)
+    assert.deepEqual(segmentTags.musicbrainz?.artistIds, [])
+    assert.deepEqual(segmentTags.isrcs, [])
+    assert.equal(segmentTags.trackTotal, undefined)
+    assert.equal(segmentTags.durationSeconds?.value, 123.45675 - (60 + 1 / 75))
+  } finally {
+    await terminateWorker(child)
+  }
+})
 
 test('scan worker preserves GIF folder covers and rejects invalid GIF signatures', async (t) => {
   for (const signature of ['GIF87a', 'GIF89a', 'GIF00a']) {
@@ -58,6 +160,48 @@ test('scan worker preserves GIF folder covers and rejects invalid GIF signatures
         rmSync(root, { recursive: true, force: true })
       }
     })
+  }
+})
+
+test('real scan worker suspends only cover writes and invalidates directory handles after clearing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'twilight-scan-cover-maintenance-'))
+  writeTaggedWav(join(root, 'audio.wav'))
+  writeFileSync(join(root, 'cover.gif'), Buffer.from('GIF89a-fixture'))
+  const child = await startWorker()
+  try {
+    const first = await sendScan(child, { ...baseRequest(root), mode: 'full' })
+    assert.ok(first.ok)
+    const cover = String((first.value.parsedTracks[0] as Record<string, unknown>).cover)
+    assert.match(cover, /^cover:\/\//)
+    const suspended = waitForMessage(
+      child,
+      (m) => m.kind === 'cache-ready' && m.state === 'suspended'
+    )
+    child.send({ kind: 'cache-suspend', requestId: 'maintenance' })
+    await suspended
+    rmSync(join(root, 'covers'), { recursive: true, force: true })
+    // A full scan would finish immediately from the old directory memo if it
+    // weren't invalidated. Its actual cover write must now wait for resume.
+    let finished = false
+    const second = sendScan(child, { ...baseRequest(root), mode: 'full' }).then((r) => {
+      finished = true
+      return r
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(finished, false)
+    const resumed = waitForMessage(child, (m) => m.kind === 'cache-ready' && m.state === 'running')
+    child.send({ kind: 'cache-resume', requestId: 'maintenance' })
+    await resumed
+    const result = await second
+    assert.ok(result.ok)
+    assert.equal((result.value.parsedTracks[0] as Record<string, unknown>).cover, cover)
+    assert.equal(
+      readFileSync(join(root, 'covers', cover.slice('cover://'.length)), 'utf8'),
+      'GIF89a-fixture'
+    )
+  } finally {
+    await terminateWorker(child)
+    rmSync(root, { recursive: true, force: true })
   }
 })
 

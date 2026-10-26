@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -286,11 +287,11 @@ test('v9 upgrade snapshots committed WAL before DDL and defers legacy counting a
   checkpoints(old, 'legacy', 600)
   old.sql.exec("UPDATE scan_jobs SET state='completed' WHERE id='legacy'")
   const progress = old.getScanProgress('legacy')
-  old.sql.exec(v9Schema)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + v9Schema)
   // Keep the old writer open with committed schema/data still in WAL.
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
     assert.equal(
       upgraded.sql.prepare('SELECT checked_files FROM scan_jobs').get()!.checked_files,
       null
@@ -325,7 +326,7 @@ test('v9 snapshot failure or partial scan-column DDL leaves old schema and check
   const { db: old, path } = fixture(t)
   checkpoints(old, 'legacy', 10)
   old.sql.exec("UPDATE scan_jobs SET state='completed' WHERE id='legacy'")
-  old.sql.exec(v9Schema)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + v9Schema)
   const before = old.sql.prepare('SELECT * FROM scan_items').all(),
     prepare = DatabaseSync.prototype.prepare
   const backupFault = t.mock.method(
@@ -373,7 +374,7 @@ test('v9 snapshot failure or partial scan-column DDL leaves old schema and check
 
 test('future scan schemas remain rejected before writes', (t) => {
   const { db, path } = fixture(t)
-  db.sql.exec('PRAGMA user_version=11')
-  assert.throws(() => new LibraryDatabase(path), /Unsupported.*11/)
-  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 11)
+  db.sql.exec('PRAGMA user_version=30')
+  assert.throws(() => new LibraryDatabase(path), /Unsupported.*30/)
+  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 30)
 })

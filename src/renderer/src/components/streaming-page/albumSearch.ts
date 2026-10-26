@@ -1,4 +1,4 @@
-import type { LibraryItem } from '@renderer/stores/library/musicStoreTypes.ts'
+import type { LocalAlbumSearchItem } from './localStreamingSearch.ts'
 import type {
   MediaProvider,
   MediaProviderAlbumSummary,
@@ -13,6 +13,9 @@ import type { LibrarySearchSnapshot } from '../../utils/unifiedMusicSearch.ts'
 export interface AlbumSearchItem extends MediaProviderAlbumSummary {
   providerId: string
   providerName: string
+}
+export interface LocalAlbumSearchView extends LocalAlbumSearchItem {
+  tracks: Track[]
 }
 
 interface AlbumSearchProvider {
@@ -35,7 +38,7 @@ export function albumSearchKey(album: Pick<AlbumSearchItem, 'id' | 'providerId'>
 }
 
 export function createAlbumSearch(options: {
-  localAlbums: () => readonly LibraryItem[]
+  localAlbums: () => readonly LocalAlbumSearchView[]
   providers: () => readonly AlbumSearchProvider[]
   searchProvider: (
     providerId: string,

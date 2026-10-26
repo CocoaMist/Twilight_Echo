@@ -2,6 +2,7 @@ import { createApp, h, nextTick, ref } from 'vue'
 import { createPinia } from 'pinia'
 import NetworkSourcesPage from '../NetworkSourcesPage.vue'
 import RadioPodcastPage from '../RadioPodcastPage.vue'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import { installScrollToTopButton } from '@renderer/utils/scrollToTopButton.ts'
 import '@renderer/assets/base.css'
 import '@renderer/assets/primeicons.css'
@@ -56,24 +57,87 @@ const networkProfile = {
   port: null,
   rootPath: '/',
   credentialKind: 'anonymous',
-  bookmarks: []
+  bookmarks: [],
+  options: {
+    readOnly: true,
+    connectTimeoutMs: 5000,
+    transferTimeoutMs: 10000,
+    maxConcurrentTransfers: 2
+  }
 }
 const clone = (x) => JSON.parse(JSON.stringify(x))
 window.api = {
-  networkSources: {
-    listProfiles: async () => [networkProfile],
-    listDirectory: async () => entries,
-    searchLibrary: async (query) => (query ? [] : libraryItems),
-    cacheInfo: async () => ({ sizeBytes: 0 }),
-    resolvePlayback: async () => ({ kind: 'direct-url', url: 'https://audio.test' }),
-    scanDirectory: async () => ({ added: 0, total: 0 }),
-    updateProfile: async () => networkProfile,
-    testConnection: async () => ({ ok: true }),
-    deleteProfile: async () => {},
-    createProfile: async () => networkProfile,
-    enrichLibrary: async () => ({ enriched: 0, failed: 0 }),
-    removeLibraryEntry: async () => {},
-    clearCache: async () => {}
+  core: {
+    async connect() {
+      return {
+        ok: true,
+        value: {
+          connectionId: 'network-locator',
+          snapshot: {
+            protocolVersion: 1,
+            epoch: 'network-locator-epoch',
+            sequence: 0,
+            phase: 'ready',
+            network: { revision: 1, profiles: 1, jobs: [] }
+          }
+        }
+      }
+    },
+    async request(_connectionId, request) {
+      const { name, payload } = request
+      const page = (items) => ({
+        revision: 1,
+        offset: payload.offset ?? 0,
+        total: items.length,
+        items
+      })
+      let value
+      switch (name) {
+        case 'network.state':
+          value = { revision: 1, profiles: 1, jobs: [] }
+          break
+        case 'network.profiles':
+          value = page([networkProfile])
+          break
+        case 'network.directory': {
+          const offset = payload.offset ?? 0
+          value = {
+            ...page(entries.slice(offset, offset + (payload.limit ?? 200))),
+            token: 'directory'
+          }
+          break
+        }
+        case 'network.library': {
+          const found = payload.query
+            ? []
+            : libraryItems.map(({ entry, ...item }) => ({ ...entry, ...item }))
+          const offset = payload.offset ?? 0
+          value = page(found.slice(offset, offset + (payload.limit ?? 200)))
+          break
+        }
+        case 'network.cacheInfo':
+          value = { sizeBytes: 0 }
+          break
+        case 'network.cover':
+          value = null
+          break
+        default:
+          value = null
+      }
+      return { ok: true, value }
+    },
+    async cancel() {
+      return { ok: true, value: undefined }
+    },
+    async disconnect() {
+      return { ok: true, value: undefined }
+    },
+    onMessage() {
+      return () => {}
+    },
+    onStatus() {
+      return () => {}
+    }
   },
   radio: {
     loadStations: async () => ({ data: { schemaVersion: 1, stations }, revision: 1 }),
@@ -143,8 +207,11 @@ const expectLocated = async (id) => {
   )
 }
 window.runNetworkLocatorChecks = async () => {
+  await useCoreConnection().attach()
   await settle()
-  document.querySelector('.network-profile-actions .brand-soft-button').click()
+  const browse = document.querySelector('.network-profile-actions .brand-soft-button')
+  expect(browse, `network profile did not load: ${document.body.innerText}`)
+  browse.click()
   await settle()
   expect(
     window.locatePlayer.currentTrack === window.locatePlayerCurrentTrackRef,

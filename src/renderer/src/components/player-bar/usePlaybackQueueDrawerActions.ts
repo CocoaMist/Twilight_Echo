@@ -10,16 +10,16 @@ export interface PlaybackQueueDrawerCommands {
   reorderQueue: (fromIndex: number, toIndex: number) => void
   saveQueueAsPlaylist: (
     name: string,
-    createPlaylistWithTracks: (name: string, tracks: Track[]) => string,
+    createPlaylistWithTracks: (name: string, tracks: Track[]) => string | Promise<string>,
     createPages?: PlaylistTrackPageCreator,
     signal?: AbortSignal
   ) => string | Promise<string>
 }
 
 interface PlaybackQueueDrawerActionOptions {
-  queue: Ref<Track[]>
+  queue: Readonly<Ref<readonly Track[]>>
   commands: PlaybackQueueDrawerCommands
-  createPlaylistWithTracks: (name: string, tracks: Track[]) => string
+  createPlaylistWithTracks: (name: string, tracks: Track[]) => string | Promise<string>
   createPlaylistWithTrackPages?: PlaylistTrackPageCreator
   /** Database queues deliberately keep the compatibility Track[] empty. */
   queueLength?: Ref<number>

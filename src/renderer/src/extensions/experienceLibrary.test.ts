@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { LibraryDatabase } from '../../../main/library/libraryDatabase.ts'
+import { projectCoreTrack } from '../../../core/projections.ts'
+import type { CorePlayerClient } from '../stores/player/corePlayerTypes.ts'
 import type {
   LibraryCollectionKind,
   LibraryDatabaseApi,
@@ -11,7 +13,7 @@ import {
   readExperiencePlaylistTrackDtos
 } from './experienceLibrary.ts'
 
-test('extension library reader pages SQLite summaries and album members with stable ids', async (t) => {
+test('extension library reader consumes bounded Core summaries and member views with stable ids', async (t) => {
   const db = new LibraryDatabase(':memory:')
   t.after(() => db.close())
   db.replaceDocument({
@@ -89,7 +91,22 @@ test('extension library reader pages SQLite summaries and album members with sta
     getTracksByIds: async (ids, revision) => db.getTracksByIds(ids, revision),
     getMetadata: async () => db.getMetadata()
   }
-  const reader = createExperienceLibraryReader(api)
+  const core = { query: async (name: string, input: any) => {
+    if (name === 'library.collections') return api.queryCollections(input.kind, input.query)
+    if (name === 'library.tracks') {
+      const page = await api.queryTracks(input)
+      return { ...page, tracks: page.tracks.map(track => projectCoreTrack(track)) }
+    }
+    if (name === 'playlists.members') {
+      const page = db.getTracksByIds(['track:other', 'track:0'])
+      return { revision: input.revision, offset: 0, total: 3, items: [
+        ...page.tracks.map((track, position) => ({ id: track.id, position, track: projectCoreTrack(track) })),
+        { id: 'deleted', position: 2, track: null }
+      ] }
+    }
+    throw new Error(`Unexpected Core query ${name}`)
+  } } as Pick<CorePlayerClient, 'query'>
+  const reader = createExperienceLibraryReader(core)
 
   const first = await reader.albumPage(0, 1)
   assert.equal(first.total, 2)
@@ -112,7 +129,7 @@ test('extension library reader pages SQLite summaries and album members with sta
     ]
   )
   assert.ok(
-    trackCalls.some((query) => query.limit === 1000 && query.contentRevision === second.revision)
+    trackCalls.some((query) => query.limit === 200 && query.contentRevision === second.revision)
   )
 
   const results = await reader.search('release')
@@ -122,13 +139,14 @@ test('extension library reader pages SQLite summaries and album members with sta
   )
   assert.ok(results.albums.some((album) => album.name === 'Release'))
   assert.equal(reader.trackAlbumId('track:0'), second.albums[0].extensionId)
+  assert.notEqual(second.albums[0].id, results.tracks[0].albumId)
+  assert.ok(collectionCalls.some(({ query }) => query.ids?.includes('track:0') && query.limit === 1))
 
   const playlist = await readExperiencePlaylistTrackDtos(
-    { trackIds: ['track:other', 'track:0', 'deleted'] },
-    api,
+    core,
+    'playlist:1',
+    7,
     reader,
-    results.revision,
-    () => ({ revision: 0, versions: [] }),
     (track) => ({ id: track.id, albumId: reader.trackAlbumId(track.id) })
   )
   assert.deepEqual(playlist, [

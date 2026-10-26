@@ -7,6 +7,8 @@ import type {
 /** Existing array occurrences may refer to temporary local files outside the
  * library. This seed-only snapshot preserves them without importing a track or
  * relaxing the ordinary queue insertion contract. */
+// Remote seeds may defer resolution with filePath=''; ordinary insertions keep
+// their existing pre-resolved source contract.
 export type LibraryQueueSeedItem = LibraryQueueInsertItem & {
   localSnapshot?: LibraryTrackRecord
   originalPosition?: number

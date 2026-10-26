@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import './settings-page/SettingsPage.css'
+import { corePlugins } from '../extensions/corePlugins.ts'
 import {
   computed,
   defineAsyncComponent,
@@ -230,6 +231,7 @@ const partCategory: Partial<Record<AppearancePart, string>> = {
   navigation: 'navigation',
   material: 'material',
   'player-bar': 'player',
+  'player-page': 'player',
   card: 'material',
   'global-font': 'font',
   'appearance-theme': 'color'
@@ -464,7 +466,7 @@ async function enableWorkshop(): Promise<void> {
   enablingWorkshop.value = true
   workshopEnableError.value = ''
   try {
-    await window.api.plugins.enable(THEME_WORKSHOP_ID)
+    await corePlugins.enable(THEME_WORKSHOP_ID)
     await syncExtensions()
     if (!workshopEnabled.value) throw new Error('插件未就绪，请重试或在插件管理中查看状态。')
   } catch (cause) {
@@ -1294,7 +1296,7 @@ onBeforeUnmount(() => {
             ref="preview"
             :draft="creationDraft"
             :tone="tone === 'dark' ? 'dark' : 'light'"
-            page="local"
+            :page="selectedPart === 'player-page' ? 'player' : 'local'"
             theme-editing
             :workshop-model="tab === 'workshop' ? workshopPreview : undefined"
             :focused-region="selectedPart"
@@ -1304,7 +1306,7 @@ onBeforeUnmount(() => {
             @workshop-layer-edit="(id, surface, patch) => workshop?.editLayer(id, surface, patch)"
             @workshop-gesture="workshop?.gesture($event)"
           >
-            <template #context-tools>
+            <template #context-tools="{ playerTarget, setPlayerTarget }">
               <div
                 class="appearance-context-tools"
                 data-appearance-context
@@ -1322,9 +1324,11 @@ onBeforeUnmount(() => {
                   controls-only
                   contextual
                   :part="selectedPart"
+                  :player-target="playerTarget"
                   :active="active && !switching && !applying"
                   :initial-key="selected"
                   :initial-domain="selectedCategory?.studio"
+                  @update:player-target="setPlayerTarget"
                   @domain-change="onStudioDomain"
                 />
                 <ThemeWorkshopPage

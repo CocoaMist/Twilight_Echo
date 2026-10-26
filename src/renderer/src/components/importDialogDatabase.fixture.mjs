@@ -24,9 +24,7 @@ window.runImportDatabaseTests = async () => {
     calls = [],
     scans = [],
     roots = ['D:/Music/a', 'D:/Music/b']
-  let mode = 'sqlite',
-    discoveryFailed = false,
-    failScan = false,
+  let failScan = false,
     finishScan,
     app
   const status = ref({
@@ -108,13 +106,6 @@ window.runImportDatabaseTests = async () => {
     updateSettings: async () => {}
   }
   window.api = {
-    library: {
-      getStorageMode: async () => {
-        if (discoveryFailed) throw new Error('读取存储失败')
-        return mode
-      }
-    },
-    fs: { onScanProgress: () => () => {}, scanMusicFiles: unexpected },
     dialog: { openFolder: async () => null }
   }
   const mount = async () => {
@@ -194,37 +185,18 @@ window.runImportDatabaseTests = async () => {
   )
   await click(button('取消扫描'))
 
-  discoveryFailed = true
+  publish('completed')
+  window.auditSettings.loaded.value = false
   await mount()
-  expect(
-    document.querySelector('[role="alert"]').textContent.includes('读取存储失败'),
-    'storage discovery error hidden'
-  )
-  expect(button('扫描所选文件夹').disabled, 'discovery failure silently selected JSON')
-  discoveryFailed = false
-  await click(button('重试读取'))
-  expect(button('检查并导入所选文件夹'), 'storage retry did not recover')
+  expect(button('检查并导入所选文件夹').disabled, 'import started before Core settings were ready')
+  window.auditSettings.loaded.value = true
+  await settle()
   await click(document.querySelector('[aria-label="移除文件夹 D:/Music/b"]'))
   expect(
     calls.includes('remove:D:/Music/b') && document.querySelectorAll('.folder-item').length === 1,
-    'SQLite removal did not use settings authority'
+    'folder removal did not use Core settings authority'
   )
 
-  // Preserve the old array entry point when the authoritative mode is JSON.
-  mode = 'json'
-  Object.assign(window.auditMusic, {
-    addFolder: () => calls.push('legacy-folder'),
-    addTracks: async () => calls.push('legacy-tracks'),
-    saveLibrary: async () => calls.push('legacy-save'),
-    refreshLibraryIndex: () => calls.push('legacy-index')
-  })
-  window.api.fs.scanMusicFiles = async () => [{ id: 'legacy' }]
-  await mount()
-  await click(button('扫描所选文件夹'))
-  await settle()
-  expect(calls.includes('legacy-save') && !shown.value, 'JSON import contract changed')
-
-  mode = 'sqlite'
   publish('paused')
   await mount()
   const dialog = document.querySelector('[role="dialog"]').getBoundingClientRect()
@@ -239,6 +211,6 @@ window.runImportDatabaseTests = async () => {
   return {
     scopedRequests: scans.length,
     controls: calls.filter((item) => ['pause', 'resume', 'cancel'].includes(item)),
-    legacySaved: calls.includes('legacy-save')
+    rendererScans: calls.filter((item) => item.startsWith('legacy')).length
   }
 }

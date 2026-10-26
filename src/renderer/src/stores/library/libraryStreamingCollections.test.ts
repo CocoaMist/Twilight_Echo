@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import type { LibraryCollectionKind, LibraryQuery } from '../../../../shared/libraryDatabase.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import { createLibraryUnifiedSearch } from './libraryUnifiedSearch.ts'
 import { buildDerivedCollections } from './derivedCollections.ts'
 import {

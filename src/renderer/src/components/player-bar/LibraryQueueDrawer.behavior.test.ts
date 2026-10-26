@@ -53,7 +53,7 @@ test('database drawer renders 300k/million-entry windows, identity commands, key
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');app.setPath('userData',__dirname+'/profile');app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:760,height:650,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));const result=await win.webContents.executeJavaScript('window.runLibraryDrawerTests()');if(process.env.TWILIGHT_LIBRARY_DRAWER_SCREENSHOT){await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');fs.writeFileSync(process.env.TWILIGHT_LIBRARY_DRAWER_SCREENSHOT,(await win.webContents.capturePage()).toPNG())}console.log('LIBRARY_DRAWER_OK '+JSON.stringify(result));app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');app.setPath('userData',__dirname+'/profile');app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:760,height:650,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false,offscreen:true}});const capture=async()=>{if(process.env.TWILIGHT_LIBRARY_DRAWER_SCREENSHOT){await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');fs.writeFileSync(process.env.TWILIGHT_LIBRARY_DRAWER_SCREENSHOT,(await win.webContents.capturePage()).toPNG())}};try{await win.loadFile(process.argv.at(-1));const result=await win.webContents.executeJavaScript('window.runLibraryDrawerTests()');await capture();console.log('LIBRARY_DRAWER_OK '+JSON.stringify(result));app.exit(0)}catch(error){await capture();console.error(error.stack);app.exit(1)}})`
     )
     const result = await promisify(execFile)(
       require('electron'),
@@ -94,7 +94,7 @@ window.runLibraryDrawerTests=async()=>{
     if(edit.kind==='insert'){const at=edit.afterEntryId?small.findIndex(item=>item.queueEntryId===edit.afterEntryId)+1:small.length;small.splice(at,0,...edit.trackIds.map(id=>({queueEntryId:'insert:'+serial++,track:{...song(0),id}})))}
     change(small.some(item=>item.queueEntryId===selected)?selected:small[0]?.queueEntryId)
   }
-  const app=createApp({render:()=>h('div',[h('p',{class:'caption'},'SQLite 曲库 · 按需读取播放队列'),h(LibraryQueueDrawer,{snapshot:snapshot.value,contentRevision:content.value,busy:busy.value,isPlaying:playing.value,readPage,playEntry,editQueue,refreshQueue:async()=>{},onAddToPlaylist:track=>added.push(track)})])})
+  const app=createApp({render:()=>h('div',[h('p',{class:'caption'},'SQLite 曲库 · 按需读取播放队列'),h(LibraryQueueDrawer,{snapshot:snapshot.value,contentRevision:content.value,busy:busy.value,isPlaying:playing.value,readPage,playEntry,editQueue,duplicateEntry:async(id,next,version)=>{expected(version);const row=small.find(item=>item.queueEntryId===id);const selected=snapshot.value.selectedEntryId;const at=next?small.findIndex(item=>item.queueEntryId===selected)+1:small.length;small.splice(at,0,{...row,queueEntryId:'insert:'+serial++});change(selected)},refreshQueue:async()=>{},onAddToPlaylist:track=>added.push(track)})])})
   app.mount('#app');await pause(150)
   const rows=()=>[...document.querySelectorAll('[data-queue-index]')]
   const row=i=>document.querySelector('[data-queue-index="'+i+'"]')
@@ -102,7 +102,8 @@ window.runLibraryDrawerTests=async()=>{
   expect(document.querySelector('.playlist-count').textContent.includes('300,000'),'header used a visible page as the total')
   expect(row(299999),'300k tail not reachable on mount')
   expect(rows().length<=22,'queue DOM unbounded')
-  expect(row(299999).getBoundingClientRect().bottom<=document.querySelector('.playlist-list').getBoundingClientRect().bottom+1,'tail outside viewport')
+  const geometry=()=>{const list=document.querySelector('.playlist-list'),tail=rows().at(-1),window=document.querySelector('.playlist-virtual-window');return {list:list.getBoundingClientRect().toJSON(),tail:tail.getBoundingClientRect().toJSON(),clientHeight:list.clientHeight,scrollHeight:list.scrollHeight,scrollTop:list.scrollTop,padding:getComputedStyle(list).padding,transform:window.style.transform}}
+  expect(row(299999).getBoundingClientRect().bottom<=document.querySelector('.playlist-list').getBoundingClientRect().bottom+1,'tail outside viewport '+JSON.stringify(geometry()))
   const list=document.querySelector('.playlist-list');list.scrollTop=0;list.dispatchEvent(new Event('scroll'));await pause(80)
   expect(row(0),'top not reachable')
   fail=true;content.value++;await pause(80)
@@ -125,7 +126,7 @@ window.runLibraryDrawerTests=async()=>{
   small[0].track=null;content.value++;await pause(80)
   expect(row(0).querySelector('.library-queue-play').disabled,'SQL missing row playable')
   await click(row(0).querySelector('[title="从队列移除"]'));expect(small.length===5,'SQL hole not removable')
-  await click([...document.querySelectorAll('.playlist-tools button')].find(button=>button.textContent==='清空'));expect(document.querySelector('.playlist-empty')&&snapshot.value.total===0,'clear not shown as real empty')
+  await click([...document.querySelectorAll('.playlist-tools button')].find(button=>button.textContent.trim()==='清空'));expect(document.querySelector('.playlist-empty')&&snapshot.value.total===0,'clear not shown as real empty')
   // Verify browser scroll-height clamping does not hide millions of CUE occurrences.
   small=null;snapshot.value={...snapshot.value,id:'millions',total:5000000,index:4999999,selectedEntryId:'entry:4999999',revision:0};await pause(120)
   expect(row(4999999),'million-entry tail not reachable')

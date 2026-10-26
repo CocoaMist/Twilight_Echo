@@ -1,10 +1,7 @@
 import { computed, shallowRef, toRaw, watch } from 'vue'
 import { createRecordingIdentityRules } from '../../../../shared/recordingIdentity.ts'
 import type { Track } from '../../types/music.ts'
-import {
-  resolveUnifiedRecentTracks,
-  type UnifiedRecentStat
-} from '../../utils/unifiedRecentTracks.ts'
+import type { UnifiedRecentStat } from '../../utils/unifiedRecentTracks.ts'
 import {
   readLibraryRecentHistory,
   type LibraryRecentHistoryOptions
@@ -40,14 +37,7 @@ export function createLibraryRecentTracks(
     revision: null
   })
   const history = computed(() => options.getHistory().slice(0, 30))
-  const tracks = computed(() =>
-    state.value.mode === 'json'
-      ? resolveUnifiedRecentTracks({
-          recentStats: history.value,
-          localTracks: options.getTracks()
-        }).slice(0, 6)
-      : state.value.tracks
-  )
+  const tracks = computed(() => state.value.tracks)
   const snapshots = new WeakMap<Track[], RecentSnapshot>()
   let generation = 0,
     minimumRevision = 0,
@@ -84,13 +74,8 @@ export function createLibraryRecentTracks(
       try {
         const mode = state.value.mode ?? (await options.getStorageMode())
         live()
-        if (mode !== 'json' && mode !== 'sqlite')
-          throw new Error('无法确认曲库存储，未读取最近播放')
+        if (mode !== 'sqlite') throw new Error('最近播放需要 Core SQLite 曲库')
         state.value = { ...state.value, mode }
-        if (mode === 'json') {
-          if (request === generation) state.value = { ...state.value, loading: false }
-          return
-        }
         // An empty ID read carries only the version; getMetadata would also
         // transfer the complete exclusions/configuration for every history tick.
         const revision = (await options.api.getTracksByIds([])).revision

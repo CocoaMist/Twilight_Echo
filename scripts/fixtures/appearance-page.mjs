@@ -1,3 +1,4 @@
+import { installCorePluginFixture } from '@renderer/extensions/corePlugins.fixture.ts'
 import { createApp, h, ref, nextTick } from 'vue'
 import AppearancePage from '__RENDERER__/components/AppearancePage.vue'
 import PageDock from '__RENDERER__/components/PageDock.vue'
@@ -275,7 +276,7 @@ const mount = (props = {}) => {
   })
   app.mount('#app')
 }
-mount({ navigationTarget: target.value, active: active.value, onBack: () => closed++ })
+void installCorePluginFixture().then(() => mount({ navigationTarget: target.value, active: active.value, onBack: () => closed++ }))
 
 window.checkEditorContrast = async (tone) => {
   document.documentElement.dataset.theme = tone

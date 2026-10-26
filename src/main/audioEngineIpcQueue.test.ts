@@ -7,7 +7,11 @@ import { runInNewContext } from 'node:vm'
 import { resolveAuthorizationBatch } from './security/authorizationBatch.ts'
 import { normalizeIpcArray, normalizeIpcString } from './security/ipcValidation.ts'
 import type { AudioEngineQueueItem } from '../shared/audioEngineTypes.ts'
-import type { NativeQueueCommit, NativeQueueRebind } from '../shared/nativeQueue.ts'
+import {
+  MAX_QUEUE_OCCURRENCE_ID_LENGTH,
+  type NativeQueueCommit,
+  type NativeQueueRebind
+} from '../shared/nativeQueue.ts'
 
 function readPreloadSources(): string {
   const root = new URL('../preload/', import.meta.url)
@@ -54,6 +58,7 @@ test('queue occurrence IDs survive IPC normalization without aliases or identity
     {
       normalizeCueRange,
       normalizeIpcString,
+      MAX_QUEUE_OCCURRENCE_ID_LENGTH,
       MAX_AUDIO_SOURCE_LENGTH: 8192
     }
   ) as (value: unknown) => AudioEngineQueueItem | null
@@ -64,9 +69,16 @@ test('queue occurrence IDs survive IPC normalization without aliases or identity
   for (const logicalQueueEnd of [null, 0, 1, 'true', {}, []])
     assert.equal(normalize({ ...track, logicalQueueEnd }), null)
   assert.equal(normalize(track)?.queueEntryId, undefined)
-  for (const queueEntryId of ['first', 'second', 'x'.repeat(128)])
+  for (const queueEntryId of ['first', 'second', 'x'.repeat(MAX_QUEUE_OCCURRENCE_ID_LENGTH)])
     assert.equal(normalize({ ...track, queueEntryId })?.queueEntryId, queueEntryId)
-  for (const queueEntryId of ['', ' first ', 'x'.repeat(129), 2, null, 'line\nbreak'])
+  for (const queueEntryId of [
+    '',
+    ' first ',
+    'x'.repeat(MAX_QUEUE_OCCURRENCE_ID_LENGTH + 1),
+    2,
+    null,
+    'line\nbreak'
+  ])
     assert.equal(normalize({ ...track, queueEntryId }), null)
 })
 
@@ -189,14 +201,14 @@ test('the native queue ceiling is one shared constant on both sides of the IPC',
   assert.match(sharedSource, /export const MAX_NATIVE_QUEUE_ITEMS = 5000/)
   assert.match(
     source,
-    /import \{ MAX_NATIVE_QUEUE_ITEMS \} from '\.\.\/\.\.\/shared\/nativeQueue\.ts'/
+    /import \{\s*MAX_NATIVE_QUEUE_ITEMS,\s*MAX_QUEUE_OCCURRENCE_ID_LENGTH\s*\} from '\.\.\/\.\.\/shared\/nativeQueue\.ts'/
   )
   // The renderer must prepare a bounded native queue rather than issue a
   // request this handler rejects: the rejection happens before audioEngine:play,
   // so playback dies on every backend and every output device.
   assert.match(
     preparationSource,
-    /import \{ MAX_NATIVE_QUEUE_ITEMS \} from '\.\.\/\.\.\/\.\.\/shared\/nativeQueue\.ts'/
+    /import \{\s*MAX_NATIVE_QUEUE_ITEMS,\s*MAX_QUEUE_OCCURRENCE_ID_LENGTH\s*\} from '\.\.\/\.\.\/\.\.\/shared\/nativeQueue\.ts'/
   )
   assert.match(
     preparationSource,
@@ -281,6 +293,7 @@ test('queue handoff IPC strictly validates identity and authorizes every source 
         if (!trusted) throw new Error('untrusted')
       },
       MAX_AUDIO_QUEUE_ITEMS: 5000,
+      MAX_QUEUE_OCCURRENCE_ID_LENGTH,
       MAX_AUDIO_SOURCE_LENGTH: 8192,
       normalizeIpcString,
       normalizeIpcArray,
@@ -392,7 +405,10 @@ test('config-applied crosses the manager, IPC, and preload boundary', () => {
 
 test('offline analysis is routed away from the playback audio service', () => {
   const managerSource = readFileSync(new URL('./audioEngineManager.ts', import.meta.url), 'utf8')
-  const typesSource = readFileSync(new URL('./audio/audioEngineTypes.ts', import.meta.url), 'utf8')
+  const typesSource = readFileSync(
+    new URL('../core/audio/audioEngineTypes.ts', import.meta.url),
+    'utf8'
+  )
   const serviceClientSource = readFileSync(
     new URL('./audioEngineServiceClient.ts', import.meta.url),
     'utf8'

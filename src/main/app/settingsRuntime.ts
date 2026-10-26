@@ -16,8 +16,11 @@ import { syncDesktopLyricsSettings } from '../integrations/desktopLyrics'
 import { applyRuntimeSettings } from '../integrations/shortcutsTray'
 import { reassertAfterglowShortcuts } from './AfterglowModeService.ts'
 import { applyLibraryWatchers } from '../library/watcher'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
+  const core = getCoreSettingsBridge()
+  if (core) return core.update(patch)
   const previousLibraryFolders = runtime.appSettings.libraryFolders ?? []
   const nextSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
   if (Object.prototype.hasOwnProperty.call(patch, 'autoMixMode')) {

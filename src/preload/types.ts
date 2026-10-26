@@ -1,7 +1,6 @@
 export type { EqualizerClipboardApi } from '../shared/equalizerClipboard.ts'
 import type {
   LoudnormStatus,
-  EqualizerBand,
   PlaybackInfo,
   BpmAnalysisResult,
   LoudnessAnalysisResult
@@ -449,32 +448,7 @@ export interface TwilightProviderUiMetadata {
 
 export type PlaybackSession = import('../shared/playbackSession.ts').PlaybackSessionData<TrackData>
 
-export interface OpraCatalogStatus {
-  loaded: boolean
-  loading: boolean
-  source: 'empty' | 'cache' | 'network'
-  cachePath: string
-  vendorCount: number
-  productCount: number
-  profileCount: number
-  lastUpdatedAt: string | null
-  lastError: string
-}
-
-export interface OpraProfile {
-  eqId: string
-  productId: string
-  productName: string
-  vendorName: string
-  author: string
-  details: string
-  link: string
-  attributionUrl: string
-  preampDb: number
-  bands: EqualizerBand[]
-  applicable: boolean
-  unsupportedBandTypes: string[]
-}
+export type { OpraCatalogStatus, OpraProfile } from '../shared/coreOpra.ts'
 
 export interface TwilightPluginDescriptor {
   id: string

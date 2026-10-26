@@ -29,6 +29,11 @@ import {
 } from '../../shared/experienceWindow.ts'
 import { runtime } from '../core/runtime'
 import { createSettingsSnapshot, writeAppSettings } from '../core/settings'
+import { getCoreSettingsBridge } from '../coreProcess/settingsBridge.ts'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
+import { getCoreApplication } from '../app/coreApplication.ts'
+import { CORE_WINDOW_POLICIES } from '../coreProcess/windowBridge.ts'
+import { createWindow } from '../app/window.ts'
 import { importBackgroundImage } from '../library/coverCache'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { publishDynamicIslandLyrics, publishDynamicIslandState } from './dynamicIsland.ts'
@@ -139,6 +144,13 @@ function applyMiniPlayerWindowSettings(settings: MiniPlayerSettings): void {
 function persistMiniPlayerBounds(win: BrowserWindow, bounds?: Electron.Rectangle): void {
   if (win.isDestroyed() || runtime.miniPlayerWindow !== win) return
   const boundsPatch = miniPlayerBoundsPatch(bounds ?? settledMiniPlayerBounds(win))
+  const core = getCoreSettingsBridge()
+  if (core) {
+    void core
+      .update((current) => ({ miniPlayer: { ...current.miniPlayer, ...boundsPatch } }))
+      .catch((error) => console.warn('[miniPlayer] bounds save failed', error))
+    return
+  }
   runtime.appSettings = {
     ...runtime.appSettings,
     miniPlayer: {
@@ -213,6 +225,18 @@ function sendMiniPlayerState(state: MiniPlayerStateSnapshot): void {
   win.webContents.send('miniPlayer:state', state)
 }
 
+export function publishCoreMiniPlayerState(state: MiniPlayerStateSnapshot): void {
+  runtime.latestMiniPlayerState = state
+  publishDynamicIslandState(state)
+  sendMiniPlayerState(state)
+  runtime.refreshTrayMenu?.()
+  runtime.refreshTaskbarThumbarButtons?.()
+  runtime.refreshWindowsSmtc?.()
+  const tray = runtime.trayPlayerWindow
+  if (tray && !tray.isDestroyed() && !tray.webContents.isDestroyed())
+    tray.webContents.send('trayPlayer:state', state)
+}
+
 function sendMiniPlayerSettings(settings = currentMiniPlayerSettings()): void {
   const win = runtime.miniPlayerWindow
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
@@ -254,13 +278,21 @@ function enterMiniPlayerMode(win: BrowserWindow): void {
 function createMiniPlayerWindow(): BrowserWindow {
   const settings = currentMiniPlayerSettings()
   const bounds = resolveInitialBounds(settings)
-  runtime.appSettings = {
-    ...runtime.appSettings,
-    miniPlayer: {
-      ...settings,
-      ...miniPlayerBoundsPatch(bounds)
+  const core = getCoreSettingsBridge()
+  if (core)
+    void core
+      .update((current) => ({
+        miniPlayer: { ...current.miniPlayer, ...miniPlayerBoundsPatch(bounds) }
+      }))
+      .catch((error) => console.warn('[miniPlayer] initial bounds save failed', error))
+  else
+    runtime.appSettings = {
+      ...runtime.appSettings,
+      miniPlayer: {
+        ...settings,
+        ...miniPlayerBoundsPatch(bounds)
+      }
     }
-  }
 
   const win = new BrowserWindow({
     ...bounds,
@@ -295,6 +327,7 @@ function createMiniPlayerWindow(): BrowserWindow {
     }
   })
   runtime.miniPlayerWindow = win
+  getCoreApplication()?.register(win, CORE_WINDOW_POLICIES.playback)
   programmedBounds = bounds
 
   win.setBackgroundColor('#00000000')
@@ -374,21 +407,33 @@ export function hideMiniPlayerWindow(): void {
 }
 
 export function restoreMainWindowFromMiniPlayer(): void {
-  const miniPlayerWindow = runtime.miniPlayerWindow
-  if (miniPlayerWindow && !miniPlayerWindow.isDestroyed()) {
-    persistMiniPlayerBounds(miniPlayerWindow)
-    miniPlayerWindow.destroy()
-  }
-  runtime.miniPlayerWindow = null
+  destroyMiniPlayerWindow()
 
-  const mainWindow = runtime.mainWindow
+  const mainWindow =
+    runtime.mainWindow && !runtime.mainWindow.isDestroyed()
+      ? runtime.mainWindow
+      : getCoreApplication()
+        ? createWindow()
+        : null
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
 }
 
-function updateMiniPlayerSettings(patch: unknown): MiniPlayerSettings {
+/** Capture pending bounds before renderer teardown, including app exit and Afterglow. */
+export function destroyMiniPlayerWindow(): void {
+  const window = runtime.miniPlayerWindow
+  if (window && !window.isDestroyed()) {
+    persistMiniPlayerBounds(window)
+    window.destroy()
+  }
+  runtime.miniPlayerWindow = null
+}
+
+function updateMiniPlayerSettings(
+  patch: unknown
+): MiniPlayerSettings | Promise<MiniPlayerSettings> {
   const current = currentMiniPlayerSettings()
   const value =
     patch && typeof patch === 'object' && !Array.isArray(patch)
@@ -407,6 +452,15 @@ function updateMiniPlayerSettings(patch: unknown): MiniPlayerSettings {
   for (const key of allowedKeys) {
     if (Object.prototype.hasOwnProperty.call(value, key)) candidate[key] = value[key]
   }
+  const core = getCoreSettingsBridge()
+  if (core)
+    return core
+      .update((latest) => {
+        const next: Record<string, unknown> = { ...latest.miniPlayer }
+        for (const key of allowedKeys) if (Object.hasOwn(value, key)) next[key] = value[key]
+        return { miniPlayer: normalizeMiniPlayerSettings(next) }
+      })
+      .then((snapshot) => snapshot.settings.miniPlayer)
 
   const settings = normalizeMiniPlayerSettings(candidate)
   runtime.appSettings = { ...runtime.appSettings, miniPlayer: settings }
@@ -455,14 +509,13 @@ export function setupMiniPlayerIpc(): void {
   ipcMain.handle('miniPlayer:open', (event, rawOptions: unknown) => {
     assertSenderWindow(event, runtime.mainWindow, 'mini player host IPC')
     const options =
-      rawOptions && typeof rawOptions === 'object'
-        ? (rawOptions as ExperienceWindowOptions)
-        : {}
+      rawOptions && typeof rawOptions === 'object' ? (rawOptions as ExperienceWindowOptions) : {}
     return showMiniPlayer(options)
   })
 
   ipcMain.on('miniPlayer:publishState', (event, rawState: unknown) => {
     if (!shouldAcceptSenderWindow(event, runtime.mainWindow, 'mini player state IPC')) return
+    if (getCoreSystemPlayer()) return
     const state = normalizeMiniPlayerStateSnapshot(rawState)
     runtime.latestMiniPlayerState = state
     publishDynamicIslandState(state)
@@ -484,6 +537,7 @@ export function setupMiniPlayerIpc(): void {
   // main renderer still owns lyric parsing.
   ipcMain.on('miniPlayer:publishLyrics', (event, rawLyrics: unknown) => {
     if (!shouldAcceptSenderWindow(event, runtime.mainWindow, 'dynamic island lyrics IPC')) return
+    if (getCoreSystemPlayer()) return
     publishDynamicIslandLyrics(normalizeDynamicIslandLyrics(rawLyrics))
   })
 
@@ -502,6 +556,11 @@ export function setupMiniPlayerIpc(): void {
     }
     const command = normalizeMiniPlayerCommand(rawCommand)
     if (!command) return
+    const core = getCoreSystemPlayer()
+    if (core) {
+      core.dispatch(command)
+      return
+    }
     const mainWindow = runtime.mainWindow
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
     mainWindow.webContents.send('miniPlayer:command', command)

@@ -59,8 +59,18 @@ void fillIdleSpectrum(float* buffer, size_t count, double phase) {
 
 void FftSpectrumAnalyzer::prepare(const AudioFormat& format, size_t resolution) {
   std::lock_guard lock(mutex_);
+  const size_t normalized = normalizeResolution(resolution);
+  if (format_.sampleRate == format.sampleRate &&
+      format_.channelCount == format.channelCount &&
+      resolution_ == normalized &&
+      window_.size() == normalized &&
+      timeDomain_.size() == normalized &&
+      magnitudes_.size() == normalized / 2) {
+    format_ = format;
+    return;
+  }
   format_ = format;
-  resolution_ = normalizeResolution(resolution);
+  resolution_ = normalized;
   fft::resizeWindowForOverwrite(window_, resolution_);
   for (size_t i = 0; i < resolution_; ++i) {
     window_[i] = static_cast<float>(0.5 - 0.5 * std::cos(2.0 * std::numbers::pi * static_cast<double>(i) /
@@ -85,6 +95,7 @@ void FftSpectrumAnalyzer::prepare(const AudioFormat& format, size_t resolution) 
   spectrumDirty_ = false;
   spectrogramDirty_ = false;
   ++spectrumGeneration_;
+  ++resetGeneration_;
 }
 
 void FftSpectrumAnalyzer::prepareOscilloscope(size_t points) {
@@ -107,6 +118,7 @@ void FftSpectrumAnalyzer::setEnabled(bool enabled) {
     spectrumDirty_ = false;
     spectrogramDirty_ = false;
     ++spectrumGeneration_;
+    ++resetGeneration_;
     std::fill(magnitudes_.begin(), magnitudes_.end(), 0.0f);
   }
 }
@@ -150,6 +162,7 @@ void FftSpectrumAnalyzer::resetCaptureLocked() {
   std::fill(magnitudes_.begin(), magnitudes_.end(), 0.0f);
   captureBuffersSilent_ = true;
   ++spectrumGeneration_;
+  ++resetGeneration_;
 }
 
 void FftSpectrumAnalyzer::copyRingWindow(
@@ -254,7 +267,7 @@ bool FftSpectrumAnalyzer::buildSpectrumUpdateSnapshot(
 
   snapshot.computeSpectrum = needsSpectrum;
   snapshot.retainSpectrogram = needsSpectrogram;
-  snapshot.generation = spectrumGeneration_;
+  snapshot.generation = resetGeneration_;
   snapshot.resolution = resolution_;
   if (needsSpectrum) {
     copyRingWindow(timeDomain_, timeDomainWriteIndex_, timeDomainFilled_, &snapshot.timeDomain);
@@ -265,7 +278,7 @@ bool FftSpectrumAnalyzer::buildSpectrumUpdateSnapshot(
 
 void FftSpectrumAnalyzer::publishSpectrumUpdate(SpectrumUpdateSnapshot& snapshot) const {
   std::lock_guard lock(mutex_);
-  if (spectrumGeneration_ != snapshot.generation || !enabled_ || !hasCapture_) return;
+  if (resetGeneration_ != snapshot.generation || !enabled_ || !hasCapture_) return;
 
   if (snapshot.computeSpectrum && spectrumDirty_) {
     magnitudes_ = std::move(snapshot.magnitudes);

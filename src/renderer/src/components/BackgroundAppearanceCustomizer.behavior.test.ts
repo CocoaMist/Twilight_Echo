@@ -156,7 +156,7 @@ const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();for(let i=0;i<4;i++)await new Promise(resolve=>requestAnimationFrame(resolve))}
 window.settleAppearance=settle
 const page=ref('local'),writes=[];let failSave=false,failImport=false
-window.api={settings:{get:async()=>snapshot(),onChanged:()=>()=>{},update:async patch=>{if(failSave)throw new Error('保存失败示例');writes.push(patch);confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> {if(failImport)throw new Error('图片导入失败示例');return 'background://wallpaper.png'}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
+window.api={core:{onMessage:()=>()=>{},onStatus:()=>()=>{}},settings:{get:async()=>snapshot(),onChanged:()=>()=>{},update:async patch=>{if(failSave)throw new Error('保存失败示例');writes.push(patch);confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> {if(failImport)throw new Error('图片导入失败示例');return 'background://wallpaper.png'}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
 const settingsStore=useSettingsStore(),theme=useThemeStore()
 let confirmed={...settingsStore.settings.value,theme:'dark',appBackground:normalizeAppBackgroundSettings({global:{kind:'image',image:'background://wallpaper.png'}}),cardAppearance:defaultCardAppearance(),surfaceMaterial:'standard'}
 const snapshot=()=>({settings:confirmed,defaults:confirmed,paths:{},appVersion:'test',platform:'win32',windowTransparencySupported:false,restartReasons:[]})

@@ -78,7 +78,7 @@ std::wstring quoteWindowsArgument(const std::wstring& value) {
 }
 
 std::wstring environmentHelperPath() {
-  std::array<wchar_t, 32768> value{};
+  std::vector<wchar_t> value(32768, L'\0');
   const DWORD length = GetEnvironmentVariableW(
       L"TAE_ASIO_HELPER_PATH", value.data(), static_cast<DWORD>(value.size()));
   if (length == 0 || length >= value.size()) return {};
@@ -98,7 +98,7 @@ std::wstring locateAsioHelperExecutable(std::string* error) {
     if (error) *error = "Unable to locate the audio engine module: " + windowsError(GetLastError());
     return {};
   }
-  std::array<wchar_t, 32768> path{};
+  std::vector<wchar_t> path(32768, L'\0');
   const DWORD length = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
   if (length == 0 || length >= path.size() - 1) {
     if (error) *error = "Unable to locate the audio engine directory: " + windowsError(GetLastError());
@@ -308,8 +308,9 @@ bool AsioHelperProcess::request(
   }
 
   const int32_t sequence = nextRequestSequence_++;
-  shared_->request = {};
-  shared_->response = {};
+  shared_->request = Request{};
+  std::memset(&shared_->response, 0, sizeof(shared_->response));
+  shared_->response.formatRestored = 1;
   shared_->request.command = static_cast<int32_t>(command);
   if (prepare) prepare(shared_->request);
   MemoryBarrier();
@@ -346,8 +347,8 @@ bool AsioHelperProcess::request(
     if (wait == WAIT_TIMEOUT) break;
     if (readAtomic(&shared_->responseSequence) != sequence) continue;
     MemoryBarrier();
-    const Response result = shared_->response;
-    if (response) *response = result;
+    if (response) *response = shared_->response;
+    const Response& result = response ? *response : shared_->response;
     if (result.ok != 0) return true;
     FailureReason reason = static_cast<FailureReason>(result.failureReason);
     if (reason < FailureReason::None || reason > FailureReason::CommandFailed) {
@@ -387,9 +388,8 @@ void AsioHelperProcess::shutdown() {
   if (!process_) return;
   if (alive() && shared_ &&
       readAtomic(&shared_->helperState) == static_cast<LONG>(HelperState::Ready)) {
-    Response response;
     std::string ignored;
-    request(Command::Shutdown, &response, std::chrono::seconds(3), &ignored);
+    request(Command::Shutdown, nullptr, std::chrono::seconds(3), &ignored);
   }
   if (alive()) {
     if (WaitForSingleObject(process_, 500) == WAIT_TIMEOUT) {

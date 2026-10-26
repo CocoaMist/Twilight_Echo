@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import type { LibraryCueDefinitionRecord } from '../../shared/libraryDatabase.ts'
+import type { TrackIdentityTags } from '../../shared/trackIdentification.ts'
 import { MAX_CUE_BYTES } from '../../shared/cue.ts'
 import { CueDirectoryIndex, deriveCueTracks, resolveCueAudioPath } from './cueLibrary.ts'
 import { LibraryDatabase } from './libraryDatabase.ts'
@@ -136,6 +137,7 @@ test('CUE library derivation retains GB18030 identity, pregap, and source Replay
     assert.equal(tracks[1].cueRange.virtualPregapSeconds, 2)
     assert.equal(tracks[1].cueRange.sourcePregapSeconds, 0)
     assert.equal(tracks[1].duration, 62)
+    assert.equal((tracks[1].identityTags as TrackIdentityTags).durationSeconds?.value, 60)
     assert.equal(tracks[1].replayGainTrackGainDb, -7.5)
     assert.equal(tracks[1].r128AlbumGainDb, -6)
   } finally {

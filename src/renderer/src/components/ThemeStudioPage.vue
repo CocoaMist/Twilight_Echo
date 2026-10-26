@@ -39,9 +39,26 @@ const props = defineProps<{
   controlsOnly?: boolean
   contextual?: boolean
   part?: AppearancePart
+  playerTarget?: 'stage' | 'cover' | 'lyrics'
   active?: boolean
 }>()
-const emit = defineEmits<{ back: []; domainChange: [domain: ThemeStudioDomain] }>()
+const emit = defineEmits<{
+  back: []
+  domainChange: [domain: ThemeStudioDomain]
+  'update:playerTarget': [target: 'stage' | 'cover' | 'lyrics']
+}>()
+const localPlayerTarget = ref<'stage' | 'cover' | 'lyrics'>(props.playerTarget ?? 'stage')
+watch(
+  () => props.playerTarget,
+  (target) => {
+    if (target) localPlayerTarget.value = target
+  }
+)
+const activePlayerTarget = computed(() => props.playerTarget ?? localPlayerTarget.value)
+function selectPlayerTarget(target: 'stage' | 'cover' | 'lyrics'): void {
+  localPlayerTarget.value = target
+  emit('update:playerTarget', target)
+}
 
 const {
   BUILT_IN_THEME_FONTS,
@@ -220,6 +237,8 @@ const contextTokenId = computed(() => {
       return 'surface.card'
     case 'player-bar':
       return 'playback.control.surface'
+    case 'player-page':
+      return 'surface.player'
     case 'global-font':
       return 'typography.chromeText'
     case 'appearance-theme':
@@ -260,7 +279,7 @@ const contextAdjustment = computed(() => {
       value: parseFloat(valueForId(id))
     }
   }
-  if (['navigation', 'player-bar'].includes(contextPart.value) && contextColor.value)
+  if (['navigation', 'player-bar', 'player-page'].includes(contextPart.value) && contextColor.value)
     return {
       definition: contextDefinition.value,
       label: '底色不透明度',
@@ -288,6 +307,22 @@ function setContextCardBlur(event: Event): void {
     THEME_TOKEN_DEFINITIONS.find((entry) => entry.id === 'material.cardBlur')!,
     `${(event.target as HTMLSelectElement).value}px`
   )
+}
+function numericTokenValue(id: string, fallback: number): number {
+  const parsed = Number.parseFloat(valueForId(id))
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+function updateNumericToken(id: string, event: Event): void {
+  if (state.value.busy || !draft.value) return
+  const definition = THEME_TOKEN_DEFINITIONS.find((entry) => entry.id === id)
+  if (!definition) return
+  updateToken(definition, `${(event.target as HTMLInputElement).value}${definition.unit ?? ''}`)
+}
+function setNumericTokenValue(id: string, value: number): void {
+  if (state.value.busy || !draft.value) return
+  const definition = THEME_TOKEN_DEFINITIONS.find((entry) => entry.id === id)
+  if (!definition) return
+  updateToken(definition, `${value}${definition.unit ?? ''}`)
 }
 const appearanceGroups = computed(() =>
   allAppearanceGroups.value
@@ -388,13 +423,16 @@ async function openContextMaterial(): Promise<void> {
       ? 'advanced'
       : contextPart.value === 'global-font'
         ? 'typography'
-        : 'shell'
+        : contextPart.value === 'player-page' || contextPart.value === 'player-bar'
+          ? 'player'
+          : 'shell'
   await openTools()
 }
 watch(
   () => props.part,
-  () => {
+  (part) => {
     toolsOpen.value = false
+    if (part === 'player-page' || part === 'player-bar') domain.value = 'player'
   }
 )
 watch(
@@ -713,6 +751,240 @@ void editorPaneRef.value
             <option value="pro">增强</option>
           </select></label
         >
+        <template v-else-if="contextPart === 'player-page'">
+          <div class="studio-player-subtargets" role="group" aria-label="播放页编辑区域">
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'stage'"
+              @click="selectPlayerTarget('stage')"
+            >
+              背景
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'cover'"
+              @click="selectPlayerTarget('cover')"
+            >
+              封面
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePlayerTarget === 'lyrics'"
+              @click="selectPlayerTarget('lyrics')"
+            >
+              歌词
+            </button>
+          </div>
+          <template v-if="activePlayerTarget === 'lyrics'">
+            <label
+              ><span>对齐</span
+              ><select
+                aria-label="选中歌词对齐方式"
+                :value="activeModes.player?.lyricsAlign ?? 'follow'"
+                @change="updatePlayerMode('lyricsAlign', $event)"
+              >
+                <option value="follow">跟随标题</option>
+                <option value="left">左对齐</option>
+                <option value="center">居中</option>
+                <option value="right">右对齐</option>
+              </select></label
+            >
+            <label
+              ><span>高亮</span
+              ><select
+                aria-label="选中歌词高亮样式"
+                :value="activeModes.player?.lyricHighlight ?? 'glow'"
+                @change="updatePlayerMode('lyricHighlight', $event)"
+              >
+                <option value="glow">柔和发光</option>
+                <option value="surface">底面卡片</option>
+                <option value="minimal">极简文字</option>
+              </select></label
+            >
+            <div class="studio-context-slider">
+              <span>歌词宽度</span>
+              <input
+                aria-label="播放舞台展开度"
+                type="range"
+                min="520"
+                max="1120"
+                step="10"
+                :value="numericTokenValue('playback.stage.span', 820)"
+                @input="updateNumericToken('playback.stage.span', $event)"
+              />
+              <EditableRangeValue
+                aria-label="播放舞台展开度数值"
+                :value="numericTokenValue('playback.stage.span', 820)"
+                :min="520"
+                :max="1120"
+                :step="10"
+                suffix="px"
+                @change="setNumericTokenValue('playback.stage.span', $event)"
+              />
+            </div>
+            <div class="studio-context-slider">
+              <span>歌词行距</span>
+              <input
+                aria-label="歌词行距间隔"
+                type="range"
+                min="4"
+                max="28"
+                step="1"
+                :value="numericTokenValue('playback.lyrics.density', 10)"
+                @input="updateNumericToken('playback.lyrics.density', $event)"
+              />
+              <EditableRangeValue
+                aria-label="歌词行距间隔数值"
+                :value="numericTokenValue('playback.lyrics.density', 10)"
+                :min="4"
+                :max="28"
+                suffix="px"
+                @change="setNumericTokenValue('playback.lyrics.density', $event)"
+              />
+            </div>
+            <div class="studio-context-slider">
+              <span>未唱透明</span>
+              <input
+                aria-label="未唱歌词不透明度"
+                type="range"
+                min="20"
+                max="95"
+                step="5"
+                :value="numericTokenValue('playback.lyrics.inactiveOpacity', 66)"
+                @input="updateNumericToken('playback.lyrics.inactiveOpacity', $event)"
+              />
+              <EditableRangeValue
+                aria-label="未唱歌词不透明度数值"
+                :value="numericTokenValue('playback.lyrics.inactiveOpacity', 66)"
+                :min="20"
+                :max="95"
+                :step="5"
+                suffix="%"
+                @change="setNumericTokenValue('playback.lyrics.inactiveOpacity', $event)"
+              />
+            </div>
+          </template>
+          <template v-else>
+            <template v-if="activePlayerTarget === 'stage'">
+              <label
+                ><span>背景</span
+                ><select
+                  aria-label="选中播放页背景模式"
+                  :value="activeModes.player?.backdrop ?? 'follow'"
+                  @change="updatePlayerMode('backdrop', $event)"
+                >
+                  <option value="follow">默认（模糊封面）</option>
+                  <option value="cover-blur">固定模糊封面</option>
+                  <option value="fluid">流体渐变光影</option>
+                  <option value="solid">纯色底色</option>
+                  <option value="image">自选背景图片</option>
+                </select></label
+              >
+              <button type="button" @click="importAsset('image', 'playerBackground')">
+                {{ draft?.assetBindings?.playerBackground ? '更换图片' : '选择图片' }}
+              </button>
+              <template v-if="activeModes.player?.backdrop === 'image' && imageAssets.length > 0">
+                <select
+                  aria-label="播放页背景图片"
+                  :value="draft?.assetBindings?.playerBackground ?? ''"
+                  @change="updateAssetBinding('playerBackground', $event)"
+                >
+                  <option value="">跟随全局背景图</option>
+                  <option v-for="asset in imageAssets" :key="asset.id" :value="asset.id">
+                    {{ asset.path }}
+                  </option>
+                </select>
+              </template>
+              <label
+                ><span>布局</span
+                ><select
+                  aria-label="选中播放页布局"
+                  :value="activeModes.player?.layout ?? 'standard'"
+                  @change="updatePlayerMode('layout', $event)"
+                >
+                  <option v-for="layout in playerLayouts" :key="layout.id" :value="layout.id">
+                    {{ layout.label }}
+                  </option>
+                </select></label
+              >
+            </template>
+            <label
+              ><span>外框</span
+              ><select
+                aria-label="选中封面外框样式"
+                :value="activeModes.artwork?.frame ?? 'borderless'"
+                @change="updateArtworkMode('frame', $event)"
+              >
+                <option value="borderless">无边框</option>
+                <option value="subtle-ring">细描边</option>
+                <option value="glass-frame">玻璃画框</option>
+                <option value="vinyl">黑胶唱盘</option>
+                <option value="polaroid">拍立得画框</option>
+              </select></label
+            >
+            <div class="studio-context-slider">
+              <span>封面比例</span>
+              <input
+                aria-label="封面缩放比例"
+                type="range"
+                min="60"
+                max="115"
+                step="1"
+                :value="numericTokenValue('playback.cover.scale', 100)"
+                @input="updateNumericToken('playback.cover.scale', $event)"
+              />
+              <EditableRangeValue
+                aria-label="封面缩放比例数值"
+                :value="numericTokenValue('playback.cover.scale', 100)"
+                :min="60"
+                :max="115"
+                suffix="%"
+                @change="setNumericTokenValue('playback.cover.scale', $event)"
+              />
+            </div>
+            <div v-if="activePlayerTarget === 'cover'" class="studio-context-slider">
+              <span>封面圆角</span>
+              <input
+                aria-label="封面圆角"
+                type="range"
+                min="0"
+                max="40"
+                step="1"
+                :value="numericTokenValue('playback.cover.radius', 26)"
+                @input="updateNumericToken('playback.cover.radius', $event)"
+              />
+              <EditableRangeValue
+                aria-label="封面圆角数值"
+                :value="numericTokenValue('playback.cover.radius', 26)"
+                :min="0"
+                :max="40"
+                suffix="px"
+                @change="setNumericTokenValue('playback.cover.radius', $event)"
+              />
+            </div>
+            <div class="studio-context-slider">
+              <span>栏间距</span>
+              <input
+                aria-label="封面与歌词间距"
+                type="range"
+                min="16"
+                max="96"
+                step="2"
+                :value="numericTokenValue('playback.stage.spread', 40)"
+                @input="updateNumericToken('playback.stage.spread', $event)"
+              />
+              <EditableRangeValue
+                aria-label="封面与歌词间距数值"
+                :value="numericTokenValue('playback.stage.spread', 40)"
+                :min="16"
+                :max="96"
+                :step="2"
+                suffix="px"
+                @change="setNumericTokenValue('playback.stage.spread', $event)"
+              />
+            </div>
+          </template>
+        </template>
         <label v-else-if="contextPart === 'card'"
           ><span>材质</span
           ><select
@@ -1437,45 +1709,72 @@ void editorPaneRef.value
 
             <section v-if="domain === 'player'" class="studio-control-section">
               <div class="control-section-heading">
-                <span>播放按钮与封面</span>
+                <span>播放页背景与封面</span>
               </div>
               <label class="studio-setting-row">
-                <span>播放按钮样式</span>
+                <span>播放页背景模式</span>
                 <select
-                  data-studio-setting="player.controls"
-                  :value="activeModes.player?.controls"
+                  data-studio-setting="player.backdrop"
+                  :value="activeModes.player?.backdrop ?? 'follow'"
                   :disabled="!draft"
-                  @change="updatePlayerMode('controls', $event)"
+                  @change="updatePlayerMode('backdrop', $event)"
                 >
-                  <option value="standard">标准</option>
-                  <option value="pro">增强</option>
+                  <option value="follow">默认（跟随播放设置 / 模糊封面）</option>
+                  <option value="cover-blur">固定模糊封面</option>
+                  <option value="fluid">流体渐变光影</option>
+                  <option value="solid">纯色底色</option>
+                  <option value="image">自选背景图片</option>
                 </select>
               </label>
               <label class="studio-setting-row">
-                <span>歌曲标题对齐</span>
+                <span>播放页背景图片<small>{{ assetSource('playerBackground') }}</small></span>
                 <select
-                  data-studio-setting="player.titleAlign"
-                  :value="activeModes.player?.titleAlign"
+                  aria-label="播放页背景图片"
+                  :value="draft?.assetBindings?.playerBackground ?? ''"
                   :disabled="!draft"
-                  @change="updatePlayerMode('titleAlign', $event)"
+                  @change="updateAssetBinding('playerBackground', $event)"
                 >
-                  <option value="left">左对齐</option>
-                  <option value="center">居中</option>
+                  <option value="">跟随主题或全局背景</option>
+                  <option v-for="asset in imageAssets" :key="asset.id" :value="asset.id">
+                    {{ asset.path }}
+                  </option>
+                </select>
+              </label>
+              <div class="studio-setting-row">
+                <span>导入播放页背景图片</span>
+                <button
+                  type="button"
+                  class="studio-inline-action"
+                  :disabled="!draft"
+                  @click="importAsset('image', 'playerBackground')"
+                >
+                  <i class="ph ph-image-square"></i><span>选择背景图</span>
+                </button>
+              </div>
+              <label class="studio-setting-row">
+                <span>封面外框样式</span>
+                <select
+                  data-studio-setting="artwork.frame"
+                  :value="activeModes.artwork?.frame ?? 'borderless'"
+                  :disabled="!draft"
+                  @change="updateArtworkMode('frame', $event)"
+                >
+                  <option value="borderless">无边框</option>
+                  <option value="subtle-ring">细描边</option>
+                  <option value="glass-frame">玻璃画框</option>
+                  <option value="vinyl">黑胶唱盘</option>
+                  <option value="polaroid">拍立得画框</option>
                 </select>
               </label>
               <label class="studio-setting-row">
-                <span>播放进度条样式</span>
-                <select
-                  data-studio-setting="player.progress"
-                  :value="activeModes.player?.progress"
+                <span>黑胶唱盘旋转</span>
+                <input
+                  data-studio-setting="artwork.spin"
+                  type="checkbox"
+                  :checked="activeModes.artwork?.spin === 'on'"
                   :disabled="!draft"
-                  @change="updatePlayerMode('progress', $event)"
-                >
-                  <option value="line">直线无滑块</option>
-                  <option value="ring">空心圆</option>
-                  <option value="solid">实心圆</option>
-                  <option value="spectrum">频谱</option>
-                </select>
+                  @change="updateArtworkMode('spin', $event)"
+                />
               </label>
               <label class="studio-setting-row">
                 <span>切歌时的封面动画</span>
@@ -1499,6 +1798,193 @@ void editorPaneRef.value
                   :disabled="!draft"
                   @change="updateArtworkMode('shadow', $event)"
                 />
+              </label>
+              <label class="studio-setting-row">
+                <span>播放舞台垂直对齐</span>
+                <select
+                  data-studio-setting="player.stageAlign"
+                  :value="activeModes.player?.stageAlign ?? 'center'"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('stageAlign', $event)"
+                >
+                  <option value="center">居中对齐</option>
+                  <option value="top">偏上对齐</option>
+                  <option value="bottom">偏下对齐</option>
+                </select>
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>封面缩放比例<small>{{ numericTokenValue('playback.cover.scale', 100) }}%</small></span>
+                <input
+                  type="range"
+                  min="60"
+                  max="115"
+                  step="1"
+                  :value="numericTokenValue('playback.cover.scale', 100)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.cover.scale', $event)"
+                />
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>封面与歌词间距<small>{{ numericTokenValue('playback.stage.spread', 40) }}px</small></span>
+                <input
+                  type="range"
+                  min="16"
+                  max="96"
+                  step="2"
+                  :value="numericTokenValue('playback.stage.spread', 40)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.stage.spread', $event)"
+                />
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>播放舞台展开度<small>{{ numericTokenValue('playback.stage.span', 820) }}px</small></span>
+                <input
+                  type="range"
+                  min="520"
+                  max="1120"
+                  step="10"
+                  :value="numericTokenValue('playback.stage.span', 820)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.stage.span', $event)"
+                />
+              </label>
+            </section>
+
+            <section v-if="domain === 'player'" class="studio-control-section">
+              <div class="control-section-heading">
+                <span>播放页歌词与信息</span>
+              </div>
+              <label class="studio-setting-row">
+                <span>歌曲标题对齐</span>
+                <select
+                  data-studio-setting="player.titleAlign"
+                  :value="activeModes.player?.titleAlign"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('titleAlign', $event)"
+                >
+                  <option value="left">左对齐</option>
+                  <option value="center">居中</option>
+                </select>
+              </label>
+              <label class="studio-setting-row">
+                <span>播放页歌词对齐</span>
+                <select
+                  data-studio-setting="player.lyricsAlign"
+                  :value="activeModes.player?.lyricsAlign ?? 'follow'"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('lyricsAlign', $event)"
+                >
+                  <option value="follow">跟随歌词设置</option>
+                  <option value="left">左对齐</option>
+                  <option value="center">居中</option>
+                  <option value="right">右对齐</option>
+                </select>
+              </label>
+              <label class="studio-setting-row">
+                <span>当前歌词底板样式</span>
+                <select
+                  data-studio-setting="player.lyricHighlight"
+                  :value="activeModes.player?.lyricHighlight ?? 'minimal'"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('lyricHighlight', $event)"
+                >
+                  <option value="minimal">纯文字无底板</option>
+                  <option value="surface">胶囊底板</option>
+                  <option value="glow">毛玻璃柔光底板</option>
+                </select>
+              </label>
+              <label class="studio-setting-row">
+                <span>播放页顶部胶囊</span>
+                <select
+                  data-studio-setting="player.timeStyle"
+                  :value="activeModes.player?.timeStyle ?? 'pill'"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('timeStyle', $event)"
+                >
+                  <option value="pill">标准胶囊</option>
+                  <option value="glass">玻璃胶囊</option>
+                  <option value="minimal">极简无底板</option>
+                </select>
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>歌词行距间隔<small>{{ numericTokenValue('playback.lyrics.density', 10) }}px</small></span>
+                <input
+                  type="range"
+                  min="4"
+                  max="28"
+                  step="1"
+                  :value="numericTokenValue('playback.lyrics.density', 10)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.lyrics.density', $event)"
+                />
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>当前歌词放大比例<small>{{ numericTokenValue('playback.lyrics.activeScale', 102) }}%</small></span>
+                <input
+                  type="range"
+                  min="100"
+                  max="118"
+                  step="1"
+                  :value="numericTokenValue('playback.lyrics.activeScale', 102)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.lyrics.activeScale', $event)"
+                />
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>未唱歌词不透明度<small>{{ numericTokenValue('playback.lyrics.inactiveOpacity', 66) }}%</small></span>
+                <input
+                  type="range"
+                  min="20"
+                  max="95"
+                  step="5"
+                  :value="numericTokenValue('playback.lyrics.inactiveOpacity', 66)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.lyrics.inactiveOpacity', $event)"
+                />
+              </label>
+              <label class="studio-setting-row window-range-row">
+                <span>远端歌词景深模糊<small>{{ numericTokenValue('playback.lyrics.inactiveBlur', 0.8) }}px</small></span>
+                <input
+                  type="range"
+                  min="0"
+                  max="4"
+                  step="0.2"
+                  :value="numericTokenValue('playback.lyrics.inactiveBlur', 0.8)"
+                  :disabled="!draft"
+                  @input="updateNumericToken('playback.lyrics.inactiveBlur', $event)"
+                />
+              </label>
+            </section>
+
+            <section v-if="domain === 'player'" class="studio-control-section">
+              <div class="control-section-heading">
+                <span>播放按钮与进度条</span>
+              </div>
+              <label class="studio-setting-row">
+                <span>播放按钮样式</span>
+                <select
+                  data-studio-setting="player.controls"
+                  :value="activeModes.player?.controls"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('controls', $event)"
+                >
+                  <option value="standard">标准</option>
+                  <option value="pro">增强</option>
+                </select>
+              </label>
+              <label class="studio-setting-row">
+                <span>播放进度条样式</span>
+                <select
+                  data-studio-setting="player.progress"
+                  :value="activeModes.player?.progress"
+                  :disabled="!draft"
+                  @change="updatePlayerMode('progress', $event)"
+                >
+                  <option value="line">直线无滑块</option>
+                  <option value="ring">空心圆</option>
+                  <option value="solid">实心圆</option>
+                  <option value="spectrum">频谱</option>
+                </select>
               </label>
             </section>
 

@@ -65,8 +65,10 @@ async function confirm(): Promise<void> {
       close()
       return
     }
-    const playlistId = createAggregatePlaylist(trimmed)
-    const added = props.tracks.length > 0 ? addTracksToPlaylistById(playlistId, props.tracks) : 0
+    pending.value = true
+    const playlistId = await createAggregatePlaylist(trimmed)
+    const added =
+      props.tracks.length > 0 ? await addTracksToPlaylistById(playlistId, props.tracks) : 0
     emit('created', playlistId, added)
     close()
   } catch (createError) {

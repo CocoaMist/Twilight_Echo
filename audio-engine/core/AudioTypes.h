@@ -57,7 +57,8 @@ enum class PcmToDsdMode {
   Off,
   Dsd64,
   Dsd128,
-  Dsd256
+  Dsd256,
+  Dsd512
 };
 
 struct OutputConfig {
@@ -142,6 +143,8 @@ struct QueueItem {
   double cueVirtualPregapSeconds = 0.0;
   // INDEX 00..INDEX 01 duration. These bytes remain in the preceding source segment.
   double cueSourcePregapSeconds = 0.0;
+  // Host logical identity distinguishes repeated rows of the same media.
+  std::string queueEntryId;
 };
 
 struct OutputConversionInfo {

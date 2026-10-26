@@ -15,6 +15,11 @@ const source = stripTypeScriptTypes(
 )
 function fixture(mode = 'sqlite') {
   const calls = [],
+    settingsWrites = [],
+    settings = ref({
+      libraryFolders: [],
+      musicIdentification: { newImports: false, history: false, sources: [] }
+    }),
     closeDisabled = ref(false)
   const unexpected = () => {
     throw new Error('legacy whole-library mutation')
@@ -38,6 +43,13 @@ function fixture(mode = 'sqlite') {
     choosingFolder: ref(false),
     scannedFolders: ref(['D:/Music/a', 'D:/Music/b']),
     settingsLoaded: ref(true),
+    settings,
+    automaticMetadata: ref(false),
+    metadataSources: ref([]),
+    updateSettings: async (patch) => {
+      settingsWrites.push(JSON.parse(JSON.stringify(patch)))
+      Object.assign(settings.value, patch)
+    },
     removeLibraryFolder: async (path) => calls.push(['settings-remove', path]),
     isTrackUnderLibraryRoot,
     normalizeLibraryPath,
@@ -75,7 +87,7 @@ function fixture(mode = 'sqlite') {
     assert.ok(start >= 0 && end > start)
     vm.runInContext(source.slice(start, end + 2), context)
   }
-  return { context, calls }
+  return { context, calls, settingsWrites }
 }
 
 test('SQLite import submits selected directories to the owner without an array scan/save or global legacy busy flag', async () => {
@@ -90,7 +102,11 @@ test('SQLite import submits selected directories to the owner without an array s
   const pending = f.context.startScan()
   assert.equal(f.context.databaseRequestPending.value, true)
   assert.equal(f.context.isScanning.value, false)
+  await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(f.calls, [['scan', { directories: ['D:/Music/a'], reason: 'import' }]])
+  assert.deepEqual(f.settingsWrites, [
+    { musicIdentification: { newImports: false, history: false, sources: [] } }
+  ])
   f.context.close()
   assert.deepEqual(
     f.calls.at(-1),
@@ -100,11 +116,7 @@ test('SQLite import submits selected directories to the owner without an array s
   release({ state: 'cancelled' })
   await pending
   assert.equal(f.context.databaseRequestPending.value, false)
-  assert.equal(
-    f.context.scannedTrackCount.value,
-    0,
-    'do not label the global DB count as newly imported'
-  )
+  assert.deepEqual(f.settingsWrites.at(-1), { libraryFolders: ['D:/Music/a'] })
 })
 
 test('SQLite import failure preserves partial results and allows explicit retry, never replaying a write', async () => {
@@ -138,47 +150,11 @@ test('SQLite root removal only revokes settings; pause/resume/cancel use the sha
   await f.context.controlScan('resume')
   assert.match(f.context.scanError.value, /扫描状态已变化/)
   assert.equal(f.context.controlPending.value, false)
-  f.context.settingsLoaded.value = false
-  await f.context.handleRemoveFolder('D:/Music/b')
-  assert.match(f.context.scanError.value, /设置尚未加载/)
-  assert.equal(f.calls.filter((call) => call[0] === 'settings-remove').length, 1)
 })
 
-test('JSON importer keeps its whole-result API, exclusions, partial save and close contracts', async () => {
-  const f = fixture('json')
-  Object.assign(f.context, {
-    excludedTracks: ref([
-      { filePath: 'D:/Music/a/removed.wav' },
-      { filePath: 'D:/Music/b/keep.wav' }
-    ]),
-    restoreExcludedTracks: async (paths) => f.calls.push(['restore', ...paths]),
-    addFolder: (path) => f.calls.push(['folder', path]),
-    addTracks: async (tracks) => f.calls.push(['tracks', ...tracks.map((track) => track.id)]),
-    refreshLibraryIndex: () => f.calls.push(['rebuild']),
-    saveLibrary: async () => f.calls.push(['save'])
-  })
-  f.context.window.api.fs.scanMusicFiles = async (path) => {
-    f.calls.push(['legacy-scan', path])
-    return [{ id: 'legacy' }]
-  }
-  await f.context.startScan()
-  assert.deepEqual(f.calls, [
-    ['restore', 'D:/Music/a/removed.wav'],
-    ['legacy-scan', 'D:/Music/a'],
-    ['folder', 'D:/Music/a'],
-    ['tracks', 'legacy'],
-    ['rebuild'],
-    ['save'],
-    ['emit', 'close']
-  ])
-  f.calls.length = 0
-  f.context.selectedFolders.value.add('D:/Music/b')
-  f.context.window.api.fs.scanMusicFiles = async (path) => {
-    if (path.endsWith('/b')) throw new Error('offline')
-    return [{ id: 'saved-part' }]
-  }
-  await f.context.startScan()
-  assert.match(f.context.scanError.value, /offline/)
-  assert.equal(f.context.isScanning.value, false)
-  assert.deepEqual(f.calls.slice(-2), [['rebuild'], ['save']])
+test('the dialog has no renderer scanner, whole-library writer or storage-mode fallback', () => {
+  assert.doesNotMatch(
+    source,
+    /scanMusicFiles|saveLibrary|refreshLibraryIndex|addTracks|addFolder|getStorageMode|onScanProgress/
+  )
 })

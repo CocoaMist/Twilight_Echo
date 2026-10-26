@@ -1,41 +1,31 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
-import type { Track } from '../../types/music.ts'
-import { searchUnifiedLocalPage } from '../../utils/unifiedSearchSources.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
+import { createLogicalTrackModel } from '../../../../shared/logicalTrackModel.ts'
+import { createUnifiedSearchSources } from '../../../../shared/musicSearchSources.ts'
 import { versionSourceKey } from '../../../../shared/trackSourceIdentity.ts'
-import { getMusicVersions, loadMusicVersions, saveMusicVersions } from '../musicVersions.ts'
-import { emptyMusicVersions } from '../../utils/musicVersions.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
+
+let preferredVersions = new Map<string, RecordingVersion>(),
+  preferenceRevision = 0
+const identity = createLogicalTrackModel((key) => preferredVersions.get(key))
+const { searchUnifiedLocalPage } = createUnifiedSearchSources(identity, () => preferenceRevision)
 
 function preferences(t: TestContext, selected: Track[]) {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage'),
-    values = new Map<string, string>()
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        values.set(key, value)
-      }
-    }
-  })
-  loadMusicVersions()
   t.after(() => {
-    values.clear()
-    loadMusicVersions()
-    if (previous) Object.defineProperty(globalThis, 'localStorage', previous)
-    else Reflect.deleteProperty(globalThis, 'localStorage')
+    preferredVersions = new Map()
+    preferenceRevision++
   })
   function set(tracks: Track[]) {
-    const document = emptyMusicVersions()
-    document.tracks.versions = tracks.map((track, i) => ({
-      id: String(i),
-      label: '',
-      sources: [versionSourceKey(track)],
-      preferredSource: versionSourceKey(track)
-    }))
-    saveMusicVersions(document, getMusicVersions())
+    preferredVersions = new Map(
+      tracks.map((track, i) => {
+        const key = versionSourceKey(track)
+        return [key, { id: String(i), sources: [key], preferredSource: key }]
+      })
+    )
+    preferenceRevision++
   }
   set(selected)
   return set
@@ -180,4 +170,173 @@ test('legacy source-less records use canonical local CUE preferences without req
   })
   assert.equal(page.total, 2)
   assert.equal(page.tracks[0].id, selected.id)
+})
+
+test('SQLite unified search ranks multi-feature relevance (Exact Title > Prefix Title > Substring Title > Album > Filename) while keeping preferredSources #1', (t) => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  const tracks: Track[] = [
+    {
+      id: 'local:filename',
+      filePath: 'D:/Music/晴天_demo.flac',
+      fileName: '晴天_demo.flac',
+      title: '无名曲',
+      artist: '路人甲',
+      album: '测试集',
+      format: 'flac',
+      duration: 180,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    },
+    {
+      id: 'local:album',
+      filePath: 'D:/Music/album.flac',
+      fileName: 'album.flac',
+      title: '序曲',
+      artist: '路人甲',
+      album: '晴天纪念辑',
+      format: 'flac',
+      duration: 180,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    },
+    {
+      id: 'local:substring',
+      filePath: 'D:/Music/sub.flac',
+      fileName: 'sub.flac',
+      title: '等一个晴天吧',
+      artist: '路人甲',
+      album: '测试集',
+      format: 'flac',
+      duration: 180,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    },
+    {
+      id: 'local:prefix',
+      filePath: 'D:/Music/prefix.flac',
+      fileName: 'prefix.flac',
+      title: '晴天娃娃',
+      artist: '路人甲',
+      album: '测试集',
+      format: 'flac',
+      duration: 180,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    },
+    {
+      id: 'local:exact',
+      filePath: 'D:/Music/exact.mp3',
+      fileName: 'exact.mp3',
+      title: '晴天',
+      artist: '路人甲',
+      album: '测试集',
+      format: 'mp3',
+      duration: 180,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    }
+  ]
+  db.replaceDocument({ version: 2, revision: 0, tracks, folders: [], exclusions: [] })
+
+  const unpreferred = db.queryTracks({
+    sort: 'unifiedSearch',
+    search: '晴天',
+    searchFileName: true,
+    limit: 10
+  })
+  assert.deepEqual(
+    unpreferred.tracks.map((tr) => tr.id),
+    ['local:exact', 'local:prefix', 'local:substring', 'local:album', 'local:filename']
+  )
+
+  const withPreferred = db.queryTracks({
+    sort: 'unifiedSearch',
+    search: '晴天',
+    searchFileName: true,
+    preferredSources: [versionSourceKey(tracks[0])],
+    limit: 10
+  })
+  assert.deepEqual(
+    withPreferred.tracks.map((tr) => tr.id),
+    ['local:filename', 'local:exact', 'local:prefix', 'local:substring', 'local:album']
+  )
+})
+
+test('SQLite unified search supports multi-token cross-field queries and SymSpell typo correction', (t) => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  const tracks: Track[] = [
+    {
+      id: 'local:jay-qt',
+      filePath: 'D:/Music/qt.flac',
+      fileName: 'qt.flac',
+      title: '晴天',
+      artist: '周杰伦',
+      album: '叶惠美',
+      format: 'flac',
+      duration: 269,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    },
+    {
+      id: 'local:jay-dyx',
+      filePath: 'D:/Music/dyx.flac',
+      fileName: 'dyx.flac',
+      title: '稻香',
+      artist: '周杰伦',
+      album: '魔杰座',
+      format: 'flac',
+      duration: 223,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    },
+    {
+      id: 'local:beethoven',
+      filePath: 'D:/Music/sym5.flac',
+      fileName: 'sym5.flac',
+      title: 'Symphony No. 5',
+      artist: 'Beethoven',
+      album: 'Classical Masterpieces',
+      format: 'flac',
+      duration: 420,
+      size: 1,
+      lyrics: null,
+      cover: null,
+      source: 'local'
+    }
+  ]
+  db.replaceDocument({ version: 2, revision: 0, tracks, folders: [], exclusions: [] })
+
+  const crossField = db.queryTracks({
+    sort: 'unifiedSearch',
+    search: '周杰伦 晴天',
+    searchFileName: true,
+    limit: 10
+  })
+  assert.equal(crossField.total, 1)
+  assert.equal(crossField.tracks[0].id, 'local:jay-qt')
+
+  const typoCorrected = db.queryTracks({
+    sort: 'unifiedSearch',
+    search: 'beethovn',
+    searchFileName: true,
+    limit: 10
+  })
+  assert.equal(typoCorrected.total, 1)
+  assert.equal(typoCorrected.tracks[0].id, 'local:beethoven')
 })

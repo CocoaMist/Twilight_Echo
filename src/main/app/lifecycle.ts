@@ -8,8 +8,8 @@ import { pathToFileURL } from 'url'
 import { fetch as undiciFetch } from 'undici'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { runtime } from '../core/runtime'
-import { createRemoteCoverCache } from '../cache/remoteCoverCache.ts'
-import { ensureMusicCacheDirectories } from '../cache/ncmCache'
+import { mediaCoverCache } from '../cache/mediaCoverCache.ts'
+import { ensureMusicCacheDirectories, shutdownNcmCache } from '../cache/ncmCache'
 import { readCachedProtocolFile } from '../cache/protocolAssetCache'
 import { kwinHasInputMethodConfigured } from '../imeBackend'
 import {
@@ -17,7 +17,6 @@ import {
   getCoverCacheContentType,
   isCoverCacheFileName,
   readCoverCacheFileBytes,
-  resizeCoverImageBytes,
   resolveBackgroundImageFile,
   prepareBackgroundForDisplay
 } from '../library/coverCache'
@@ -38,14 +37,18 @@ import {
   setupDesktopLyricsIpc
 } from '../integrations/desktopLyrics'
 import { destroyDynamicIsland, setupDynamicIslandIpc } from '../integrations/dynamicIsland.ts'
-import { restoreMainWindowFromMiniPlayer, setupMiniPlayerIpc } from '../integrations/miniPlayer'
-import { setupTrayPlayerIpc } from '../integrations/trayPlayer'
+import {
+  restoreMainWindowFromMiniPlayer,
+  setupMiniPlayerIpc,
+  destroyMiniPlayerWindow
+} from '../integrations/miniPlayer'
+import { setupTrayPlayerIpc, destroyTrayPlayerWindow } from '../integrations/trayPlayer'
 import { destroyWindowsSmtc, setupWindowsSmtcIpc } from '../integrations/windowsSmtc.ts'
 import {
   ensureWindowsShellIdentity,
   WINDOWS_APP_USER_MODEL_ID
 } from '../integrations/windowsAppIdentity.ts'
-import { setupNcmIpc } from '../ncm/api'
+import { setupNcmIpc, shutdownNcmApi } from '../ncm/api'
 import { ensureAudioEngineRuntime, setupAudioEngineIpc } from '../audio/engineIpc'
 import { AudioAnalysisServiceClient } from '../audioAnalysisServiceClient.ts'
 import { LocalLibraryScanServiceClient } from '../library/libraryScanServiceClient.ts'
@@ -56,7 +59,7 @@ import { setupBpmAnalysisIpc } from '../bpm/bpmIpc'
 import { setupLoudnessAnalysisIpc } from '../audio/loudnessIpc'
 import { setupOpraIpc } from '../ipc/opra'
 import { setupPluginIpc } from '../ipc/plugins'
-import { setupDataIpc } from '../ipc/data'
+import { setupDataIpc, setupCoreShellIpc } from '../ipc/data'
 import {
   ensureActiveLibraryExclusionsLoaded,
   prepareAudioFilesForRemoval,
@@ -75,7 +78,15 @@ import { setupNetworkSourceIpc } from '../network/networkIpc.ts'
 import { installElectronSecurity } from '../security/electronSecurity.ts'
 import { createRemoteMediaRequestHandler } from '../security/remoteMediaGrants.ts'
 import { destroyTelemetry, initializeTelemetry } from '../analytics/index.ts'
-import { createWindow } from './window'
+import { createWindow, requestRendererPlaybackSessionSave } from './window'
+import { createCoreApplication } from './coreApplicationRuntime.ts'
+import { getCoreApplication } from './coreApplication.ts'
+import {
+  applyAutoLaunch,
+  registerPlayerShortcuts,
+  syncTrayState
+} from '../integrations/shortcutsTray.ts'
+import { applyDiscordRpcSetting } from '../integrations/discord.ts'
 import {
   isAfterglowModeActive,
   restoreAfterglowMode,
@@ -90,6 +101,14 @@ import {
 import type { SettingsFileLoadIssue } from '../persistence/settingsFile.ts'
 
 export function startApp(): void {
+  startDesktopApp('legacy')
+}
+/** The production entry switches here once all renderer consumers use Core. */
+export function startCoreApp(): void {
+  startDesktopApp('core')
+}
+
+function startDesktopApp(owner: 'legacy' | 'core'): void {
   app.setName('TwilightEcho')
   electronApp.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID)
   runtime.launchSettings = { ...runtime.appSettings }
@@ -157,12 +176,16 @@ export function startApp(): void {
     app.quit()
   } else {
     try {
-      libraryStorage = selectLibraryStorage(
-        app.getPath('userData'),
-        app.isPackaged,
-        process.env.TWILIGHT_SQLITE_LIBRARY
-      )
-      if (libraryStorage === 'json') applyPendingPersonalRestore(app.getPath('userData'))
+      libraryStorage =
+        owner === 'core'
+          ? 'sqlite'
+          : selectLibraryStorage(
+              app.getPath('userData'),
+              app.isPackaged,
+              process.env.TWILIGHT_SQLITE_LIBRARY
+            )
+      if (owner === 'legacy' && libraryStorage === 'json')
+        applyPendingPersonalRestore(app.getPath('userData'))
       runtime.appSettings = readAppSettings()
       runtime.launchSettings = { ...runtime.appSettings }
     } catch (error) {
@@ -241,7 +264,8 @@ export function startApp(): void {
         restoreMainWindowFromMiniPlayer()
         return
       }
-      const win = runtime.mainWindow
+      const win =
+        runtime.mainWindow ?? (getCoreApplication() && app.isReady() ? createWindow() : null)
       if (!win || win.isDestroyed()) return
       if (win.isMinimized()) win.restore()
       win.show()
@@ -250,7 +274,7 @@ export function startApp(): void {
 
     const acrylicBackdropWarmup = warmWindowsAcrylicBackdropAvailability()
     app.whenReady().then(async () => {
-      if (libraryStorage === 'sqlite') {
+      if (owner === 'legacy' && libraryStorage === 'sqlite') {
         try {
           await initializeDatabaseLibrary()
         } catch (error) {
@@ -277,6 +301,14 @@ export function startApp(): void {
       installElectronSecurity()
       installExperienceProtocol()
       await initializeLocalPathGrants(runtime.launchSettings)
+      if (owner === 'core') {
+        const core = createCoreApplication()
+        // A normal window supplies the one-time browser-data migration. Awaiting
+        // ready here would prevent that window from ever being created.
+        void core.start().catch((error) => {
+          console.error('[core.startup]', error)
+        })
+      }
       if (runtime.libraryDatabase) {
         try {
           await runtime.libraryDatabase.refreshRoots()
@@ -406,13 +438,11 @@ export function startApp(): void {
       protocol.handle(
         'twilight-media',
         createRemoteMediaRequestHandler({
-          imageCache: createRemoteCoverCache(
-            () => (runtime.appSettings.cachePolicy.cover ? getCoverCacheDir() : null),
-            { resize: resizeCoverImageBytes }
-          ),
+          imageCache: mediaCoverCache,
           fetch: async (source, init) => {
             const upstream = await undiciFetch(source, {
               method: init.method,
+              signal: init.signal,
               headers: init.headers as Record<string, string> | undefined,
               // Manual so remoteMediaGrants can re-apply NetEase Referer on each hop.
               redirect: 'manual'
@@ -435,24 +465,28 @@ export function startApp(): void {
         optimizer.watchWindowShortcuts(window)
       })
 
-      runtime.localLibraryScanService ??= new LocalLibraryScanServiceClient({
-        serviceEntry: join(__dirname, 'libraryScanService.js')
-      })
-      setupLibraryDatabaseIpc(
-        ipcMain,
-        runtime.libraryDatabase?.api,
-        runtime.libraryDatabase
-          ? {
-              scanDirectories: (request) => runtime.libraryDatabase!.scanDirectories(request),
-              removeFiles: (request) =>
-                runtime.libraryDatabase!.removeFiles(request.items, request.mode)
-            }
-          : undefined,
-        runtime.libraryDatabase?.playlistRepair,
-        runtime.libraryDatabase?.selections,
-        runtime.libraryDatabase?.queueBuilds
-      )
-      setupDataIpc()
+      if (owner === 'legacy') {
+        runtime.localLibraryScanService ??= new LocalLibraryScanServiceClient({
+          serviceEntry: join(__dirname, 'libraryScanService.js')
+        })
+        setupLibraryDatabaseIpc(
+          ipcMain,
+          runtime.libraryDatabase?.api,
+          runtime.libraryDatabase
+            ? {
+                scanDirectories: (request) => runtime.libraryDatabase!.scanDirectories(request),
+                removeFiles: (request) =>
+                  runtime.libraryDatabase!.removeFiles(request.items, request.mode)
+              }
+            : undefined,
+          runtime.libraryDatabase?.playlistRepair,
+          runtime.libraryDatabase?.selections,
+          runtime.libraryDatabase?.queueBuilds
+        )
+        setupDataIpc()
+      } else {
+        setupCoreShellIpc()
+      }
       setupThemeIpc()
       setupDesktopLyricsIpc()
       setupMiniPlayerIpc()
@@ -460,19 +494,21 @@ export function startApp(): void {
       setupTrayPlayerIpc()
       setupWindowsSmtcIpc()
 
-      setupAudioEngineIpc()
-      runtime.audioAnalysisService = new AudioAnalysisServiceClient({
-        serviceEntry: join(__dirname, 'audioAnalysisService.js'),
-        maxConcurrency: Math.max(1, Math.min(4, Math.floor(cpus().length / 2)))
-      })
-      setupBpmAnalysisIpc()
-      setupLoudnessAnalysisIpc()
-      setupNcmIpc()
-      setupRadioMediaIpc()
-      setupRemoteIpc()
-      setupNetworkSourceIpc()
-      setupOpraIpc()
-      setupPluginIpc()
+      if (owner === 'legacy') {
+        setupAudioEngineIpc()
+        runtime.audioAnalysisService = new AudioAnalysisServiceClient({
+          serviceEntry: join(__dirname, 'audioAnalysisService.js'),
+          maxConcurrency: Math.max(1, Math.min(4, Math.floor(cpus().length / 2)))
+        })
+        setupBpmAnalysisIpc()
+        setupLoudnessAnalysisIpc()
+        setupNcmIpc()
+        setupRadioMediaIpc()
+        setupRemoteIpc()
+        setupNetworkSourceIpc()
+        setupOpraIpc()
+        setupPluginIpc()
+      }
       initializeTelemetry()
 
       // Linux 上透明窗口必须等合成器视觉就绪后再建窗，否则内容不渲染
@@ -495,13 +531,17 @@ export function startApp(): void {
         }
         if (runtime.miniPlayerWindow && !runtime.miniPlayerWindow.isDestroyed()) {
           restoreMainWindowFromMiniPlayer()
-        } else if (BrowserWindow.getAllWindows().length === 0) {
+        } else if (
+          (getCoreApplication() && (!runtime.mainWindow || runtime.mainWindow.isDestroyed())) ||
+          BrowserWindow.getAllWindows().length === 0
+        ) {
           createWindow()
         }
       })
     })
 
     app.on('window-all-closed', () => {
+      if (getCoreApplication() && !runtime.forceQuit) return
       // Afterglow deliberately lives without any BrowserWindow.
       if (isAfterglowModeActive()) return
       if (process.platform !== 'darwin' && !runtime.appSettings.closeToTray) {
@@ -509,11 +549,34 @@ export function startApp(): void {
       }
     })
 
-    app.on('before-quit', () => {
+    let coreQuitComplete = false
+    let coreQuitWork: Promise<void> | null = null
+    app.on('before-quit', (event) => {
       runtime.forceQuit = true
       // Destroy the non-closable Afterglow anchor before Electron closes windows.
       // Waiting until will-quit can leave that window blocking the quit sequence.
       shutdownAfterglowMode()
+      const core = getCoreApplication()
+      if (core && !coreQuitComplete) {
+        event.preventDefault()
+        if (coreQuitWork) return
+        destroyDesktopLyrics()
+        destroyDynamicIsland()
+        destroyTrayPlayerWindow()
+        destroyMiniPlayerWindow()
+        coreQuitWork = (async () => {
+          if (!runtime.closingAfterPlaybackSessionSave) await requestRendererPlaybackSessionSave()
+          await core.shutdown()
+          coreQuitComplete = true
+          runtime.closingAfterPlaybackSessionSave = true
+          app.quit()
+        })().catch((error) => {
+          runtime.forceQuit = false
+          coreQuitWork = null
+          dialog.showErrorBox('退出前保存失败', `应用保持运行，可重试退出。\n${String(error)}`)
+        })
+        return
+      }
       destroyDesktopLyrics()
       destroyDynamicIsland()
       // 队列已同步落盘；退出期间的网络投递是尽力而为，未发出的事件下次启动重试。
@@ -528,6 +591,10 @@ export function startApp(): void {
       destroyWindowsSmtc()
       unregisterPlayerShortcuts()
       destroyTray()
+      if (getCoreApplication()) {
+        destroyTelemetry()
+        return
+      }
       void runtime.pluginManager?.destroy()
       runtime.bpmAnalysisManager?.cancel()
       runtime.loudnessAnalysisManager?.cancel()
@@ -549,11 +616,8 @@ export function startApp(): void {
       runtime.pluginManager = null
       destroyRadioMediaIpc()
       void destroyRemoteIpc()
-      if (runtime.ncmServer) {
-        runtime.ncmServer.close()
-        runtime.ncmServer = null
-      }
-      runtime.ncmServerPromise = null
+      void shutdownNcmCache()
+      void shutdownNcmApi().catch((error) => console.error('[ncm.shutdown]', error))
     })
   }
 }
@@ -608,6 +672,13 @@ function createMainWindowAndScheduleDeferredStartup(): void {
     if (runtime.mainWindow !== mainWindow || mainWindow.isDestroyed() || runtime.forceQuit) return
     startAppUpdateChecks()
     if (runtime.appSettings.desktopLyrics.enabled) showDesktopLyrics()
+    if (getCoreApplication()) {
+      applyAutoLaunch(runtime.appSettings.launchAtLogin)
+      applyDiscordRpcSetting(runtime.appSettings.discordRpcEnabled)
+      registerPlayerShortcuts()
+      syncTrayState()
+      return
+    }
     void ensureAudioEngineRuntime().catch((error) => {
       console.error('[音频引擎] 初始化失败：', error instanceof Error ? error.message : error)
     })

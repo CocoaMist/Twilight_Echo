@@ -1,6 +1,16 @@
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { createRequire } from 'module'
+import type { NativeAudioMetadata } from '../shared/audioEngineTypes.ts'
+import type {
+  LibraryTagWorkerRequest,
+  LibraryTagJournalStatus
+} from '../shared/coreLibraryMaintenance.ts'
+import type { LocalLibraryTagWriteResult } from '../shared/localLibraryTags.ts'
+import type {
+  DownloadMetadataRequest,
+  DownloadMetadataResult
+} from '../shared/coreDownloadMetadata.ts'
 
 import {
   AUDIO_ANALYSIS_PROTOCOL_VERSION,
@@ -32,6 +42,7 @@ const require = createRequire(import.meta.url)
 type UtilityProcessLike = {
   postMessage: (message: AudioAnalysisWorkerRequest) => void
   kill: () => void
+  terminate?: () => Promise<void>
   on: (
     event: 'message' | 'exit' | 'error',
     listener:
@@ -102,6 +113,7 @@ export interface AudioAnalysisServiceClientOptions {
   idleTimeoutMs?: number
   now?: () => number
   electron?: ElectronModule
+  launch?: () => UtilityProcessLike
 }
 
 export interface AudioAnalysisRequestOptions {
@@ -135,6 +147,7 @@ const DEFAULT_MAX_CONCURRENCY = 1
 const DEFAULT_MAX_QUEUE_SIZE = 32
 const DEFAULT_MAX_STARTUP_FAILURES = 3
 const MAX_AUDIO_ANALYSIS_RESPONSE_BYTES = 512 * 1024
+const MAX_AUDIO_METADATA_RESPONSE_BYTES = 16 * 1024 * 1024
 const AUDIO_ANALYSIS_INVALID_RESPONSE_CODE = 'ERR_AUDIO_ANALYSIS_INVALID_RESPONSE'
 const AUDIO_ANALYSIS_INVALID_RESPONSE =
   'audio analysis worker returned an invalid or oversized message'
@@ -154,6 +167,7 @@ export class AudioAnalysisServiceClient extends EventEmitter {
   private readonly workers: AnalysisWorker[]
   private readonly queued: AnalysisTask[] = []
   private readonly active = new Map<string, AnalysisTask>()
+  private readonly retiring = new Map<Promise<void>, string>()
   private sequence = 0
   private stopped = false
   private unavailableError = ''
@@ -216,6 +230,56 @@ export class AudioAnalysisServiceClient extends EventEmitter {
       disabled: false,
       logBudget: new UtilityProcessLogBudget()
     }))
+  }
+
+  /** File/tag work is isolated from Core controls and joined before temporary cleanup. */
+  async prepareDownloadMetadata(
+    source: string,
+    request: DownloadMetadataRequest,
+    signal: AbortSignal
+  ): Promise<DownloadMetadataResult> {
+    return (await this.request('download-metadata', source, JSON.stringify(request), {
+      priority: -10,
+      signal
+    })) as DownloadMetadataResult
+  }
+
+  /** Native container enumeration uses analysis workers, never playback's RPC lane. */
+  async libraryTags(
+    backupRoot: string,
+    request: LibraryTagWorkerRequest
+  ): Promise<LibraryTagJournalStatus | LocalLibraryTagWriteResult | void> {
+    return (await this.request('library-tags', backupRoot, JSON.stringify(request), {
+      priority: 20
+    })) as LibraryTagJournalStatus | LocalLibraryTagWriteResult | void
+  }
+
+  async hashContent(source: string, signal: AbortSignal): Promise<string> {
+    return (await this.request('content-hash', source, '{}', { priority: -30, signal })) as string
+  }
+
+  /** Native container enumeration uses analysis workers, never playback's RPC lane. */
+  async getMetadata(
+    source: string,
+    options: AudioAnalysisRequestOptions = {}
+  ): Promise<NativeAudioMetadata | null> {
+    const value = parseAnalysisJson(
+      await this.request('metadata', source, '{}', options),
+      'metadata'
+    )
+    if (value === null) return null
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('Invalid native metadata response')
+    const metadata = value as NativeAudioMetadata
+    if (metadata.error) throw new Error(String(metadata.error))
+    if (
+      typeof metadata.source !== 'string' ||
+      (metadata.isoTracks !== undefined &&
+        (!Array.isArray(metadata.isoTracks) ||
+          metadata.isoTracks.some((track) => !track || typeof track.source !== 'string')))
+    )
+      throw new Error('Invalid native metadata response')
+    return metadata
   }
 
   async analyzeLoudnessGroup(group: LoudnessInputGroup): Promise<LoudnessGroupMeasurement> {
@@ -356,6 +420,14 @@ export class AudioAnalysisServiceClient extends EventEmitter {
       )
     }
     return cancelled
+  }
+
+  /** A file mutation needs actual decoder exit, not merely a rejected RPC. */
+  async releaseSources(sources: readonly string[]): Promise<void> {
+    for (const source of sources) this.cancelBySource(source)
+    await Promise.all(
+      [...this.retiring].filter(([, source]) => sources.includes(source)).map(([work]) => work)
+    )
   }
 
   cancelAll(analysis?: AudioAnalysisKind): number {
@@ -539,18 +611,20 @@ export class AudioAnalysisServiceClient extends EventEmitter {
 
   private startWorker(worker: AnalysisWorker): void {
     if (this.stopped || this.unavailableError || worker.disabled || worker.child) return
-    const electron = this.options.electron ?? resolveElectron()
-    if (!electron?.utilityProcess) {
+    const electron = this.options.launch ? undefined : (this.options.electron ?? resolveElectron())
+    if (!this.options.launch && !electron?.utilityProcess) {
       this.unavailableError = 'current runtime does not support Electron utilityProcess'
       this.lastError = this.unavailableError
       this.rejectQueuedUnavailable()
       return
     }
     try {
-      const child = electron.utilityProcess.fork(this.options.serviceEntry, [], {
-        serviceName: `twilight-audio-analysis-${worker.slot + 1}`,
-        stdio: 'pipe'
-      })
+      const child = this.options.launch
+        ? this.options.launch()
+        : electron!.utilityProcess!.fork(this.options.serviceEntry, [], {
+            serviceName: `twilight-audio-analysis-${worker.slot + 1}`,
+            stdio: 'pipe'
+          })
       worker.child = child
       worker.ready = false
       worker.logBudget.reset()
@@ -578,6 +652,7 @@ export class AudioAnalysisServiceClient extends EventEmitter {
             'ERR_AUDIO_ANALYSIS_WORKER_EXIT',
             `audio analysis worker ${worker.slot + 1} exited: ${code ?? 'unknown'}`
           ),
+          true,
           true
         )
       })
@@ -639,8 +714,10 @@ export class AudioAnalysisServiceClient extends EventEmitter {
         if (
           record.protocolVersion !== AUDIO_ANALYSIS_PROTOCOL_VERSION ||
           !Array.isArray(analyses) ||
-          !analyses.includes('bpm') ||
-          !analyses.includes('loudness')
+          !(
+            analyses.includes('download-metadata') ||
+            (analyses.includes('bpm') && analyses.includes('loudness'))
+          )
         ) {
           this.handleFatal('audio analysis worker capability contract mismatch')
           return
@@ -695,7 +772,16 @@ export class AudioAnalysisServiceClient extends EventEmitter {
     if (response.requestId !== worker.taskId) return
     const task = this.active.get(response.requestId)
     if (!task) return
-    if (!inspectUtilityProcessPayload(response.value, MAX_AUDIO_ANALYSIS_RESPONSE_BYTES).ok) {
+    if (
+      !inspectUtilityProcessPayload(
+        response.value,
+        task.analysis === 'metadata' ||
+          task.analysis === 'download-metadata' ||
+          task.analysis === 'library-tags'
+          ? MAX_AUDIO_METADATA_RESPONSE_BYTES
+          : MAX_AUDIO_ANALYSIS_RESPONSE_BYTES
+      ).ok
+    ) {
       this.handleWorkerProtocolViolation(worker)
       return
     }
@@ -789,7 +875,12 @@ export class AudioAnalysisServiceClient extends EventEmitter {
     if (worker.child && worker.ready) this.armIdleTimer(worker)
   }
 
-  private terminateWorker(worker: AnalysisWorker, error: Error, restart: boolean): void {
+  private terminateWorker(
+    worker: AnalysisWorker,
+    error: Error,
+    restart: boolean,
+    alreadyExited = false
+  ): void {
     const child = worker.child
     const failedDuringStartup = Boolean(child) && !worker.ready
     worker.child = null
@@ -798,18 +889,38 @@ export class AudioAnalysisServiceClient extends EventEmitter {
     worker.startupTimer = null
     this.clearIdleTimer(worker)
     const task = worker.taskId ? this.active.get(worker.taskId) : undefined
+    let exited: Promise<void> | null = null
+    if (child && !alreadyExited) {
+      exited = child.terminate
+        ? child.terminate()
+        : new Promise<void>((resolve) => {
+            child.on('exit', () => resolve())
+            child.kill()
+          })
+      this.retiring.set(exited, task?.source ?? '')
+      const retirement = exited
+      void exited.then(
+        () => this.retiring.delete(retirement),
+        () => this.retiring.delete(retirement)
+      )
+    }
     if (task) {
       this.completeTask(worker, task)
-      task.reject(error)
+      if (
+        ['download-metadata', 'library-tags', 'loudness-batch'].includes(task.analysis) &&
+        exited
+      ) {
+        // Writers may hold .tags files; an album decoder may hold any member,
+        // not just task.source. Join exit before Core maintains those files.
+        void exited.then(
+          () => task.reject(error),
+          (cause) => task.reject(cause instanceof Error ? cause : new Error(String(cause)))
+        )
+      } else task.reject(error)
     } else {
       worker.taskId = null
     }
     this.lastError = error.message
-    try {
-      child?.kill()
-    } catch {
-      // Worker identity was detached before kill, so late exit/results are ignored.
-    }
     if (
       restart &&
       !this.stopped &&

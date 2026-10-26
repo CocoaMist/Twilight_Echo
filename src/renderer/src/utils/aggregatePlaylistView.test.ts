@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { createAggregatePlaylistModel } from '../../../shared/aggregatePlaylistView.ts'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
 
 const {
   buildAggregateRows,
@@ -9,9 +11,7 @@ const {
   resolveAggregateQueue,
   sortAggregatePlaylists,
   toggleHiddenSource
-} = (await import(
-  new URL('./aggregatePlaylistView.ts', import.meta.url).href
-)) as typeof import('./aggregatePlaylistView')
+} = createAggregatePlaylistModel(createLogicalTrackModel(() => undefined))
 
 function track(overrides: Partial<Track> & Pick<Track, 'id' | 'title' | 'artist'>): Track {
   return {

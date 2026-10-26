@@ -1,7 +1,13 @@
 <script setup lang="ts">
+import { createCoreAudioUi } from '@renderer/stores/player/coreAudioUi.ts'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { createDspFactoryScene } from '../../../shared/dspGraph.ts'
+import {
+  createDspFactoryScene,
+  graphHasEnabledProcessing,
+  resolveEffectiveTargetSampleRate
+} from '../../../shared/dspGraph.ts'
 import type {
   DspAsset,
   DspAssetKind,
@@ -35,13 +41,21 @@ import {
   createDspDraftHistory,
   createDspDiagnosticsPoller,
   dspAssetReferences,
+  dspSceneRuleSummary,
   moveDspNode,
   normalizeDspSerialOrder
 } from '@renderer/utils/dspWorkbench'
 import type { DspWorkspaceTab } from '@renderer/utils/dspWorkbench'
 
-const props = defineProps<{ tab?: DspWorkspaceTab; visible?: boolean; hostDocument?: Document }>()
+const coreAudio = createCoreAudioUi(useCoreConnection())
+const props = defineProps<{
+  tab?: DspWorkspaceTab
+  visible?: boolean
+  hostDocument?: Document
+  masterBusy?: boolean
+}>()
 const emit = defineEmits<{
+  master: []
   status: [status: DspGraphStatus | null]
   scene: [name: string]
   dirty: [dirty: boolean]
@@ -84,6 +98,10 @@ const activeSceneId = computed(
   () => status.value?.activeSceneId ?? state.value?.activeSceneId ?? null
 )
 const savedScenes = computed(() => saved.value?.scenes ?? [])
+const activeSavedScene = computed(
+  () => savedScenes.value.find((scene) => scene.id === activeSceneId.value) ?? null
+)
+const selectedRules = computed(() => dspSceneRuleSummary(selectedScene.value))
 const serialize = () =>
   JSON.stringify({ scenes: scenes.value, pinnedSceneId: state.value?.pinnedSceneId ?? null })
 const savedKey = computed(() =>
@@ -287,7 +305,7 @@ const poller = createDspDiagnosticsPoller({
   playing: () => isPlaying.value,
   read: async () => {
     try {
-      const next = await window.api.audioEngine.getDspGraphStatus()
+      const next = await coreAudio.getDspGraphStatus()
       if (disposed) return
       status.value = next
       diagnosticsError.value = ''
@@ -365,21 +383,137 @@ async function toggleAudition(event: Event): Promise<void> {
     details.open = true
   }
 }
+let rateSyncInFlight = false
+async function ensureOutputSampleRateSynced(): Promise<void> {
+  if (rateSyncInFlight || dirty.value) return
+  const unwrap = <T,>(val: T | { value: T } | undefined): T | undefined =>
+    val && typeof val === 'object' && 'value' in val ? (val as { value: T }).value : val
+  const storeRef = outputStore as unknown as Record<string, unknown>
+  const playback = unwrap(storeRef.playbackInfo as {
+    state?: string
+    isDsd?: boolean
+    sourceSampleRate?: number
+    decodedSampleRate?: number
+    actualSampleRate?: number
+    outputSampleRate?: number
+  })
+  const outInfo = outputInfo.value
+  const playbackActive =
+    playback?.state === 'playing' || playback?.state === 'paused' || isPlaying.value
+  if (!playbackActive || outInfo?.isDsd || playback?.isDsd) return
+  const outConfig = unwrap(storeRef.audioOutputConfig as {
+    playbackPolicy?: string
+    dsdMuteTimeoutFrames?: number
+  })
+  if (outConfig?.playbackPolicy === 'continuity-first') return
+
+  const activeScene =
+    savedScenes.value.find((scene) => scene.id === activeSceneId.value) ??
+    selectedScene.value
+  const outStage =
+    activeScene?.graph.outputStage ??
+    state.value?.effectiveGraph?.outputStage
+  if (!outStage) return
+
+  const sourceRate =
+    playback?.sourceSampleRate ||
+    playback?.decodedSampleRate ||
+    0
+  if (sourceRate <= 0) return
+
+  const currentDevice = unwrap(storeRef.audioDevice as string) ?? 'auto'
+  const deviceOptions =
+    unwrap(storeRef.audioDeviceOptions as Array<{ id: string; sampleRates?: number[] }>) ?? []
+  const currentDeviceOption =
+    deviceOptions.find((d) => d.id === currentDevice) ?? deviceOptions[0]
+  const bypassed =
+    !audioProcessing.value.dspEnabled ||
+    audioProcessing.value.directMode ||
+    !!state.value?.effectiveBypassReason
+  const resolvedTarget = bypassed
+    ? 'device'
+    : resolveEffectiveTargetSampleRate(
+        outStage,
+        sourceRate,
+        currentDeviceOption?.sampleRates
+      )
+  const desiredRate =
+    typeof resolvedTarget === 'number' && resolvedTarget > 0 ? resolvedTarget : sourceRate
+  const actualRate =
+    outInfo?.actualSampleRate ||
+    outInfo?.outputSampleRate ||
+    playback?.actualSampleRate ||
+    playback?.outputSampleRate ||
+    0
+  const backend =
+    unwrap(storeRef.audioOutput as string) ??
+    outInfo?.actualBackend ??
+    outInfo?.backend ??
+    ''
+  const isExclusiveOrAsio =
+    backend === 'asio' ||
+    Boolean(unwrap(storeRef.exclusiveMode as boolean)) ||
+    outInfo?.exclusive === true
+  if (!isExclusiveOrAsio || desiredRate <= 0 || actualRate <= 0 || actualRate === desiredRate) {
+    return
+  }
+
+  rateSyncInFlight = true
+  try {
+    await outputStore.setOutputStage?.(outStage)
+    await outputStore.refreshAudioOutputState?.().catch(() => undefined)
+    const refreshedPlayback = unwrap(storeRef.playbackInfo as {
+      actualSampleRate?: number
+      outputSampleRate?: number
+    })
+    const refreshedRate =
+      outputInfo.value?.actualSampleRate ||
+      outputInfo.value?.outputSampleRate ||
+      refreshedPlayback?.actualSampleRate ||
+      refreshedPlayback?.outputSampleRate ||
+      0
+    if (refreshedRate !== desiredRate) {
+      if (currentDevice && currentDevice !== 'auto') {
+        await outputStore.setAudioDevice?.('auto')
+        await outputStore.setAudioDevice?.(currentDevice)
+      } else {
+        const currentTimeout =
+          unwrap(storeRef.audioOutputConfig as { dsdMuteTimeoutFrames?: number })
+            ?.dsdMuteTimeoutFrames ?? 4096
+        await outputStore.setAudioOutputConfig?.({
+          dsdMuteTimeoutFrames: currentTimeout === 4095 ? 4096 : 4095
+        })
+      }
+      await outputStore.refreshAudioOutputState?.().catch(() => undefined)
+    }
+  } finally {
+    rateSyncInFlight = false
+  }
+}
 async function saveScenes(): Promise<boolean> {
   if (!(await finishAudition())) return false
   return run(async () => {
     if (!state.value) return
     const drafts = scenes.value.map((scene) => cloneScene(scene))
     drafts.forEach((scene) => scene.graph.nodes.forEach(normalizeNodeEditorParams))
-    let next = await submitDspSceneDraft(window.api.audioEngine, drafts, state.value.pinnedSceneId)
+    let next = await submitDspSceneDraft(coreAudio, drafts, state.value.pinnedSceneId)
     if (
       next.requiresPcmFallback &&
       !next.dsdPcmFallbackApplied &&
       confirm('场景已保存。停止 DSD Direct / DoP 直通并转换为 PCM 以运行 DSP？')
     )
-      next = await window.api.audioEngine.applyDspScene(next.pinnedSceneId, true)
+      next = await coreAudio.applyDspScene(next.pinnedSceneId, true)
     adopt(next)
     await refreshSavedAssetReferences()
+    if (
+      !audioProcessing.value.dspEnabled &&
+      !audioProcessing.value.directMode &&
+      selectedScene.value &&
+      graphHasEnabledProcessing(selectedScene.value.graph)
+    ) {
+      await outputStore.setAudioProcessing?.({ dspEnabled: true, directMode: false })
+    }
+    await ensureOutputSampleRateSynced().catch(() => undefined)
     message.value =
       next.requiresPcmFallback && !next.dsdPcmFallbackApplied
         ? '场景已保存；保持 DSD 直通。'
@@ -391,16 +525,17 @@ async function pinScene(pin: string | null): Promise<void> {
   if (!(await requestLeave()) || !(await finishAudition())) return
   await run(async () => {
     const previousPin = saved.value?.pinnedSceneId ?? null
-    let next = await window.api.audioEngine.applyDspScene(pin)
+    let next = await coreAudio.applyDspScene(pin)
     if (next.requiresPcmFallback && !next.dsdPcmFallbackApplied) {
       if (confirm('停止 DSD Direct / DoP 直通并转换为 PCM，以应用此场景？'))
-        next = await window.api.audioEngine.applyDspScene(pin, true)
+        next = await coreAudio.applyDspScene(pin, true)
       else {
-        next = await window.api.audioEngine.applyDspScene(previousPin)
+        next = await coreAudio.applyDspScene(previousPin)
         message.value = '已取消，保持原场景与 DSD 直通。'
       }
     }
     adopt(next)
+    await ensureOutputSampleRateSynced().catch(() => undefined)
     await poller.refreshAfterCurrent().catch(() => undefined)
   })
 }
@@ -453,13 +588,13 @@ function trapDialog(event: KeyboardEvent): void {
 }
 async function refreshLibrary(): Promise<void> {
   ;[assets.value, vst3Catalog.value] = await Promise.all([
-    window.api.audioEngine.getDspAssets(),
-    window.api.audioEngine.getVst3Catalog()
+    coreAudio.getDspAssets(),
+    coreAudio.getVst3Catalog()
   ])
 }
 async function refreshSavedAssetReferences(): Promise<void> {
   try {
-    assets.value = await window.api.audioEngine.getDspAssets()
+    assets.value = await coreAudio.getDspAssets()
   } catch (cause) {
     // Persistence has succeeded. A library read failure must not turn a save
     // into a failed navigation decision; the engine still guards asset deletion.
@@ -469,13 +604,13 @@ async function refreshSavedAssetReferences(): Promise<void> {
 async function reload(): Promise<void> {
   if (!(await requestLeave())) return
   await run(async () => {
-    adopt(await window.api.audioEngine.getDspSceneState())
+    adopt(await coreAudio.getDspSceneState())
     await refreshLibrary()
     await poller.refreshAfterCurrent().catch(() => undefined)
   })
 }
 async function syncFromEngine(): Promise<void> {
-  if (!dirty.value) adopt(await window.api.audioEngine.getDspSceneState())
+  if (!dirty.value) adopt(await coreAudio.getDspSceneState())
 }
 function applyCorrection(assetId: string, profile: DspCorrectionProfile): void {
   if (selectedNode.value?.type !== 'equalizer') return
@@ -493,7 +628,7 @@ function applyCorrection(assetId: string, profile: DspCorrectionProfile): void {
 async function bindAsset(asset: DspAsset): Promise<void> {
   if (asset.kind === 'correctionProfile') {
     await run(async () =>
-      applyCorrection(asset.id, await window.api.audioEngine.getDspCorrectionProfile(asset.id))
+      applyCorrection(asset.id, await coreAudio.getDspCorrectionProfile(asset.id))
     )
     return
   }
@@ -508,9 +643,9 @@ async function bindAsset(asset: DspAsset): Promise<void> {
 }
 async function importAsset(kind: DspAssetKind): Promise<void> {
   await run(async () => {
-    const asset = await window.api.audioEngine.importDspAsset(kind)
+    const asset = await coreAudio.importDspAsset(kind)
     if (asset) {
-      assets.value = await window.api.audioEngine.getDspAssets()
+      assets.value = await coreAudio.getDspAssets()
       if (kind === 'impulseResponse' && selectedNode.value?.type === 'convolver') {
         selectedNode.value.params.impulseResponseAssetId = asset.id
         selectedNode.value.params.impulseResponsePath = ''
@@ -524,9 +659,9 @@ async function importAsset(kind: DspAssetKind): Promise<void> {
 }
 async function importCorrection(): Promise<void> {
   await run(async () => {
-    const imported = await window.api.audioEngine.importDspCorrectionProfile()
+    const imported = await coreAudio.importDspCorrectionProfile()
     if (!imported) return
-    assets.value = await window.api.audioEngine.getDspAssets()
+    assets.value = await coreAudio.getDspAssets()
     if (selectedNode.value?.type === 'equalizer')
       applyCorrection(imported.asset.id, imported.profile)
     message.value = `已导入 ${imported.profile.bands.length} 段校正。`
@@ -540,7 +675,7 @@ async function selectCorrectionAsset(assetId: string): Promise<void> {
     return
   }
   await run(async () =>
-    applyCorrection(assetId, await window.api.audioEngine.getDspCorrectionProfile(assetId))
+    applyCorrection(assetId, await coreAudio.getDspCorrectionProfile(assetId))
   )
 }
 async function removeAsset(id: string): Promise<void> {
@@ -552,20 +687,20 @@ async function removeAsset(id: string): Promise<void> {
     return
   if (confirm('永久删除此资料？'))
     await run(async () => {
-      assets.value = await window.api.audioEngine.deleteDspAsset(id)
+      assets.value = await coreAudio.deleteDspAsset(id)
     })
 }
 async function exportProfile(): Promise<void> {
   if (await requestLeave())
     await run(async () => {
-      await window.api.audioEngine.exportDspProfile(selectedScene.value?.name)
+      await coreAudio.exportDspProfile(selectedScene.value?.name)
     })
 }
 async function importProfile(): Promise<void> {
   if (!(await requestLeave()) || !confirm('导入将替换全部场景与固定选择，并立即应用。继续？'))
     return
   await run(async () => {
-    const imported = await window.api.audioEngine.importDspProfile()
+    const imported = await coreAudio.importDspProfile()
     if (!imported) return
     adopt(imported.state)
     await refreshLibrary()
@@ -574,32 +709,32 @@ async function importProfile(): Promise<void> {
 }
 async function scanVst3(): Promise<void> {
   await run(async () => {
-    vst3Catalog.value = await window.api.audioEngine.scanVst3Plugins()
+    vst3Catalog.value = await coreAudio.scanVst3Plugins()
   })
 }
 async function recoverVst3(id: string): Promise<void> {
   await run(async () => {
-    vst3Catalog.value = await window.api.audioEngine.clearVst3Quarantine(id)
+    vst3Catalog.value = await coreAudio.clearVst3Quarantine(id)
     message.value = '隔离重扫完成；插件需手动重新启用。'
   })
 }
 async function enableVst3(enabled: boolean): Promise<void> {
   await run(async () => {
-    vst3Catalog.value = await window.api.audioEngine.setVst3Enabled(enabled)
+    vst3Catalog.value = await coreAudio.setVst3Enabled(enabled)
   })
 }
 async function addPath(): Promise<void> {
   await run(async () => {
-    const path = await window.api.audioEngine.selectVst3SearchPath()
+    const path = await coreAudio.selectVst3SearchPath()
     if (path)
-      vst3Catalog.value = await window.api.audioEngine.setVst3SearchPaths([
+      vst3Catalog.value = await coreAudio.setVst3SearchPaths([
         ...new Set([...(vst3Catalog.value?.searchPaths ?? []), path])
       ])
   })
 }
 async function removePath(path: string): Promise<void> {
   await run(async () => {
-    vst3Catalog.value = await window.api.audioEngine.setVst3SearchPaths(
+    vst3Catalog.value = await coreAudio.setVst3SearchPaths(
       vst3Catalog.value?.searchPaths.filter((item) => item !== path) ?? []
     )
   })
@@ -620,8 +755,9 @@ function keydown(event: KeyboardEvent): void {
 }
 onMounted(async () => {
   try {
-    adopt(await window.api.audioEngine.getDspSceneState())
+    adopt(await coreAudio.getDspSceneState())
     await refreshLibrary()
+    await ensureOutputSampleRateSynced().catch(() => undefined)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -650,47 +786,86 @@ defineExpose({
 </script>
 
 <template>
-  <section class="dsp-rack-content" @keydown="keydown">
-    <div v-if="tab !== 'monitor'" class="draft-toolbar" :inert="outputBusy">
-      <div>
-        <span class="draft-dot" :class="{ dirty }"></span
-        ><strong>{{ dirty ? '未保存更改' : '场景已保存' }}</strong
-        ><span class="muted">正在编辑：{{ selectedScene?.name ?? '—' }}</span>
-      </div>
-      <div class="toolbar">
-        <button
-          class="icon-button"
-          title="撤销 · Ctrl+Z"
-          :disabled="!canUndo || busy"
-          @click="travel('undo')"
+  <section class="dsp-rack-content" :data-tab="tab" @keydown="keydown">
+    <div
+      v-if="tab !== 'monitor'"
+      class="draft-toolbar"
+      :class="{ dirty }"
+      :inert="outputBusy"
+      role="toolbar"
+      aria-label="场景草稿"
+    >
+      <p
+        class="draft-status"
+        :title="dirty ? '草稿不会改变正在播放的声音，保存后生效' : '所有场景与引擎配置保持一致'"
+      >
+        <span class="draft-dot" :class="{ dirty }" aria-hidden="true"></span>
+        <strong>{{ dirty ? '未保存更改' : '已保存' }}</strong>
+      </p>
+      <label class="draft-scene" title="正在编辑的场景">
+        <span class="draft-scene-label">场景</span>
+        <select
+          class="compact-scene-select"
+          aria-label="正在编辑的场景"
+          :value="selectedSceneId"
+          :disabled="busy || outputBusy || loading"
+          @change="selectScene(($event.target as HTMLSelectElement).value)"
         >
-          <i class="pi pi-undo"></i>
-        </button>
-        <button
-          class="icon-button"
-          title="重做 · Ctrl+Shift+Z"
-          :disabled="!canRedo || busy"
-          @click="travel('redo')"
-        >
-          <i class="pi pi-refresh"></i>
-        </button>
-        <button :disabled="!dirty || busy" @click="discard">还原</button>
+          <option v-for="scene in scenes" :key="scene.id" :value="scene.id">
+            {{ scene.name }}{{ scene.id === activeSceneId ? ' · 正在播放' : '' }}
+          </option>
+        </select>
+      </label>
+      <div class="toolbar draft-actions">
+        <span class="draft-history" role="group" aria-label="撤销与重做"
+          ><button
+            class="icon-button"
+            title="撤销 · Ctrl+Z"
+            aria-label="撤销"
+            :disabled="!canUndo || busy"
+            @click="travel('undo')"
+          >
+            <i class="pi pi-undo"></i></button
+          ><button
+            class="icon-button redo"
+            title="重做 · Ctrl+Shift+Z"
+            aria-label="重做"
+            :disabled="!canRedo || busy"
+            @click="travel('redo')"
+          >
+            <i class="pi pi-undo"></i></button
+        ></span>
+        <button class="ghost-button" :disabled="!dirty || busy" @click="discard">还原</button>
         <details class="profile-menu">
-          <summary title="配置包与重新加载"><i class="pi pi-ellipsis-h"></i></summary>
-          <div>
-            <button :disabled="busy" @click="reload">重新加载</button
-            ><button :disabled="busy" @click="importProfile">导入配置包</button
-            ><button :disabled="busy" @click="exportProfile">导出配置包</button>
+          <summary title="配置包与重新加载" aria-label="更多草稿操作">
+            <i class="pi pi-ellipsis-h"></i>
+          </summary>
+          <div class="menu-panel" role="menu">
+            <button role="menuitem" :disabled="busy" @click="reload">
+              <i class="pi pi-refresh"></i>重新加载
+            </button>
+            <button role="menuitem" :disabled="busy" @click="importProfile">
+              <i class="pi pi-download"></i>导入配置包
+            </button>
+            <button role="menuitem" :disabled="busy" @click="exportProfile">
+              <i class="pi pi-upload"></i>导出配置包
+            </button>
           </div>
         </details>
         <button class="primary-button" :disabled="!dirty || busy || loading" @click="saveScenes">
-          <i class="pi pi-save"></i>{{ busy ? '处理中…' : '保存更改' }}
+          <i v-if="busy" class="pi pi-spinner pi-spin"></i>{{ busy ? '处理中…' : '保存更改' }}
         </button>
       </div>
     </div>
-    <p v-if="error" class="rack-message error" role="alert">{{ error }}</p>
-    <p v-else-if="message" class="rack-message" role="status">{{ message }}</p>
-    <p v-if="loading" class="empty-detail">正在读取音频引擎…</p>
+    <p v-if="error" class="rack-message error" role="alert">
+      <i class="pi pi-exclamation-triangle"></i><span>{{ error }}</span>
+    </p>
+    <p v-else-if="message" class="rack-message" role="status">
+      <i class="pi pi-check-circle"></i><span>{{ message }}</span>
+    </p>
+    <div v-if="loading" class="rack-loading" role="status">
+      <i class="pi pi-spinner pi-spin"></i><span>正在读取音频引擎…</span>
+    </div>
     <fieldset
       v-else
       :disabled="busy || outputBusy || leaveDialog"
@@ -705,6 +880,7 @@ defineExpose({
           :scenes="scenes"
           :selected-scene-id="selectedSceneId"
           :active-scene-id="activeSceneId"
+          :pinned-scene-id="saved?.pinnedSceneId ?? null"
           v-model:factory-template="factoryTemplate"
           @select="selectScene"
           @add="addScene"
@@ -712,25 +888,49 @@ defineExpose({
           @remove="removeScene"
           @add-factory="addFactoryScene"
         />
-        <div class="chain-heading">
-          <div>
+        <header class="chain-heading">
+          <div class="chain-title">
             <h2>{{ selectedScene?.name }}</h2>
-            <small class="muted">{{
-              selectedScene?.id === activeSceneId
-                ? '正在播放此场景'
-                : '编辑草稿，不改变正在播放的场景'
-            }}</small>
+            <p class="chain-flags">
+              <span class="scene-flag" :class="{ live: selectedScene?.id === activeSceneId }"
+                ><i class="state-dot" aria-hidden="true"></i
+                >{{ selectedScene?.id === activeSceneId ? '正在播放' : '未在播放' }}</span
+              ><span
+                v-if="saved?.pinnedSceneId && saved.pinnedSceneId === selectedScene?.id"
+                class="scene-flag pinned"
+                >已固定</span
+              ><span class="scene-flag">优先级 {{ selectedScene?.priority ?? 0 }}</span
+              ><span class="scene-flag quiet">{{
+                selectedScene?.id === activeSceneId
+                  ? '保存后会重新应用'
+                  : '编辑草稿，不改变正在播放的场景'
+              }}</span>
+            </p>
+            <ul class="rule-summary" aria-label="自动匹配条件">
+              <li v-for="item in selectedRules" :key="item">{{ item }}</li>
+            </ul>
           </div>
-          <div class="toolbar">
-            <button :disabled="!selectedScene" @click="pinScene(selectedScene!.id)">
+          <div class="toolbar chain-pin">
+            <button
+              :class="{ 'is-pinned': saved?.pinnedSceneId === selectedScene?.id }"
+              :disabled="!selectedScene"
+              title="忽略自动匹配，始终使用这个场景"
+              @click="pinScene(selectedScene!.id)"
+            >
               <i class="pi pi-thumbtack"></i
               >{{
                 saved?.pinnedSceneId === selectedScene?.id ? '已固定使用' : '固定使用此场景'
               }}</button
-            ><button :disabled="!saved?.pinnedSceneId" @click="pinScene(null)">恢复自动匹配</button>
+            ><button
+              :disabled="!saved?.pinnedSceneId"
+              title="按设备、后端与格式自动选择场景"
+              @click="pinScene(null)"
+            >
+              <i class="pi pi-sync"></i>恢复自动匹配
+            </button>
           </div>
-        </div>
-        <div class="narrow-tabs toolbar">
+        </header>
+        <div class="narrow-tabs segmented" role="group" aria-label="视图">
           <button :aria-pressed="narrowView === 'chain'" @click="narrowView = 'chain'">
             信号链</button
           ><button :aria-pressed="narrowView === 'editor'" @click="narrowView = 'editor'">
@@ -749,10 +949,26 @@ defineExpose({
           @output="emit('navigate', 'output')"
         />
         <section class="editor-pane">
-          <div class="editor-tools toolbar">
-            <button :aria-pressed="editor === 'rules'" @click="editor = 'rules'">场景规则</button
-            ><button @click="emit('navigate', 'output')">输出级</button
-            ><button v-if="editor === 'node' && selectedNode" @click="resetNode">重置参数</button>
+          <div class="editor-tools">
+            <div class="segmented" role="group" aria-label="检查器内容">
+              <button
+                :aria-pressed="editor !== 'rules'"
+                :disabled="!selectedNode"
+                @click="editor = 'node'"
+              >
+                处理器参数</button
+              ><button :aria-pressed="editor === 'rules'" @click="editor = 'rules'">
+                场景规则
+              </button>
+            </div>
+            <button
+              v-if="editor !== 'rules' && selectedNode"
+              class="ghost-button"
+              title="恢复此处理器的默认参数"
+              @click="resetNode"
+            >
+              <i class="pi pi-replay"></i>重置参数
+            </button>
           </div>
           <DspSceneRules v-if="editor === 'rules' && selectedScene" :model-value="selectedScene" />
           <DspNodeEditor
@@ -772,17 +988,26 @@ defineExpose({
             @recover-vst3="recoverVst3"
           />
           <p v-if="state?.requiresPcmFallback && !state.dsdPcmFallbackApplied" class="notice">
-            DSD Direct / DoP 保持直通。运行 DSP 需确认转换为 PCM。
+            <i class="pi pi-info-circle"></i>DSD Direct / DoP 保持直通。运行 DSP 需确认转换为 PCM。
           </p>
           <p v-if="state?.directMode || audioProcessing.directMode" class="notice">
-            Direct 模式正在旁路处理。
+            <i class="pi pi-info-circle"></i>Direct 模式正在旁路处理。
           </p>
         </section>
         <details class="audition-section" :open="auditionOpen" @toggle="toggleAudition">
-          <summary>等响度 A / B <span class="muted">本地 PCM · 无处理或单 EQ</span></summary>
-          <div v-if="auditionMounted" v-show="auditionOpen">
-            <button @click="snapshotA = scenes.map((scene) => cloneScene(scene))">
-              {{ snapshotA ? '重新记录 A 快照' : '记录 A 快照' }}</button
+          <summary>
+            <span class="audition-copy"
+              ><strong>等响度 A / B 对比</strong
+              ><small>本地 PCM · 无处理或单 EQ · 自动匹配响度后切换试听</small></span
+            ><i class="pi pi-chevron-down audition-chevron" aria-hidden="true"></i>
+          </summary>
+          <div v-if="auditionMounted" v-show="auditionOpen" class="audition-body">
+            <button
+              class="ghost-button"
+              @click="snapshotA = scenes.map((scene) => cloneScene(scene))"
+            >
+              <i class="pi pi-camera"></i
+              >{{ snapshotA ? '重新记录 A 快照' : '记录 A 快照' }}</button
             ><DspAuditionPanel
               ref="audition"
               :current="state?.effectiveGraph ?? state?.graph"
@@ -799,6 +1024,7 @@ defineExpose({
         :scenes="scenes"
         :saved-scenes="savedScenes"
         :selected-node="selectedNode"
+        :selected-scene-name="selectedScene?.name ?? ''"
         :notice="vst3HelpersNotice"
         :busy="busy"
         @import-asset="importAsset"
@@ -810,22 +1036,9 @@ defineExpose({
         @remove-path="removePath"
         @scan="scanVst3"
         @recover="recoverVst3"
+        @chain="emit('navigate', 'chain')"
       />
       <section v-if="tab === 'output'" class="output-page">
-        <div class="output-scene-strip">
-          <label
-            >正在编辑的场景<select
-              :value="selectedSceneId"
-              @change="selectScene(($event.target as HTMLSelectElement).value)"
-            >
-              <option v-for="scene in scenes" :key="scene.id" :value="scene.id">
-                {{ scene.name }}{{ scene.id === activeSceneId ? ' · 当前活动' : '' }}
-              </option>
-            </select></label
-          ><span class="muted">{{
-            selectedScene?.id === activeSceneId ? '当前活动场景' : '编辑此场景不改变正在播放的场景'
-          }}</span>
-        </div>
         <DspOutputPanel :scene="selectedScene" :status="status" @busy="outputBusy = $event" />
       </section>
       <DspMonitor
@@ -834,14 +1047,20 @@ defineExpose({
         :error="diagnosticsError"
         :visible="visible"
         :host-document="hostDocument"
+        :scene="activeSavedScene"
+        :scene-state="state"
+        :asset-count="assets.length"
+        :master-busy="busy || !!masterBusy"
+        @master="emit('master')"
         @navigate="emit('navigate', $event)"
         @refresh="poller.refreshAfterCurrent().catch(() => undefined)"
       >
         <template #capture
           ><div class="capture-controls">
-            <label class="switch-field"
+            <label class="switch-field" title="开启 FFT 频谱采集"
               ><input
                 type="checkbox"
+                aria-label="开启 FFT 频谱采集"
                 :checked="audioProcessing.fftEnabled"
                 @change="
                   run(async () => {
@@ -851,9 +1070,10 @@ defineExpose({
                     )
                   })
                 "
-              />开启 FFT 频谱采集</label
-            ><label
-              >FFT 分辨率<select
+              /><span>FFT</span></label
+            ><label class="inline-field" title="FFT 分辨率"
+              ><select
+                aria-label="FFT 分辨率"
                 :value="audioProcessing.fftResolution"
                 @change="
                   run(async () => {
@@ -869,7 +1089,7 @@ defineExpose({
                   :key="size"
                   :value="size"
                 >
-                  {{ size }}
+                  {{ size }} 点
                 </option>
               </select></label
             >
@@ -883,15 +1103,20 @@ defineExpose({
         role="dialog"
         aria-modal="true"
         aria-labelledby="dsp-draft-title"
+        aria-describedby="dsp-draft-description"
         class="draft-dialog"
       >
-        <p class="eyebrow">DSP / DRAFT</p>
+        <p class="eyebrow">未保存的草稿</p>
         <h2 id="dsp-draft-title">保存效果链更改？</h2>
-        <p>保存会更新全部场景，并重新应用当前活动场景。</p>
+        <p id="dsp-draft-description">
+          保存会更新全部场景，并重新应用当前活动场景；放弃则恢复到上次保存的状态。
+        </p>
         <p v-if="error" role="alert" class="error">{{ error }}</p>
         <div class="toolbar">
           <button :disabled="busy" @click="answerLeave('cancel')">取消</button
-          ><button :disabled="busy" @click="answerLeave('discard')">放弃更改</button
+          ><span class="toolbar-spacer"></span
+          ><button class="danger-ghost" :disabled="busy" @click="answerLeave('discard')">
+            放弃更改</button
           ><button class="primary-button" :disabled="busy" @click="answerLeave('save')">
             {{ busy ? '正在保存…' : '保存更改' }}
           </button>

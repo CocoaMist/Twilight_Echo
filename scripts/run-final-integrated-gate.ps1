@@ -1208,6 +1208,8 @@ function Get-GatePlan {
     [pscustomobject]@{ id = 'test-playback-routing'; command = 'corepack pnpm@11.7.0 run test:playback-routing'; timeout = 900 },
     [pscustomobject]@{ id = 'test-local-perf'; command = 'corepack pnpm@11.7.0 run test:local-perf'; timeout = 900 },
     [pscustomobject]@{ id = 'test-themes'; command = 'corepack pnpm@11.7.0 run test:themes'; timeout = 900 },
+    [pscustomobject]@{ id = 'test-core'; command = 'corepack pnpm@11.7.0 run test:core'; timeout = 900 },
+    [pscustomobject]@{ id = 'test-appearance-workspace'; command = 'corepack pnpm@11.7.0 run test:appearance-workspace'; timeout = 900 },
     [pscustomobject]@{ id = 'test-playlist-lifecycle'; command = 'corepack pnpm@11.7.0 run test:playlist-lifecycle'; timeout = 900 },
     [pscustomobject]@{ id = 'test-tag-duplicate-management'; command = 'corepack pnpm@11.7.0 run test:tag-duplicate-management'; timeout = 900 },
     [pscustomobject]@{ id = 'test-duplicate-detection'; command = 'corepack pnpm@11.7.0 run test:duplicate-detection'; timeout = 600 },
@@ -1257,6 +1259,7 @@ function Get-FullStagePlan {
   $plan.Add((New-StageDescriptor -Id 'native-ctest-list' -Command 'ctest --test-dir "%TAE_MINGW_BUILD_DIR%" -N' -Timeout 300 -Kind command))
   $plan.Add((New-StageDescriptor -Id 'native-ctest-21' -Command 'ctest --test-dir "%TAE_MINGW_BUILD_DIR%" --output-on-failure' -Timeout 2400 -Kind command))
   $plan.Add((New-StageDescriptor -Id 'native-ctest-evidence-check' -Command 'internal:native-ctest-evidence-check' -Timeout 0 -Kind internal))
+  $plan.Add((New-StageDescriptor -Id 'test-core-electron' -Command 'corepack pnpm@11.7.0 run test:core:electron' -Timeout 1200 -Kind command))
   $plan.Add((New-StageDescriptor -Id 'candidate-source-verify-after-gate' -Command 'internal:candidate-source-verify-after-gate' -Timeout 0 -Kind internal))
   $plan.Add((New-StageDescriptor -Id 'main-source-verify-after-gate' -Command 'internal:main-source-verify-after-gate' -Timeout 0 -Kind internal))
   $plan.Add((New-StageDescriptor -Id 'mandatory-stage-coverage' -Command 'internal:mandatory-stage-coverage' -Timeout 0 -Kind internal))
@@ -1746,6 +1749,7 @@ function Invoke-NativeGate {
       throw "CTest execution did not report $nativeTestCount/$nativeTestCount passing"
     }
   }
+  Invoke-GateStage -Id 'test-core-electron' -Command 'corepack pnpm@11.7.0 run test:core:electron' -TimeoutSeconds 1200
 }
 
 function Finalize-Evidence {

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { LibraryPageCache } from './libraryPageCache.ts'
-import type { LibraryPage, LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { CoreLibraryPage as LibraryPage } from '../../../../shared/coreViews.ts'
+import { projectCoreTrack } from '../../../../core/projections.ts'
 
 const result = (query: LibraryQuery, revision = 1): LibraryPage => ({
   tracks: Array.from({ length: 200 }, (_, i) => ({
-    id: `${query.offset}:${i}`,
-    filePath: 'audio.flac'
+    ...projectCoreTrack({ id: `${query.offset}:${i}`, filePath: 'audio.flac' })
   })),
   offset: query.offset ?? 0,
   total: 300_000,
@@ -107,8 +108,8 @@ test('playlist pages require complete unique occurrence identities, not unique T
   const cache = new LibraryPageCache({
     queryTracks: async () => ({
       tracks: [
-        { id: 'one', filePath: '' },
-        { id: 'one', filePath: '' }
+        projectCoreTrack({ id: 'one', filePath: '' }),
+        projectCoreTrack({ id: 'one', filePath: '' })
       ],
       entryIds: entries,
       total: 2,

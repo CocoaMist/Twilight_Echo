@@ -1,17 +1,11 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
-import type { LibraryDatabaseApi } from '../../../../shared/libraryDatabase.ts'
 import { createLibraryDashboard, type LibraryDashboardState } from './libraryDashboard.ts'
 import { buildDerivedCollections } from './derivedCollections.ts'
-import {
-  createUnifiedRecentTrackResolver,
-  resetUnifiedRecentResolverCacheForTests,
-  type UnifiedRecentStat
-} from '../../utils/unifiedRecentTracks.ts'
-import { loadMusicVersions } from '../musicVersions.ts'
+import type { UnifiedRecentStat } from '../../utils/unifiedRecentTracks.ts'
 import { versionSourceKey } from '../../utils/trackSourceIdentity.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -61,9 +55,13 @@ function fixture(t: TestContext) {
   let active = 0,
     maximum = 0,
     history: UnifiedRecentStat[] = [],
-    preferenceRevision = 0
+    preferenceRevision = 0,
+    preferences: { revision: number; versions: RecordingVersion[] } = {
+      revision: 0,
+      versions: []
+    }
   const counts: Record<string, number> = {}
-  const api = Object.fromEntries(
+  const databaseApi = Object.fromEntries(
     [
       'queryTracks',
       'queryCollections',
@@ -94,14 +92,29 @@ function fixture(t: TestContext) {
         }
       }
     ])
-  ) as unknown as Pick<
-    LibraryDatabaseApi,
-    'queryTracks' | 'queryCollections' | 'lookupPlaylistTracks' | 'getTracksByIds' | 'getMetadata'
-  >
+  ) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+  const api = {
+    ...databaseApi,
+    resolveRecentTracks: async (
+      entries: import('../../../../shared/coreLibrary.ts').CoreRecentLibraryEntry[],
+      revision: number,
+      versionsRevision: number
+    ) => {
+      const result = (await databaseApi.lookupPlaylistTracks(
+        {
+          entries,
+          versions: preferences.versions,
+          resolution: 'recent'
+        },
+        revision
+      )) as { ids: Array<string | null>; revision: number }
+      return { ...result, versionsRevision }
+    }
+  } as unknown as Parameters<typeof createLibraryDashboard>[0]['api']
   const options = {
     getStorageMode: async () => 'sqlite' as 'sqlite' | 'json',
     getHistory: () => history,
-    getPreferences: () => ({ revision: preferenceRevision, versions: [] as RecordingVersion[] }),
+    getPreferences: () => ({ revision: preferenceRevision, versions: preferences.versions }),
     api
   }
   const source = createLibraryDashboard(options)
@@ -121,6 +134,10 @@ function fixture(t: TestContext) {
     },
     changePreferences: () => {
       preferenceRevision++
+    },
+    setPreferences: (value: { revision: number; versions: RecordingVersion[] }) => {
+      preferenceRevision = value.revision
+      preferences = value
     },
     get maximum() {
       return maximum
@@ -215,33 +232,6 @@ test('recent recording lookup matches the legacy resolver for ordered sources, r
       preferredSource: versionSourceKey(remote)
     }
   ]
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: () =>
-        JSON.stringify({
-          version: 1,
-          tracks: {
-            versions: versions.map((version) => ({ ...version, label: version.id })),
-            families: []
-          },
-          albums: { versions: [], families: [] }
-        })
-    }
-  })
-  loadMusicVersions()
-  resetUnifiedRecentResolverCacheForTests()
-  t.after(() => {
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: { getItem: () => null }
-    })
-    loadMusicVersions()
-    resetUnifiedRecentResolverCacheForTests()
-    if (original) Object.defineProperty(globalThis, 'localStorage', original)
-    else Reflect.deleteProperty(globalThis, 'localStorage')
-  })
   const history = [
     stat('sources', tracks[2], ['missing', 'compressed', 'long']),
     stat('far-duration', track('gone', { title: 'Recording', duration: 999 })),
@@ -250,18 +240,18 @@ test('recent recording lookup matches the legacy resolver for ordered sources, r
     stat('empty', undefined),
     stat('exact-long', tracks[2], ['long'])
   ]
-  f.options.getPreferences = () => ({ revision: 0, versions })
+  f.setPreferences({ revision: 0, versions })
   f.setHistory(history)
   f.source.refresh(true)
   await settled(f.source)
   assert.equal(f.source.state.value.error, '')
-  const resolver = createUnifiedRecentTrackResolver(tracks)
-  for (const item of history)
-    assert.equal(
-      f.source.state.value.history.get(item.id)?.id ?? null,
-      resolver(item)?.id ?? null,
-      item.id
-    )
+  assert.deepEqual(
+    history.map((item) => f.source.state.value.history.get(item.id)?.id ?? null),
+    ['preferred', 'preferred', 'cue', null, null, 'preferred']
+  )
+  // Recent activity keeps the established first logical group's preferred local source,
+  // including a known source whose duration belongs to a later same-title group.
+  assert.equal(f.source.state.value.history.get('exact-long')?.id, 'preferred')
   assert.equal(f.source.state.value.history.get('sources')?.id, 'preferred')
   assert.equal(f.source.state.value.history.get('far-duration')?.id, 'preferred')
   assert.equal(f.source.state.value.history.get('remote')?.id, 'cue')
@@ -346,7 +336,7 @@ test('one read lane coalesces a storm, ignores old notifications and stops new c
   assert.equal(g.source.state.value.data, null)
 })
 
-test('discovery and SQL failures are visible and retryable; explicit JSON mode performs no database reads', async (t) => {
+test('Core discovery and SQL failures are retryable; unsupported JSON cannot fall back to a renderer library', async (t) => {
   const f = fixture(t)
   f.options.getStorageMode = async () => {
     throw new Error('discovery offline')
@@ -359,8 +349,14 @@ test('discovery and SQL failures are visible and retryable; explicit JSON mode p
   f.options.getStorageMode = async () => 'json'
   f.source.retry()
   await settled(f.source)
-  assert.equal(f.source.state.value.mode, 'json')
+  assert.equal(f.source.state.value.mode, null)
+  assert.match(f.source.state.value.error, /Core SQLite/)
   assert.deepEqual(f.counts, {})
+  f.options.getStorageMode = async () => 'sqlite'
+  f.source.retry()
+  await settled(f.source)
+  assert.equal(f.source.state.value.mode, 'sqlite')
+  assert.equal(f.source.state.value.data?.total, 405)
   const g = fixture(t),
     read = g.api.queryCollections
   g.api.queryCollections = async () => {

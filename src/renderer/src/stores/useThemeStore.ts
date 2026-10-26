@@ -1,4 +1,6 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
+import { useCoreConnection } from './coreConnection.ts'
+import { corePlugins } from '../extensions/corePlugins.ts'
 import { imageDataUrlToBlob } from '../utils/imageDataUrl.ts'
 import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 import {
@@ -366,7 +368,7 @@ function setupThemeListeners(): void {
     }
     syncThemeSettingsAppearance(next.settings)
   })
-  window.api.plugins.onChanged(() => {
+  corePlugins.onChanged(() => {
     queueMicrotask(() => void applyActiveTheme(true))
   })
   const observer = new MutationObserver((mutations) => {
@@ -546,7 +548,7 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
         applyProfileModeVariables(modes, tone, contract.resolvedTokens, variables)
       }
       if (contribution.stylesheet) {
-        stylesheet = await window.api.extensions.readThemeStylesheet(contribution.stylesheet)
+        stylesheet = await useCoreConnection().query('extensions.stylesheet', { pluginId: contribution.pluginId, themeId: contribution.id })
       }
     } else if (previewTone.value) {
       const resolvedTokens = TWILIGHT_DEFAULT_THEME.variants[tone].tokens

@@ -246,6 +246,7 @@ bool formatCanTypedPassthrough(const AudioFormat& format) {
 struct DspOutputStageRequest {
   int targetSampleRate = 0;
   DspResamplerQuality resamplerQuality = DspResamplerQuality::Native;
+  DspResamplerPhase resamplerPhase = DspResamplerPhase::Linear;
   bool dsdPcmFallbackApplied = false;
 };
 
@@ -269,6 +270,16 @@ DspOutputStageRequest outputStageRequestFromGraphJson(const std::string& json) {
     } else if (quality.rfind("soxr", 0) == 0) {
       // Unknown soxr-family value: honor the quality intent with Ultra swr.
       request.resamplerQuality = DspResamplerQuality::Ultra;
+    }
+    const std::string phase = json_utils::fieldString(outputStage, "resamplerPhase").value_or("linear");
+    if (phase == "minimum") {
+      request.resamplerPhase = DspResamplerPhase::Minimum;
+    } else if (phase == "linear-smooth" || phase == "linearSmooth") {
+      request.resamplerPhase = DspResamplerPhase::LinearSmooth;
+    } else if (phase == "minimum-smooth" || phase == "minimumSmooth") {
+      request.resamplerPhase = DspResamplerPhase::MinimumSmooth;
+    } else {
+      request.resamplerPhase = DspResamplerPhase::Linear;
     }
   }
   request.dsdPcmFallbackApplied = json_utils::fieldBool(json, "dsdPcmFallbackApplied").value_or(false);
@@ -477,9 +488,14 @@ std::optional<bool> graphStateProcessingActive(const std::string& stateJson) {
 
   const std::string outputStage = json_utils::fieldObject(root, "outputStage");
   if (outputStage.empty()) return false;
+  const std::string rateMode = json_utils::fieldString(outputStage, "targetSampleRateMode").value_or("device");
   return json_utils::fieldNumber(outputStage, "targetSampleRate").value_or(0.0) > 0.0 ||
+         (rateMode != "device" && rateMode != "fixed") ||
          json_utils::fieldString(outputStage, "resamplerQuality").value_or("native") != "native" ||
-         json_utils::fieldString(outputStage, "dither").value_or("off") != "off";
+         json_utils::fieldString(outputStage, "resamplerPhase").value_or("linear") != "linear" ||
+         json_utils::fieldString(outputStage, "dither").value_or("off") != "off" ||
+         (json_utils::fieldBool(outputStage, "headroomEnabled").value_or(false) &&
+          std::abs(json_utils::fieldNumber(outputStage, "headroomGainDb").value_or(-3.0)) > kTransparentGainEpsilonDb);
 }
 
 bool dspConfigProcessingRequiresPcm(
@@ -504,6 +520,7 @@ bool dspConfigProcessingRequiresPcm(
       dspConfig.bassManagementEnabled || dspConfig.gateEnabled || dspConfig.compressorEnabled ||
       dspConfig.dynamicEqEnabled || dspConfig.multibandCompressorEnabled || dspConfig.stereoFieldEnabled ||
       dspConfig.loudnessContourEnabled || dspConfig.truePeakLimiterEnabled ||
+      (dspConfig.headroomEnabled && std::abs(dspConfig.headroomGainDb) > kTransparentGainEpsilonDb) ||
       dspConfig.outputTargetSampleRate > 0 || dspConfig.resamplerQuality != DspResamplerQuality::Native ||
       dspConfig.ditherMode != DspDitherMode::Off;
   // An applied graph outranks the legacy flags; see graphStateProcessingActive.
@@ -801,6 +818,7 @@ struct AudioPipeline::DecodeStream {
   AudioStreamInfo stream;
   AudioFormat decodeFormat;
   DspResamplerQuality actualResamplerQuality = DspResamplerQuality::Native;
+  DspResamplerPhase actualResamplerPhase = DspResamplerPhase::Linear;
   // Decode-thread reconnects publish one coherent observation for status readers.
   std::atomic<uint32_t> resamplerObservation{0};
   std::unique_ptr<FFmpegDecoder> decoder;
@@ -911,6 +929,26 @@ struct AudioPipeline::DecodeStream {
       case DspResamplerQuality::Native:
       default:
         decoder->setResamplerQuality(FFmpegDecoder::ResamplerQuality::Native);
+        break;
+    }
+  }
+
+  void setResamplerPhase(DspResamplerPhase phase) {
+    actualResamplerPhase = phase;
+    if (!decoder) return;
+    switch (phase) {
+      case DspResamplerPhase::Minimum:
+        decoder->setResamplerPhase(FFmpegDecoder::ResamplerPhase::Minimum);
+        break;
+      case DspResamplerPhase::LinearSmooth:
+        decoder->setResamplerPhase(FFmpegDecoder::ResamplerPhase::LinearSmooth);
+        break;
+      case DspResamplerPhase::MinimumSmooth:
+        decoder->setResamplerPhase(FFmpegDecoder::ResamplerPhase::MinimumSmooth);
+        break;
+      case DspResamplerPhase::Linear:
+      default:
+        decoder->setResamplerPhase(FFmpegDecoder::ResamplerPhase::Linear);
         break;
     }
   }
@@ -1173,7 +1211,10 @@ struct AudioPipeline::DecodeStream {
     const double sourceSeconds = sourcePositionForLogicalPosition(logicalSeconds);
     if (mode == Mode::Pcm && decoderNeedsReopen) {
       const bool opened = decoder->open(item.source, error);
-      if (opened) setResamplerQuality(actualResamplerQuality);
+      if (opened) {
+        setResamplerQuality(actualResamplerQuality);
+        setResamplerPhase(actualResamplerPhase);
+      }
       if (!opened || !decoder->setOutputFormat(decodeFormat, error)) {
         markReadFailure(error ? *error : "Unable to reopen audio source for seek");
         return false;
@@ -1395,6 +1436,7 @@ struct AudioPipeline::DecodeStream {
       }
       if (restored) {
         setResamplerQuality(actualResamplerQuality);
+        setResamplerPhase(actualResamplerPhase);
         restored = decoder->setOutputFormat(decodeFormat, &attemptError) &&
             pcmFormatsExactMatch(decoder->outputFormat(), decodeFormat) &&
             decoder->seekOutputFrame(nextSourceFrame, &attemptError);
@@ -2559,6 +2601,12 @@ TAE_Result AudioPipeline::playInternal(
     const std::optional<NativeDsdRuntimeFacts>& forcedNativeDsdFallbackFacts,
     std::string* error, bool initiallyPaused) {
   std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  {
+    std::lock_guard lock(mutex_);
+    synchronizeRenderPromotionLocked();
+    if (currentItem_.queueEntryId != item.queueEntryId || !sameQueueSegment(currentItem_, item))
+      clearLoopRange();
+  }
   stop();
   if (item.source.empty()) return TAE_RESULT_INVALID_ARGUMENT;
   const double requestedPlaybackVolume = std::clamp(volume, 0.0, 1.0);
@@ -3031,8 +3079,13 @@ TAE_Result AudioPipeline::playInternal(
       decodeFormat.channelCount = std::max(1, active->stream.sourceFormat.channelCount);
     }
 
+    const bool hasGraphOutputStage = !dspGraphJson.empty();
     active->setResamplerQuality(
-        outputStageRequest.targetSampleRate > 0 ? outputStageRequest.resamplerQuality : requestedDspConfig.resamplerQuality);
+        hasGraphOutputStage || outputStageRequest.targetSampleRate > 0
+            ? outputStageRequest.resamplerQuality
+            : requestedDspConfig.resamplerQuality);
+    active->setResamplerPhase(
+        hasGraphOutputStage ? outputStageRequest.resamplerPhase : requestedDspConfig.resamplerPhase);
     if (active->sourceStampKnown && requestedAutoMixMode_.load(std::memory_order_acquire) != TA_AM_OFF)
       active->precisePcmSeek = true;
     if (!active->configure(decodeFormat, startTimeSeconds, error, canUseTypedPassthrough)) {
@@ -3325,7 +3378,7 @@ TAE_Result AudioPipeline::playInternal(
     dspStatus_ = dspChain_->status();
     recomputeDspActiveLocked(requestedPlaybackVolume);
     spectrum_.prepare(decodeFormat_, visualizationFftResolutionForConfig(dspConfig_.fftResolution));
-    spectrum_.setEnabled(dspConfig_.fftEnabled);
+    spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
     gaplessEnabled_ = gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath;
     dopPathActive_ = dopPath;
     nativeDsdPathActive_ = nativeDsdPath;
@@ -3822,7 +3875,10 @@ void AudioPipeline::setPlaybackRate(double rate) {
 }
 
 void AudioPipeline::setLoopRange(double startSeconds, double endSeconds) {
+  std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
   cancelAutoMix("loop_changed");
+  std::lock_guard lock(mutex_);
+  synchronizeRenderPromotionLocked();
   if (!std::isfinite(startSeconds) || !std::isfinite(endSeconds) || endSeconds <= startSeconds ||
       startSeconds < 0.0) {
     clearLoopRange();
@@ -3841,6 +3897,22 @@ void AudioPipeline::clearLoopRange() {
 
 bool AudioPipeline::enforceLoopRange(std::string* error) {
   if (!loopEnabled_.load(std::memory_order_acquire)) return false;
+  std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  QueueTransitionWrite transition(queueRebindExclusive_, queueTransitionReaders_);
+  if (!transition.acquired) return false;
+  double position = 0.0;
+  {
+    std::lock_guard lock(mutex_);
+    // A callback can promote another occurrence before the clock observes it.
+    // Retire its predecessor's range before considering a seek.
+    synchronizeRenderPromotionLocked();
+    const auto state = renderState_.load(std::memory_order_acquire);
+    if (state != PipelineState::Playing) return false;
+    const int sampleRate = positionSampleRateForStream(stream_, outputFormat_);
+    if (sampleRate <= 0) return false;
+    position = static_cast<double>(renderedFrames_.load(std::memory_order_relaxed)) / sampleRate;
+  }
+  if (!loopEnabled_.load(std::memory_order_acquire)) return false;
   // Re-entrancy guard: seek itself must not re-enter enforcement.
   bool expected = false;
   if (!loopEnforceBusy_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -3857,15 +3929,6 @@ bool AudioPipeline::enforceLoopRange(std::string* error) {
     clearLoopRange();
     return false;
   }
-
-  // Read position without holding mutex across seek() (seek also takes mutex_).
-  const auto state = renderState_.load(std::memory_order_acquire);
-  if (state != PipelineState::Playing && state != PipelineState::Paused) return false;
-  const int positionSampleRate = positionSampleRateForStream(stream_, outputFormat_);
-  if (positionSampleRate <= 0) return false;
-  const double position =
-      static_cast<double>(renderedFrames_.load(std::memory_order_relaxed)) /
-      static_cast<double>(positionSampleRate);
 
   // Small epsilon so we jump just as the playhead reaches end.
   if (position + 0.005 < end) return false;
@@ -3989,7 +4052,7 @@ void AudioPipeline::setDspConfig(const std::string& dspConfigJson) {
     if (outputFormat_.sampleRate > 0 && outputFormat_.channelCount > 0) {
       spectrum_.prepare(outputFormat_, visualizationFftResolutionForConfig(dspConfig_.fftResolution));
     }
-    spectrum_.setEnabled(dspConfig_.fftEnabled);
+    spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
     dspStatus_ = activeDspChain.status();
     preloadDspStatus_ = spareDspChain.status();
     recomputeDspActiveLocked();
@@ -4139,7 +4202,7 @@ bool AudioPipeline::applyDspState(
           outputFormat_,
           visualizationFftResolutionForConfig(dspConfig_.fftResolution));
     }
-    spectrum_.setEnabled(dspConfig_.fftEnabled);
+    spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
 
     // GetDspGraphStatus is the authoritative external DSP ACK channel. Its
     // revision comes directly from this request; the generic playback config
@@ -4676,6 +4739,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
   bool gapless = false;
   uint32_t bufferSizeFrames = 0;
   DspResamplerQuality resamplerQuality = DspResamplerQuality::Native;
+  DspResamplerPhase resamplerPhase = DspResamplerPhase::Linear;
   bool continuityFirst = false;
   bool activeIsDsd = false;
   bool typedPassthrough = false;
@@ -4692,6 +4756,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
     gapless = gaplessEnabled_ || autoMixEnabled;
     bufferSizeFrames = outputInfo_.bufferSizeFrames;
     resamplerQuality = activeStream_ ? activeStream_->actualResamplerQuality : dspConfig_.resamplerQuality;
+    resamplerPhase = activeStream_ ? activeStream_->actualResamplerPhase : dspConfig_.resamplerPhase;
     continuityFirst = outputConfig_.continuityFirst;
     activeIsDsd = stream_.isDsd;
     typedPassthrough = activeStream_ && activeStream_->typedPassthrough;
@@ -4709,6 +4774,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
     return false;
   }
   stream->setResamplerQuality(resamplerQuality);
+  stream->setResamplerPhase(resamplerPhase);
   const auto& sourceFormat = stream->stream.sourceFormat;
   const bool sourceCompatible = typedPassthrough
       ? pcmFormatsSemanticallyMatch(sourceFormat, activeSourceFormat) &&
@@ -4787,6 +4853,7 @@ bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
       if (error) *error = "下一首尚未完成预加载";
       return false;
     }
+    clearLoopRange();
     oldActive = std::move(activeStream_);
     activeStream_ = std::move(preloadStream_);
     preloadStream_.reset();
@@ -5125,8 +5192,11 @@ bool AudioPipeline::processingForcesDsdPcmFallback() const {
 bool AudioPipeline::needsPcmFallback(std::string* reason) const {
   std::lock_guard lock(mutex_);
   const bool processingActive =
-      dspStatus_.replayGainActive || dspStatus_.eqActive || dspStatus_.convolverActive || dspStatus_.crossfeedActive ||
-      dspStatus_.nativeDspActive || dspStatus_.crossfadeActive || dspConfig_.crossfadeSeconds > 0.0001 ||
+      dspStatus_.dspActive || dspStatus_.replayGainActive || dspStatus_.eqActive || dspStatus_.convolverActive ||
+      dspStatus_.crossfeedActive || dspStatus_.nativeDspActive || dspStatus_.crossfadeActive ||
+      dspConfig_.crossfadeSeconds > 0.0001 ||
+      (dspConfig_.headroomEnabled && std::abs(dspConfig_.headroomGainDb) > kTransparentGainEpsilonDb) ||
+      dspConfig_.ditherMode != DspDitherMode::Off ||
       std::abs(loadAtomicDouble(requestedVolumeBits_) - 1.0) > kUnityVolumeEpsilon ||
       std::abs(loadAtomicDouble(requestedPlaybackRateBits_) - 1.0) > kUnityVolumeEpsilon ||
       outputConfig_.routingMode != ChannelRoutingMode::Auto;
@@ -5230,6 +5300,12 @@ size_t AudioPipeline::getSpectrumData(float* buffer, size_t pointCount) const {
   const double phase =
       sampleRate > 0.0 ? static_cast<double>(renderedFrames_.load()) / sampleRate : 0.0;
   return spectrum_.read(buffer, pointCount, phase);
+}
+
+void AudioPipeline::setVisualizationDemand(bool enabled) {
+  std::lock_guard lock(mutex_);
+  visualizationDemand_ = enabled;
+  spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
 }
 
 std::string AudioPipeline::getVisualizationDataJson(
@@ -5635,6 +5711,8 @@ void AudioPipeline::synchronizeRenderPromotionLocked() {
   for (auto& g : retiredAutoMix_)
     if (g->continuation.get() == promoted) mixOwner = g.get();
   if (!mixOwner && (!preloadStream_ || preloadStream_.get() != promoted)) return;
+
+  clearLoopRange();
 
   std::shared_ptr<DecodeStream> previous = std::move(activeStream_);
   if (mixOwner) {

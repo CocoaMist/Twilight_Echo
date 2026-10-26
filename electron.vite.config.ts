@@ -15,6 +15,7 @@ export default defineConfig(({ command }) => {
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/main/index.ts'),
+            musicCore: resolve(__dirname, 'src/main/coreProcess/entry.ts'),
             diagnosticWriter: resolve(__dirname, 'src/main/diagnostics/writerWorker.ts'),
             pluginHost: resolve(__dirname, 'src/main/plugins/host.ts'),
             audioEngineService: resolve(__dirname, 'src/main/audioEngineService.ts'),
@@ -43,13 +44,6 @@ export default defineConfig(({ command }) => {
             manualChunks: {
               'locale-messages': [resolve('src/shared/i18n/messages/index.ts')],
               'media-providers': [resolve('src/renderer/src/providers/index.ts')],
-              'playback-session': [
-                resolve('src/renderer/src/app/playbackSessionWriter.ts'),
-                resolve('src/renderer/src/app/usePlaybackSessionPersistence.ts')
-              ],
-              'listening-stats-storage': [
-                resolve('src/renderer/src/stores/listeningStatsDatabase.ts')
-              ],
               'vendor-vue': ['vue'],
               'vendor-music-metadata': ['music-metadata'],
               'vendor-qrcode': ['qrcode'],

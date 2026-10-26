@@ -2,19 +2,17 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import type { LibraryQuery, LibraryTrackRecord } from '../../../../shared/libraryDatabase.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
-import {
-  buildAggregateRows,
-  collectAggregateSources,
-  resolveAggregateQueue
-} from '../../utils/aggregatePlaylistView.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
+import { createAggregatePlaylistModel } from '../../../../shared/aggregatePlaylistView.ts'
+import { playlistRuntime } from '../coreTestFixtures.ts'
+let { buildAggregateRows, collectAggregateSources, resolveAggregateQueue } =
+  createAggregatePlaylistModel(playlistRuntime().identity)
 import { createLibraryPlaylistView } from './libraryPlaylistView.ts'
-import { getMusicVersions, loadMusicVersions } from '../musicVersions.ts'
 import { versionSourceKey } from '../../../../shared/trackSourceIdentity.ts'
 import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
 import { RecordingCompatibilityGroup } from '../../../../shared/recordingGroup.ts'
 import { createRecordingIdentityRules } from '../../../../shared/recordingIdentity.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import { validateLibraryQuery } from '../../../../main/library/libraryDatabaseValidation.ts'
 
 const track = (id: string, patch: Record<string, unknown> = {}) =>
@@ -29,19 +27,8 @@ const track = (id: string, patch: Record<string, unknown> = {}) =>
     ...patch
   })
 async function fixture(t: TestContext, inputs: Track[], versions: RecordingVersion[] = []) {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: () =>
-        JSON.stringify({
-          version: 1,
-          tracks: { versions: versions.map((v) => ({ ...v, label: v.id })), families: [] },
-          albums: { versions: [], families: [] }
-        })
-    }
-  })
-  loadMusicVersions()
+  ;({ buildAggregateRows, collectAggregateSources, resolveAggregateQueue } =
+    createAggregatePlaylistModel(playlistRuntime(versions).identity))
   const db = new LibraryDatabase(':memory:')
   const local = [
     ...new Map(
@@ -69,9 +56,6 @@ async function fixture(t: TestContext, inputs: Track[], versions: RecordingVersi
   t.after(async () => {
     await owner.dispose()
     db.close()
-    if (previous) Object.defineProperty(globalThis, 'localStorage', previous)
-    else delete (globalThis as Record<string, unknown>).localStorage
-    loadMusicVersions()
   })
   return {
     db,
@@ -196,7 +180,6 @@ test('explicit recording preferences, unavailable preferred sources and CUE iden
   ]
   const inputs = [cue, neighbor, remote]
   const { db, query } = await fixture(t, inputs, versions)
-  assert.equal(getMusicVersions().tracks.versions.length, 1)
   const expected = buildAggregateRows({ tracks: inputs }),
     page = all(db, query)
   assert.deepEqual(

@@ -26,6 +26,11 @@ import {
   type LibraryQueueBuildReply
 } from '../../shared/libraryQueueBuild.ts'
 import { compactPlaylistRecord } from '../../shared/playlistSnapshot.ts'
+import type { CoreQueueImportCommand, CoreQueueImportReply } from '../../shared/coreQueueImport.ts'
+import type { CoreQueueRestoreCommand } from '../../shared/coreQueueRestore.ts'
+import { MAX_QUEUE_OCCURRENCE_ID_LENGTH } from '../../shared/nativeQueue.ts'
+import { shuffleArray } from '../../shared/shuffleArray.ts'
+import type { CoreQueueSourceReplacement } from '../../shared/coreSourceRecovery.ts'
 
 type Row = Record<string, string | number | null>
 type QueueHistory = {
@@ -41,6 +46,7 @@ type StreamBuild = {
   sequence: number
   revision: number
   order: LibraryQueueSnapshot['order']
+  mode?: LibraryQueueSnapshot['playMode']
   touched: number
 }
 type Owner = {
@@ -51,6 +57,11 @@ type Owner = {
 }
 const entryId = (value: unknown): value is string =>
   typeof value === 'string' && !!value && value.length <= 128
+const occurrenceId = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  !!value &&
+  value.length <= MAX_QUEUE_OCCURRENCE_ID_LENGTH &&
+  !value.includes('\0')
 
 export type LibraryQueueBuildPlan =
   | { kind: 'tracks'; ids: string[]; index: number }
@@ -88,8 +99,23 @@ export class LibraryDatabaseQueues {
       id
     )
     if (!row) throw new Error('Library queue does not exist')
+    const undo = this.row(
+      'SELECT kind FROM queue_history WHERE queue_id=? AND revision=? ORDER BY id DESC LIMIT 1',
+      id,
+      Number(row.revision)
+    )
     return {
       id,
+      canUndo: !!undo,
+      undoLabel: undo
+        ? ({
+            insert: '添加歌曲',
+            remove: '移除歌曲',
+            clear: '清空队列',
+            move: '移动歌曲',
+            order: '更改顺序'
+          }[String(undo.kind)] ?? null)
+        : null,
       revision: Number(row.revision),
       total: Number(row.total),
       index: row.position === null ? -1 : Number(row.position),
@@ -158,8 +184,8 @@ export class LibraryDatabaseQueues {
       ).changes
     )
     this.run(
-      `INSERT INTO queue_snapshots(entry_id,payload)
-      SELECT q.entry_id,m.snapshot FROM json_each(?) j
+      `INSERT INTO queue_snapshots(queue_id,entry_id,payload)
+      SELECT q.queue_id,q.entry_id,m.snapshot FROM json_each(?) j
       CROSS JOIN playlist_members m ON m.view_id=? AND m.seq=CAST(j.value AS INTEGER)
       CROSS JOIN queue_entries q ON q.queue_id=? AND q.position=CAST(j.key AS INTEGER)+?
       WHERE m.snapshot IS NOT NULL`,
@@ -188,12 +214,194 @@ export class LibraryDatabaseQueues {
   /** Stream into the existing hidden builder/tables, not a second queue store.
    * Every append is bounded and once-only; invalid/uncertain continuations are
    * abandoned rather than replayed. Both occurrence orders publish together. */
-  stream(input: LibraryQueueBuildCommand): LibraryQueueBuildReply {
+  importLegacyPlaybackQueue(input: CoreQueueImportCommand): CoreQueueImportReply {
+    if (!input || !/^core-session-[0-9]+$/.test(input.id))
+      throw new Error('Invalid Core legacy queue import identity')
+    validateLibraryQueueBuild(input, true)
+    if (input.kind === 'begin') {
+      const previous = this.row('SELECT state FROM queues WHERE id=?', input.id)
+      if (previous?.state === 'ready')
+        return { kind: 'ready', id: input.id, queue: this.get(input.id) }
+      if (previous) {
+        if (this.row('SELECT 1 FROM queue_references WHERE queue_id=?', input.id))
+          throw new Error('An incomplete import is still referenced')
+        // Restart only this uncommitted import, retiring 200 rows per request.
+        // A reply lost during retirement is resolved by inspecting the same ID.
+        this.streams.delete(input.id)
+        this.owner.transaction(() => {
+          this.run("UPDATE queues SET state='abandoned' WHERE id=?", input.id)
+          this.cleanupRows(input.id)
+        })
+        return { kind: 'retiring', id: input.id }
+      }
+    }
+    return this.stream(input, 'legacy')
+  }
+  restoreNamedPlaybackQueue(input: CoreQueueRestoreCommand): LibraryQueueBuildReply {
+    if (!input || !/^core-restore-[\w-]+$/.test(input.id))
+      throw new Error('Invalid Core named queue restore identity')
+    if (
+      input.kind === 'begin' &&
+      !['sequential', 'listLoop', 'repeat', 'shuffle'].includes(input.playMode)
+    )
+      throw new Error('Invalid named queue restore mode')
+    return this.stream(input, 'named')
+  }
+  restoreHeartBaseQueue(base: LibraryPlaybackQueueReference, selectedTrackId: string) {
+    if (
+      !isLibraryPlaybackQueueReference(base) ||
+      typeof selectedTrackId !== 'string' ||
+      !selectedTrackId ||
+      selectedTrackId.length > 32768
+    )
+      throw new Error('Invalid heart base selection')
+    return this.owner.transaction(() => {
+      const source = this.expected(base.id, base.revision)
+      if (!source.total) throw new Error('Heart base queue is empty')
+      const match = this.row(
+        'SELECT entry_id FROM queue_entries WHERE queue_id=? AND track_id=? ORDER BY position LIMIT 1',
+        base.id,
+        selectedTrackId
+      )
+      const selected =
+        match ??
+        this.row(
+          `SELECT q.entry_id FROM queue_entries q WHERE q.queue_id=? AND
+          (EXISTS(SELECT 1 FROM tracks t WHERE t.id=q.track_id) OR EXISTS(
+            SELECT 1 FROM queue_snapshots s WHERE s.queue_id=q.queue_id AND s.entry_id=q.entry_id))
+          ORDER BY q.position LIMIT 1`,
+          base.id
+        ) ??
+        this.row(
+          'SELECT entry_id FROM queue_entries WHERE queue_id=? ORDER BY position LIMIT 1',
+          base.id
+        )!
+      const id = randomUUID()
+      this.run(
+        `INSERT INTO queues(id,revision,ordering,selected_entry,created_at,state,total_count,play_mode)
+        VALUES(?,0,'original',?,?,'ready',?,'sequential')`,
+        id,
+        String(selected.entry_id),
+        Date.now(),
+        source.total
+      )
+      this.run(
+        `INSERT INTO queue_entries(queue_id,position,entry_id,track_id,original_position)
+        SELECT ?,position,entry_id,track_id,position FROM queue_entries WHERE queue_id=?`,
+        id,
+        base.id
+      )
+      this.run(
+        `INSERT INTO queue_snapshots(queue_id,entry_id,payload)
+        SELECT ?,entry_id,payload FROM queue_snapshots WHERE queue_id=?`,
+        id,
+        base.id
+      )
+      return { queue: this.get(id), matched: !!match }
+    })
+  }
+  /** Replace an occurrence's source, not its identity. Positions, selection, duplicates
+   * and original order retain their meaning. Undo must not resurrect its dead
+   * identity from a move/remove/clear snapshot. */
+  replaceSource(command: CoreQueueSourceReplacement): LibraryQueueSnapshot {
+    if (
+      !command ||
+      !isLibraryPlaybackQueueReference(command.queue) ||
+      !occurrenceId(command.occurrenceId) ||
+      typeof command.expectedTrackId !== 'string' ||
+      !command.expectedTrackId ||
+      command.expectedTrackId.length > 32768 ||
+      !Number.isSafeInteger(command.contentRevision) ||
+      command.contentRevision < 0
+    )
+      throw new Error('Invalid playback source replacement')
+    validateLibraryQueueBuild({
+      kind: 'append',
+      id: 'core-source-replacement',
+      sequence: 1,
+      items: [command.replacement]
+    })
+    return this.owner.transaction(() => {
+      const { queue: reference, replacement } = command
+      const queue = this.expected(reference.id, reference.revision)
+      if (
+        this.owner.revision() !== command.contentRevision ||
+        queue.index !== reference.index ||
+        queue.selectedEntryId !== reference.entryId
+      )
+        throw new Error('Playback source selection changed concurrently')
+      const entry = this.row(
+        'SELECT track_id FROM queue_entries WHERE queue_id=? AND entry_id=?',
+        reference.id,
+        command.occurrenceId
+      )
+      if (entry?.track_id !== command.expectedTrackId)
+        throw new Error('Playback source occurrence changed concurrently')
+      if (
+        !replacement.snapshot &&
+        !replacement.localSnapshot &&
+        !this.row('SELECT 1 FROM tracks WHERE id=?', replacement.id)
+      )
+        throw new Error('Cannot replace a source with a missing library track')
+      const record = replacement.localSnapshot ?? replacement.snapshot
+      const snapshot = record ? compactPlaylistRecord(record) : null
+      if (snapshot) {
+        delete snapshot.streamUrl
+        for (const field of ['cover', 'coverSmall', 'coverSource', 'coverSmallSource'])
+          if (
+            typeof snapshot[field] === 'string' &&
+            /^(data:|blob:|twilight-media:)/i.test(snapshot[field])
+          )
+            delete snapshot[field]
+      }
+      const payload = snapshot ? JSON.stringify(snapshot, personalBackupJsonReplacer) : null
+      this.run(
+        'UPDATE queue_entries SET track_id=? WHERE queue_id=? AND entry_id=?',
+        replacement.id,
+        reference.id,
+        command.occurrenceId
+      )
+      this.run(
+        'DELETE FROM queue_snapshots WHERE queue_id=? AND entry_id=?',
+        reference.id,
+        command.occurrenceId
+      )
+      if (payload)
+        this.run(
+          'INSERT INTO queue_snapshots(queue_id,entry_id,payload) VALUES(?,?,?)',
+          reference.id,
+          command.occurrenceId,
+          payload
+        )
+      this.run(
+        `UPDATE queue_history_entries SET track_id=?,snapshot=? WHERE entry_id=?
+         AND history_id IN (SELECT id FROM queue_history WHERE queue_id=?)`,
+        replacement.id,
+        payload,
+        command.occurrenceId,
+        reference.id
+      )
+      this.run(
+        'UPDATE queue_history SET revision=revision+1 WHERE queue_id=? AND revision=?',
+        reference.id,
+        reference.revision
+      )
+      this.run('UPDATE queues SET revision=revision+1 WHERE id=?', reference.id)
+      return this.get(reference.id)
+    })
+  }
+  stream(
+    input: LibraryQueueBuildCommand,
+    occurrenceOwner?: 'legacy' | 'named'
+  ): LibraryQueueBuildReply {
     const value = input as unknown as Record<string, unknown> | null
     const id = value && typeof value.id === 'string' ? value.id : ''
     const build = this.streams.get(id)
     try {
-      validateLibraryQueueBuild(input)
+      const preserveOccurrenceIds = occurrenceOwner !== undefined
+      validateLibraryQueueBuild(input, preserveOccurrenceIds)
+      if (!preserveOccurrenceIds && /^(core-session-|core-restore-)/.test(id))
+        throw new Error('Core import namespace is reserved')
       if (input.kind === 'abort') {
         if (build) this.abandonStream(build)
         return { kind: 'aborted', id }
@@ -209,6 +417,9 @@ export class LibraryDatabaseQueues {
           sequence: 0,
           revision: input.contentRevision,
           order: input.order,
+          ...(occurrenceOwner === 'named'
+            ? { mode: (input as CoreQueueRestoreCommand & { kind: 'begin' }).playMode }
+            : {}),
           touched: Date.now()
         })
         return { kind: 'building', id, sequence: 0, total: 0 }
@@ -254,6 +465,9 @@ export class LibraryDatabaseQueues {
                   delete snapshot[field]
             return {
               id: item.id,
+              ...(preserveOccurrenceIds
+                ? { occurrenceId: (item as typeof item & { occurrenceId: string }).occurrenceId }
+                : {}),
               originalPosition: item.originalPosition ?? build.offset + index,
               ...(snapshot ? { snapshot } : {})
             }
@@ -261,7 +475,7 @@ export class LibraryDatabaseQueues {
           const payload = JSON.stringify(items, personalBackupJsonReplacer)
           this.run(
             `INSERT INTO queue_entries(queue_id,position,entry_id,track_id,original_position)
-             SELECT ?,CAST(j.key AS INTEGER)+?,?||printf(':%016x',CAST(j.key AS INTEGER)+?),
+             SELECT ?,CAST(j.key AS INTEGER)+?,COALESCE(json_extract(j.value,'$.occurrenceId'),?||printf(':%016x',CAST(j.key AS INTEGER)+?)),
              json_extract(j.value,'$.id'),json_extract(j.value,'$.originalPosition') FROM json_each(?) j`,
             id,
             build.offset,
@@ -270,8 +484,8 @@ export class LibraryDatabaseQueues {
             payload
           )
           this.run(
-            `INSERT INTO queue_snapshots(entry_id,payload)
-             SELECT q.entry_id,json_extract(j.value,'$.snapshot') FROM json_each(?) j
+            `INSERT INTO queue_snapshots(queue_id,entry_id,payload)
+             SELECT q.queue_id,q.entry_id,json_extract(j.value,'$.snapshot') FROM json_each(?) j
              CROSS JOIN queue_entries q ON q.queue_id=? AND q.position=CAST(j.key AS INTEGER)+?
              WHERE json_type(j.value,'$.snapshot')='object'`,
             payload,
@@ -303,6 +517,7 @@ export class LibraryDatabaseQueues {
         )
           throw new Error('Original queue order is not a complete permutation')
         if (
+          occurrenceOwner !== 'named' &&
           build.order === 'original' &&
           this.row(
             'SELECT 1 AS n FROM queue_entries WHERE queue_id=? AND position<>original_position LIMIT 1',
@@ -310,8 +525,20 @@ export class LibraryDatabaseQueues {
           )
         )
           throw new Error('Original queue order does not match its displayed order')
-        this.run('UPDATE queues SET ordering=? WHERE id=?', build.order, id)
+        this.run(
+          'UPDATE queues SET ordering=?,play_mode=? WHERE id=?',
+          build.order,
+          build.mode ?? null,
+          id
+        )
         this.publish(id, build.offset, input.selectedIndex)
+        if (occurrenceOwner === 'legacy')
+          this.run(
+            'INSERT INTO queue_references VALUES (?,?,?)',
+            'core:legacy-import',
+            id,
+            Date.now()
+          )
         return this.get(id)
       })
       this.streams.delete(id)
@@ -429,7 +656,8 @@ export class LibraryDatabaseQueues {
       (!options ||
         typeof options !== 'object' ||
         Array.isArray(options) ||
-        Object.keys(options).some((key) => !['search', 'expectedRevision'].includes(key)) ||
+        Object.keys(options).some((key) => !['search', 'expectedRevision', 'occurrenceId'].includes(key)) ||
+        (options.occurrenceId !== undefined && !occurrenceId(options.occurrenceId)) ||
         (options.search !== undefined &&
           (typeof options.search !== 'string' || options.search.length > 32768)))
     )
@@ -441,7 +669,7 @@ export class LibraryDatabaseQueues {
           : this.expected(id, options.expectedRevision)
     const search = options?.search?.trim().toLocaleLowerCase('zh-CN') ?? ''
     const from = `FROM queue_entries q
-      LEFT JOIN tracks t ON t.id=q.track_id LEFT JOIN queue_snapshots s ON s.entry_id=q.entry_id`
+      LEFT JOIN tracks t ON t.id=q.track_id LEFT JOIN queue_snapshots s ON s.queue_id=q.queue_id AND s.entry_id=q.entry_id`
     const matches = `library_metadata_contains(
       CASE WHEN s.entry_id IS NOT NULL THEN json_extract(s.payload,'$.title') ELSE t.title END,
       CASE WHEN s.entry_id IS NOT NULL THEN json_extract(s.payload,'$.artist') ELSE t.artist END,
@@ -449,10 +677,10 @@ export class LibraryDatabaseQueues {
     const rows = this.owner.sql
       .prepare(
         `SELECT q.entry_id,q.position,COALESCE(s.payload,t.payload) AS payload ${from}
-      WHERE q.queue_id=? AND ${search ? matches : 'q.position>=?'} ORDER BY q.position LIMIT ? ${search ? 'OFFSET ?' : ''}`
+      WHERE q.queue_id=? AND ${options?.occurrenceId ? 'q.entry_id=?' : search ? matches : 'q.position>=?'} ORDER BY q.position LIMIT ? ${!options?.occurrenceId && search ? 'OFFSET ?' : ''}`
       )
       .all(
-        ...(search ? [id, search, bounds.limit, bounds.offset] : [id, bounds.offset, bounds.limit])
+        ...(options?.occurrenceId ? [id, options.occurrenceId, 1] : search ? [id, search, bounds.limit, bounds.offset] : [id, bounds.offset, bounds.limit])
       ) as Row[]
     const total = search
       ? Number(
@@ -471,7 +699,7 @@ export class LibraryDatabaseQueues {
         this.row(
           `SELECT q.position FROM queue_entries q
         WHERE q.queue_id=? AND (EXISTS(SELECT 1 FROM tracks WHERE id=q.track_id)
-          OR EXISTS(SELECT 1 FROM queue_snapshots WHERE entry_id=q.entry_id))
+          OR EXISTS(SELECT 1 FROM queue_snapshots WHERE queue_id=q.queue_id AND entry_id=q.entry_id))
         ORDER BY q.position DESC LIMIT 1`,
           id
         )?.position ?? -1
@@ -495,7 +723,7 @@ export class LibraryDatabaseQueues {
     const forward = direction === 1
     const from = `FROM queue_entries q WHERE q.queue_id=?
       AND (EXISTS(SELECT 1 FROM tracks WHERE id=q.track_id)
-        OR EXISTS(SELECT 1 FROM queue_snapshots WHERE entry_id=q.entry_id))`
+        OR EXISTS(SELECT 1 FROM queue_snapshots WHERE queue_id=q.queue_id AND entry_id=q.entry_id))`
     const order = `ORDER BY q.position ${forward ? 'ASC' : 'DESC'} LIMIT 1`
     const row =
       this.row(
@@ -545,7 +773,7 @@ export class LibraryDatabaseQueues {
       const rows = this.owner.sql
         .prepare(
           `SELECT q.entry_id,q.track_id,COALESCE(s.payload,t.payload) AS payload FROM queue_entries q
-        LEFT JOIN tracks t ON t.id=q.track_id LEFT JOIN queue_snapshots s ON s.entry_id=q.entry_id
+        LEFT JOIN tracks t ON t.id=q.track_id LEFT JOIN queue_snapshots s ON s.queue_id=q.queue_id AND s.entry_id=q.entry_id
         WHERE q.queue_id=? ORDER BY q.position`
         )
         .iterate(reference.id)
@@ -582,7 +810,8 @@ export class LibraryDatabaseQueues {
   private expected(id: string, revision: number): LibraryQueueSnapshot {
     if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid queue revision')
     const queue = this.get(id)
-    if (queue.revision !== revision) throw new Error('Library queue changed concurrently')
+    if (queue.revision !== revision)
+      throw Object.assign(new Error('Library queue changed concurrently'), { code: 'STALE_REVISION' })
     return queue
   }
   delete(id: string, revision: number): void {
@@ -641,7 +870,7 @@ export class LibraryDatabaseQueues {
     return retired
   }
   private position(id: string, entry: unknown, column = 'position'): number {
-    if (!entryId(entry)) throw new Error('Invalid queue entry identity')
+    if (!occurrenceId(entry)) throw new Error('Invalid queue entry identity')
     const row = this.row(
       `SELECT ${column} AS position FROM queue_entries WHERE queue_id=? AND entry_id=?`,
       id,
@@ -708,7 +937,11 @@ export class LibraryDatabaseQueues {
       end = forward ? target - 1 : from - 1
     // Park the moving occurrence outside the affected interval, then shift
     // only its neighbours through a collision-free negative staging domain.
-    this.run(`UPDATE queue_entries SET ${column}=-${column}-1 WHERE entry_id=?`, entry)
+    this.run(
+      `UPDATE queue_entries SET ${column}=-${column}-1 WHERE queue_id=? AND entry_id=?`,
+      id,
+      entry
+    )
     this.run(
       `UPDATE queue_entries SET ${column}=-${column}-1 WHERE queue_id=? AND ${column} BETWEEN ? AND ?`,
       id,
@@ -723,8 +956,9 @@ export class LibraryDatabaseQueues {
       -start - 1
     )
     this.run(
-      `UPDATE queue_entries SET ${column}=? WHERE entry_id=?`,
+      `UPDATE queue_entries SET ${column}=? WHERE queue_id=? AND entry_id=?`,
       forward ? target - 1 : target,
+      id,
       entry
     )
   }
@@ -783,7 +1017,7 @@ export class LibraryDatabaseQueues {
       this.run(
         `INSERT INTO queue_history_entries(history_id,position,original_position,entry_id,track_id,snapshot)
          SELECT ?,q.position,q.original_position,q.entry_id,q.track_id,s.payload
-         FROM queue_entries q LEFT JOIN queue_snapshots s ON s.entry_id=q.entry_id
+         FROM queue_entries q LEFT JOIN queue_snapshots s ON s.queue_id=q.queue_id AND s.entry_id=q.entry_id
          WHERE q.queue_id=?${filter}`,
         ...(rows === true ? [historyId, id] : [historyId, id, JSON.stringify(rows)])
       )
@@ -828,15 +1062,16 @@ export class LibraryDatabaseQueues {
        SELECT ?,-?-row_number() OVER (ORDER BY h.position),h.entry_id,h.track_id,
          -?-row_number() OVER (ORDER BY h.position)
        FROM queue_history_entries h WHERE h.history_id=?
-       AND NOT EXISTS(SELECT 1 FROM queue_entries q WHERE q.entry_id=h.entry_id)`,
+       AND NOT EXISTS(SELECT 1 FROM queue_entries q WHERE q.queue_id=? AND q.entry_id=h.entry_id)`,
       id,
       temporary,
       temporary,
-      historyId
+      historyId,
+      id
     )
     this.run(
-      `INSERT INTO queue_snapshots(entry_id,payload)
-       SELECT h.entry_id,h.snapshot FROM queue_history_entries h
+      `INSERT INTO queue_snapshots(queue_id,entry_id,payload)
+       SELECT q.queue_id,h.entry_id,h.snapshot FROM queue_history_entries h
        JOIN queue_entries q ON q.entry_id=h.entry_id
        WHERE h.history_id=? AND q.queue_id=? AND q.position<0 AND h.snapshot IS NOT NULL`,
       historyId,
@@ -933,13 +1168,45 @@ export class LibraryDatabaseQueues {
       return { queue: this.get(id), reachedEnd: false }
     })
   }
-  edit(id: string, revision: number, edit: LibraryQueueEdit): LibraryQueueEditResult {
+  extend(id: string, revision: number, items: LibraryQueueInsertItem[]): LibraryQueueEditResult {
+    if (!Array.isArray(items) || items.length > 200)
+      throw new Error('Invalid or oversized automatic queue extension')
+    validateLibraryQueueEdit({ kind: 'insert', items }, true)
+    return this.edit(id, revision, { kind: 'insert', items }, true)
+  }
+  edit(
+    id: string,
+    revision: number,
+    edit: LibraryQueueEdit,
+    extension = false,
+    coreOwned = false
+  ): LibraryQueueEditResult {
     if (edit?.kind === 'undo') return this.undo(id, revision)
     return this.owner.transaction(() => {
       const previous = this.expected(id, revision)
       if (!edit || typeof edit !== 'object' || Array.isArray(edit))
         throw new Error('Invalid queue edit')
-      validateLibraryQueueEdit(edit)
+      if (!extension) validateLibraryQueueEdit(edit, coreOwned, coreOwned)
+      if (extension && edit.kind === 'insert') {
+        const items = edit.items!
+        const known = new Set(
+          (
+            this.owner.sql
+              .prepare(
+                'SELECT DISTINCT track_id FROM queue_entries WHERE queue_id=? AND track_id IN (SELECT value FROM json_each(?))'
+              )
+              .all(id, JSON.stringify(items.map((item) => item.id))) as Row[]
+          ).map((row) => row.track_id)
+        )
+        edit = {
+          kind: 'insert',
+          items: items.filter((item) => {
+            if (known.has(item.id)) return false
+            known.add(item.id)
+            return true
+          })
+        }
+      }
       this.prepareReorder()
       let changed = false,
         reachedEnd = false,
@@ -966,7 +1233,7 @@ export class LibraryDatabaseQueues {
           const row = this.row(
             `SELECT q.entry_id FROM queue_entries q
             WHERE q.queue_id=? AND q.position ${forward ? '>' : '<'} ?
-            AND (EXISTS(SELECT 1 FROM tracks WHERE id=q.track_id) OR EXISTS(SELECT 1 FROM queue_snapshots WHERE entry_id=q.entry_id))
+            AND (EXISTS(SELECT 1 FROM tracks WHERE id=q.track_id) OR EXISTS(SELECT 1 FROM queue_snapshots WHERE queue_id=q.queue_id AND entry_id=q.entry_id))
             ORDER BY q.position ${forward ? 'ASC' : 'DESC'} LIMIT 1`,
             id,
             previous.index < 0 ? (forward ? -1 : previous.total) : previous.index
@@ -976,7 +1243,7 @@ export class LibraryDatabaseQueues {
             (edit.wrap
               ? this.row(
                   `SELECT q.entry_id FROM queue_entries q WHERE q.queue_id=?
-                  AND (EXISTS(SELECT 1 FROM tracks WHERE id=q.track_id) OR EXISTS(SELECT 1 FROM queue_snapshots WHERE entry_id=q.entry_id))
+                  AND (EXISTS(SELECT 1 FROM tracks WHERE id=q.track_id) OR EXISTS(SELECT 1 FROM queue_snapshots WHERE queue_id=q.queue_id AND entry_id=q.entry_id))
                   ORDER BY q.position ${forward ? 'ASC' : 'DESC'} LIMIT 1`,
                   id
                 )
@@ -987,12 +1254,10 @@ export class LibraryDatabaseQueues {
           break
         }
         case 'insert': {
-          const items: LibraryQueueInsertItem[] = (
+          let items: Array<LibraryQueueInsertItem & { entryId: string; originalOffset: number }> = (
             edit.items ?? edit.trackIds!.map((id) => ({ id }))
-          ).map(
-            (item) =>
-              ({ ...item, entryId: randomUUID() }) as LibraryQueueInsertItem & { entryId: string }
-          )
+          ).map((item, originalOffset) => ({ ...item, entryId: randomUUID(), originalOffset }))
+          if (extension && previous.order === 'shuffle') items = shuffleArray(items)
           const localIds = items.filter((item) => !item.snapshot).map((item) => item.id)
           const found = Number(
             this.row(
@@ -1013,15 +1278,15 @@ export class LibraryDatabaseQueues {
           this.shift(id, 'original_position', original, items.length)
           this.run(
             `INSERT INTO queue_entries(queue_id,position,entry_id,track_id,original_position)
-            SELECT ?,CAST(j.key AS INTEGER)+?,json_extract(j.value,'$.entryId'),json_extract(j.value,'$.id'),CAST(j.key AS INTEGER)+? FROM json_each(?) j`,
+            SELECT ?,CAST(j.key AS INTEGER)+?,json_extract(j.value,'$.entryId'),json_extract(j.value,'$.id'),json_extract(j.value,'$.originalOffset')+? FROM json_each(?) j`,
             id,
             position,
             original,
             JSON.stringify(items)
           )
           this.run(
-            `INSERT INTO queue_snapshots(entry_id,payload)
-            SELECT q.entry_id,json_extract(j.value,'$.snapshot')
+            `INSERT INTO queue_snapshots(queue_id,entry_id,payload)
+            SELECT q.queue_id,q.entry_id,json_extract(j.value,'$.snapshot')
             FROM json_each(?) j
             CROSS JOIN queue_entries q ON q.queue_id=? AND q.position=CAST(j.key AS INTEGER)+?
             WHERE json_type(j.value,'$.snapshot')='object'`,
@@ -1041,7 +1306,7 @@ export class LibraryDatabaseQueues {
           if (
             !Array.isArray(edit.entryIds) ||
             edit.entryIds.length > 1000 ||
-            edit.entryIds.some((value) => !entryId(value))
+            edit.entryIds.some((value) => !occurrenceId(value))
           )
             throw new Error('Invalid queue removal batch')
           const count = Number(
@@ -1156,7 +1421,7 @@ export class LibraryDatabaseQueues {
       if (changed) {
         this.restoreCursor(id, previous)
         this.run('UPDATE queues SET revision=revision+1 WHERE id=?', id)
-        if (historyKind === 'insert')
+        if (historyKind === 'insert' && !extension)
           historyId = this.history(id, previous.revision + 1, historyKind, historyPayload)
       } else if (historyId !== null) {
         this.run('DELETE FROM queue_history WHERE id=?', historyId)

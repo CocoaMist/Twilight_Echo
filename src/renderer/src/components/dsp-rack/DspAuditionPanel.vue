@@ -4,6 +4,7 @@ import type { DspGraphConfig } from '../../../../shared/dspGraph.ts'
 import type { DspAuditionResult } from '../../../../shared/dspAudition.ts'
 import { normalizeAuditionGraph } from '../../../../shared/dspAudition.ts'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import { getTrackSource } from '@renderer/utils/trackSourceIdentity.ts'
 
 const props = defineProps<{
@@ -12,6 +13,13 @@ const props = defineProps<{
   current?: DspGraphConfig
 }>()
 const player = usePlayerStore()
+const core = useCoreConnection()
+let auditionRevision: number | null = null
+async function auditionState() {
+  const state = await core.query('audio.audition', {})
+  auditionRevision = state.revision
+  return state
+}
 const start = ref(0)
 const seconds = ref(30)
 const busy = ref(false)
@@ -19,13 +27,19 @@ const result = shallowRef<DspAuditionResult | null>(null)
 const message = ref('记录 A 快照后，将当前草稿作为 B。首版支持无处理与一个内置 EQ。')
 let generation = 0
 let timer: ReturnType<typeof setInterval> | null = null
+
+function snapshotGraph(graph: DspGraphConfig): DspGraphConfig {
+  // Draft graphs contain nested Vue proxies; cross the JSON data boundary before cloning.
+  return JSON.parse(JSON.stringify(graph)) as DspGraphConfig
+}
+
 const unsupportedReason = computed(() => {
   if (!props.a || !props.b) return '先记录 A 快照，再编辑 B 草稿。'
   const track = player.currentTrack.value
   if (!track || getTrackSource(track) !== 'local') return '请先播放本地 PCM 曲目。'
   const info = player.playbackInfo.value
   if (!info) return '正在等待音源和实际输出格式信息。'
-  if (info?.isDsd || /dsd|dop/i.test(info?.actualOutputFormat ?? ''))
+  if (info?.isDsd || /dsd|dop/i.test(player.outputInfo.value?.actualOutputFormat ?? ''))
     return 'DSD / DoP 不能进行等响度测量。'
   if (info?.sourceSampleRate !== info?.actualSampleRate)
     return '当前正在重采样；请使用原采样率输出。'
@@ -38,9 +52,9 @@ const unsupportedReason = computed(() => {
     return '仅支持保持原声道的单 / 双声道 PCM。'
   if (info?.crossfadeActive || (info?.playbackRate ?? 1) !== 1) return '交叉淡化或变速时无法测量。'
   try {
-    normalizeAuditionGraph(props.a)
-    normalizeAuditionGraph(props.b)
-    if (props.current) normalizeAuditionGraph(props.current)
+    normalizeAuditionGraph(snapshotGraph(props.a))
+    normalizeAuditionGraph(snapshotGraph(props.b))
+    if (props.current) normalizeAuditionGraph(snapshotGraph(props.current))
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
@@ -72,7 +86,7 @@ async function end(reason = '已退出试听，恢复进入前配置。'): Promi
   result.value = null
   busy.value = true
   try {
-    await window.api.audioEngine.audition.end()
+    await core.command('audio.audition.end', { revision: (await auditionState()).revision })
     if (closingGeneration === generation) message.value = reason
     return closingGeneration === generation
   } catch (error) {
@@ -118,20 +132,20 @@ async function measure(): Promise<void> {
       track.cueRange?.endSeconds ?? Number.POSITIVE_INFINITY
     )
     message.value = '正在独立分析 A/B 处理结果并复测补偿；可取消。'
-    const next = await window.api.audioEngine.audition.measure({
-      source: track.filePath,
+    await core.command('audio.audition.measure', {
+      revision: (await auditionState()).revision,
       startSeconds: start.value,
       endSeconds,
-      a: JSON.parse(JSON.stringify(props.a)),
-      b: JSON.parse(JSON.stringify(props.b))
+      a: snapshotGraph(props.a),
+      b: snapshotGraph(props.b)
     })
     if (generation !== requestGeneration) return
-    result.value = next
+    result.value = (await auditionState()).result
     message.value = '已匹配：复测差值 ≤0.1 LU，峰值 ≤−1 dBTP。请选择 A 或 B 开始试听。'
     timer = setInterval(async () => {
       if (busy.value || !result.value) return
       try {
-        const current = await window.api.audioEngine.audition.status()
+        const current = (await auditionState()).result
         if (generation === requestGeneration && !current)
           await end('音源、设备或配置已改变，试听已结束。')
       } catch {
@@ -151,7 +165,12 @@ async function select(side: 'a' | 'b'): Promise<void> {
   busy.value = true
   const currentGeneration = generation
   try {
-    const next = await window.api.audioEngine.audition.select(result.value.id, side)
+    await core.command('audio.audition.select', {
+      revision: auditionRevision ?? (await auditionState()).revision,
+      id: result.value.id,
+      side
+    })
+    const next = (await auditionState()).result
     if (generation === currentGeneration) result.value = next
   } catch (error) {
     if (generation === currentGeneration)
@@ -161,6 +180,10 @@ async function select(side: 'a' | 'b'): Promise<void> {
   }
 }
 onBeforeUnmount(() => {
+  generation++
+  if (timer) clearInterval(timer)
+  // Leaving the workspace must end the audition session, or the engine keeps
+  // the frozen source and A/B processing attached after the panel is gone.
   void end()
 })
 defineExpose({ end })
@@ -203,38 +226,86 @@ defineExpose({ end })
 </template>
 
 <style scoped>
+/* Inherits the workbench --dsp-* palette when docked; falls back to theme tokens elsewhere. */
 .audition-panel {
-  padding: 16px;
-  border: 1px solid var(--te-card-border);
-  border-radius: 12px;
-  background: var(--te-card-bg);
-  color: var(--te-neutral-900);
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px;
+  border: 1px solid var(--dsp-line, var(--te-card-border));
+  border-radius: var(--dsp-radius-sm, 12px);
+  background: var(--dsp-sunken, var(--te-card-bg));
+  color: var(--dsp-text, var(--te-neutral-900));
+}
+h3 {
+  margin: 0;
+  font-size: 1em;
+  font-weight: 600;
 }
 .audition-panel p {
-  margin: 8px 0;
-  color: var(--te-neutral-600);
+  margin: 0;
+  color: var(--dsp-muted, var(--te-neutral-500));
+  font-size: 0.92em;
+  line-height: 1.6;
 }
 .audition-controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--dsp-muted, var(--te-neutral-500));
+  font-size: 0.86em;
 }
 input {
-  width: 80px;
+  width: 96px;
+  min-height: 34px;
+  padding: 0 10px;
+  font: inherit;
+  font-family: var(--dsp-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
 }
 input,
 button {
-  padding: 8px 12px;
-  border: 1px solid var(--te-card-border);
-  border-radius: 6px;
-  background: var(--te-card-bg);
-  color: inherit;
+  border: 1px solid var(--dsp-line, var(--te-card-border));
+  border-radius: 9px;
+  background: var(--dsp-field, var(--te-card-bg));
+  color: var(--dsp-text, inherit);
+}
+button {
+  min-height: 34px;
+  padding: 0 14px;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--te-motion-hover, 160ms) ease,
+    border-color var(--te-motion-hover, 160ms) ease;
+}
+button:hover:not(:disabled) {
+  border-color: var(--dsp-accent-line, var(--te-primary-500));
 }
 button[aria-pressed='true'] {
-  outline: 2px solid var(--te-primary-500);
+  border-color: var(--dsp-accent, var(--te-primary-500));
+  background: var(--dsp-accent-soft, transparent);
+  color: var(--dsp-accent, var(--te-primary-500));
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
+  cursor: default;
+}
+:focus-visible {
+  outline: 2px solid var(--dsp-accent, var(--te-primary-500));
+  outline-offset: 2px;
+}
+details summary {
+  cursor: pointer;
+  color: var(--dsp-muted, var(--te-neutral-500));
+  font-size: 0.86em;
+}
+details p {
+  margin-top: 8px;
 }
 </style>

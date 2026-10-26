@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
-import type { OpraCatalogStatus, OpraProfile } from '../../../../preload/types'
+import type { OpraCatalogStatus, OpraProfile } from '../../../../shared/coreOpra.ts'
 import type { HeadphoneCompensationSettings } from '../../types/settings'
 import {
   formatActiveCompensationTitle,

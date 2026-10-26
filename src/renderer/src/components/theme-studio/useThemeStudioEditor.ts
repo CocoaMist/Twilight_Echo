@@ -201,7 +201,7 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
     if (typographyTokenIds.has(definition.id) || definition.id.startsWith('typography.')) {
       return 'typography'
     }
-    if (definition.group === 'playback') return 'player'
+    if (definition.id === 'surface.player' || definition.group === 'playback') return 'player'
     if (definition.group === 'motion') return 'motion'
     return 'advanced'
   }
@@ -290,7 +290,9 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
       return THEME_TOKEN_DEFINITIONS.filter((definition) => typographyTokenIds.has(definition.id))
     }
     if (domain.value === 'player') {
-      return THEME_TOKEN_DEFINITIONS.filter((definition) => definition.group === 'playback')
+      return THEME_TOKEN_DEFINITIONS.filter(
+        (definition) => definition.id === 'surface.player' || definition.group === 'playback'
+      )
     }
     if (domain.value === 'motion') {
       return THEME_TOKEN_DEFINITIONS.filter((definition) => definition.group === 'motion')
@@ -645,7 +647,10 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
     await duplicateSelected()
   }
 
-  async function importAsset(type: ThemeAssetType): Promise<void> {
+  async function importAsset(
+    type: ThemeAssetType,
+    bindingKey?: keyof ThemeAssetBindings
+  ): Promise<void> {
     if (iconImporting.value) return
     if (!draft.value) return
     try {
@@ -654,6 +659,17 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
       updateDraft((profile) => {
         const assets = profile.assets ?? []
         profile.assets = [...assets.filter((entry) => entry.id !== asset.id), asset]
+        if (bindingKey) {
+          profile.assetBindings = { ...(profile.assetBindings ?? {}), [bindingKey]: asset.id }
+          if (bindingKey === 'playerBackground') {
+            profile.modes.player = { ...(profile.modes.player ?? {}), backdrop: 'image' }
+          } else if (bindingKey.endsWith('Background')) {
+            profile.modes.appearance = {
+              ...(profile.modes.appearance ?? {}),
+              backgroundTreatment: 'image'
+            }
+          }
+        }
       })
     } catch (cause) {
       localError.value = cause instanceof Error ? cause.message : '主题资源导入失败'
@@ -667,7 +683,12 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
       if (assetId) bindings[key] = assetId
       else delete bindings[key]
       profile.assetBindings = Object.keys(bindings).length > 0 ? bindings : undefined
-      if (key.endsWith('Background') && assetId) {
+      if (key === 'playerBackground' && assetId) {
+        profile.modes.player = {
+          ...(profile.modes.player ?? {}),
+          backdrop: 'image'
+        }
+      } else if (key.endsWith('Background') && assetId) {
         profile.modes.appearance = {
           ...(profile.modes.appearance ?? {}),
           backgroundTreatment: 'image'
@@ -1027,14 +1048,50 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
     })
   }
 
-  function updatePlayerMode(key: 'controls' | 'titleAlign' | 'progress', event: Event): void {
+  function updatePlayerMode(
+    key:
+      | 'layout'
+      | 'backdrop'
+      | 'controls'
+      | 'titleAlign'
+      | 'lyricsAlign'
+      | 'lyricHighlight'
+      | 'timeStyle'
+      | 'stageAlign'
+      | 'progress',
+    event: Event
+  ): void {
     const value = (event.target as HTMLSelectElement).value
     updateDraft((profile) => {
       const player = { ...(profile.modes.player ?? {}) }
-      if (key === 'controls' && (value === 'standard' || value === 'pro')) {
+      if (
+        key === 'layout' &&
+        ['standard', 'full-cover', 'lyrics-focus', 'split', 'minimal'].includes(value)
+      ) {
+        player.layout = value as NonNullable<ThemeModes['player']>['layout']
+      } else if (
+        key === 'backdrop' &&
+        ['follow', 'cover-blur', 'fluid', 'solid', 'image'].includes(value)
+      ) {
+        player.backdrop = value as NonNullable<ThemeModes['player']>['backdrop']
+      } else if (key === 'controls' && (value === 'standard' || value === 'pro')) {
         player.controls = value
       } else if (key === 'titleAlign' && (value === 'left' || value === 'center')) {
         player.titleAlign = value
+      } else if (
+        key === 'lyricsAlign' &&
+        ['follow', 'left', 'center', 'right'].includes(value)
+      ) {
+        player.lyricsAlign = value as NonNullable<ThemeModes['player']>['lyricsAlign']
+      } else if (
+        key === 'lyricHighlight' &&
+        ['minimal', 'surface', 'glow'].includes(value)
+      ) {
+        player.lyricHighlight = value as NonNullable<ThemeModes['player']>['lyricHighlight']
+      } else if (key === 'timeStyle' && ['pill', 'minimal', 'glass'].includes(value)) {
+        player.timeStyle = value as NonNullable<ThemeModes['player']>['timeStyle']
+      } else if (key === 'stageAlign' && ['center', 'top', 'bottom'].includes(value)) {
+        player.stageAlign = value as NonNullable<ThemeModes['player']>['stageAlign']
       } else if (key === 'progress' && ['line', 'ring', 'solid', 'spectrum'].includes(value)) {
         player.progress = value as NonNullable<ThemeModes['player']>['progress']
       }
@@ -1048,16 +1105,23 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
     })
   }
 
-  function updateArtworkMode(key: 'transition' | 'shadow', event: Event): void {
+  function updateArtworkMode(key: 'frame' | 'spin' | 'transition' | 'shadow', event: Event): void {
     const value =
-      key === 'shadow'
+      key === 'shadow' || key === 'spin'
         ? (event.target as HTMLInputElement).checked
           ? 'on'
           : 'off'
         : (event.target as HTMLSelectElement).value
     updateDraft((profile) => {
       const artwork = { ...(profile.modes.artwork ?? {}) }
-      if (key === 'transition' && ['fade', 'slide', 'none'].includes(value)) {
+      if (
+        key === 'frame' &&
+        ['borderless', 'subtle-ring', 'glass-frame', 'vinyl', 'polaroid'].includes(value)
+      ) {
+        artwork.frame = value as NonNullable<ThemeModes['artwork']>['frame']
+      } else if (key === 'spin' && (value === 'on' || value === 'off')) {
+        artwork.spin = value
+      } else if (key === 'transition' && ['fade', 'slide', 'none'].includes(value)) {
         artwork.transition = value as NonNullable<ThemeModes['artwork']>['transition']
       } else if (key === 'shadow' && (value === 'on' || value === 'off')) {
         artwork.shadow = value
@@ -1238,9 +1302,12 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
       }
       if (
         profile.assetBindings &&
-        (domain.value === 'personalization' || domain.value === 'typography')
+        (domain.value === 'personalization' ||
+          domain.value === 'typography' ||
+          domain.value === 'player')
       ) {
         if (domain.value === 'personalization') delete profile.assetBindings.appBackground
+        if (domain.value === 'player') delete profile.assetBindings.playerBackground
         if (domain.value === 'typography') {
           delete profile.assetBindings.sansFont
           delete profile.assetBindings.displayFont

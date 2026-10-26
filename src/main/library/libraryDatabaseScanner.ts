@@ -11,6 +11,7 @@ import type {
 } from '../../shared/libraryDatabase.ts'
 import { SUPPORTED_EXTENSIONS } from './libraryFiles.ts'
 import { normalizeLibraryFilePath } from './libraryRepository.ts'
+import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 
 export interface DirectoryScanPage {
   identities: LocalLibraryFileIdentity[]
@@ -24,6 +25,9 @@ export interface DatabaseScannerOptions {
     identity: LocalLibraryFileIdentity,
     audioMetadata?: LibraryTrackRecord
   ): Promise<LibraryScanCommit['files'][number]>
+  parseReleaseDate?(
+    identity: LocalLibraryFileIdentity
+  ): Promise<Omit<LibraryScanCommit['files'][number], 'identity' | 'tracks'>>
   forceParse?: boolean
   waitUntilRunnable(): Promise<void>
   cancelled(): boolean
@@ -160,10 +164,12 @@ export async function runDatabaseScan(
 ): Promise<LibraryDatabaseScanResult> {
   const { database: db, jobId } = options
   let work = await db.claimScanFiles(jobId, 256)
-  let audioMetadata: Record<string, LibraryTrackRecord> =
-    options.forceParse || !work.identities.length
-      ? {}
-      : await db.getScanAudioMetadata(jobId, work.identities)
+  let releaseDatePaths = new Set((work.releaseDateFilePaths ?? []).map(normalizeLibraryFilePath))
+  const readAudioMetadata = async () => {
+    const ordinary = work.identities.filter((identity) => !releaseDatePaths.has(normalizeLibraryFilePath(identity.filePath)))
+    return options.forceParse || !ordinary.length ? {} : await db.getScanAudioMetadata(jobId, ordinary)
+  }
+  let audioMetadata: Record<string, LibraryTrackRecord> = await readAudioMetadata()
   let lastProgressAt = -Infinity
   let lastPhase: 'checking' | 'parsing' | 'committing' | undefined
   const publish: DatabaseScannerOptions['onProgress'] = (progress, phase) => {
@@ -187,10 +193,8 @@ export async function runDatabaseScan(
       if (options.cancelled()) return
       if (!work.identities.length) {
         work = await db.claimScanFiles(jobId, 256)
-        audioMetadata =
-          options.forceParse || !work.identities.length
-            ? {}
-            : await db.getScanAudioMetadata(jobId, work.identities)
+        releaseDatePaths = new Set((work.releaseDateFilePaths ?? []).map(normalizeLibraryFilePath))
+        audioMetadata = await readAudioMetadata()
       }
       if (work.state === 'paused') continue
       if (!work.identities.length) return
@@ -202,13 +206,26 @@ export async function runDatabaseScan(
       options.onActivity?.(identities)
       const files = await Promise.all(
         identities.map(async (identity) => {
+          const releaseDateOnly = releaseDatePaths.has(normalizeLibraryFilePath(identity.filePath))
           try {
+            if (releaseDateOnly) {
+              // Parse-only integrations keep their original callback contract;
+              // even their full payloads are reduced to a date-only result.
+              const parsed = options.parseReleaseDate
+                ? await options.parseReleaseDate(identity)
+                : await options.parse(identity).then((file) => ({ ...file,
+                    releaseDate: normalizeReleaseDate(file.releaseDateOnly ? file.releaseDate : file.tracks[0]?.releaseDate) }))
+              return { identity, tracks: [], metadataRead: parsed.metadataRead, error: parsed.error,
+                dependencies: parsed.dependencies, releaseDateOnly: true as const,
+                releaseDate: parsed.releaseDate }
+            }
             return await options.parse(
               identity,
               audioMetadata[normalizeLibraryFilePath(identity.filePath)]
             )
           } catch (error) {
-            return { identity, tracks: [], metadataRead: false, error: String(error) }
+            return { identity, tracks: [], metadataRead: false, error: String(error),
+              ...(releaseDateOnly ? { releaseDateOnly: true as const } : {}) }
           }
         })
       )

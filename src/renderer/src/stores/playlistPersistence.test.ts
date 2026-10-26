@@ -87,18 +87,38 @@ test('exit flush commits the final playlist mutation before its debounce timer f
 })
 
 test('application close coordinator awaits the playlist exit flush', () => {
+  // After the Core migration the awaited playlist flush is owned by Core: the
+  // close coordinator in main awaits the renderer save callback (navigation
+  // drafts) and then the Core application, whose lifecycle flush awaits the
+  // playlist persistence owner before shutdown can proceed.
   const appSource = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
-
   assert.match(
     appSource,
-    /onSavePlaybackSession\(async \([^)]*\) => \{[\s\S]*await flushPlaylistsForExit\(\)[\s\S]*savePlaybackSessionForQuit\(\)/
-  )
-  assert.match(
-    appSource,
-    /async function flushPlaylistsForExit\(\): Promise<void> \{[\s\S]*await flushPlaylists\(\)/
+    /removePlaybackSessionSaveListener = window\.api\.app\.onSavePlaybackSession\(async \(\) => \{\s*navigationPersistence\.flush\(\)\s*\}\)/
   )
   assert.match(appSource, /quitFlushHandler = flushPendingPersistenceForExit/)
   assert.match(appSource, /pageHideFlushHandler = flushPendingPersistenceForExit/)
+
+  const windowSource = readFileSync(
+    new URL('../../../main/app/window.ts', import.meta.url),
+    'utf8'
+  )
+  assert.match(windowSource, /requestPersistence: requestApplicationPersistence/)
+  assert.match(
+    windowSource,
+    /await requestRendererPlaybackSessionSave\(options\)\s*await getCoreApplication\(\)\?\.flush\(\)/
+  )
+  const coreAppSource = readFileSync(
+    new URL('../../../main/app/coreApplication.ts', import.meta.url),
+    'utf8'
+  )
+  assert.match(coreAppSource, /await this\.request\('lifecycle\.flush', \{\}\)/)
+  const coreSource = readFileSync(new URL('../../../core/application.ts', import.meta.url), 'utf8')
+  assert.match(
+    coreSource,
+    /await this\.dependencies\.playlists\?\.flush\(\)/,
+    'the Core lifecycle flush awaits the playlist persistence owner'
+  )
 })
 
 test('playlist persistence serializes snapshots in enqueue order', async () => {

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
+import { THEME_ICON_SLOTS } from '../../shared/theme.ts'
 
 const require = createRequire(import.meta.url)
 const { build } = createRequire(require.resolve('vite/package.json'))('esbuild')
@@ -53,7 +54,7 @@ ${probe}`,
     const report = JSON.parse(result.stdout.match(/ICON_ARCHIVE_RESULT (.*)/)![1])
     assert.equal(report.networkRequests, 0)
     assert.equal(report.originalBytesPreserved, true)
-    assert.equal(report.bindingCount, 61)
+    assert.equal(report.bindingCount, THEME_ICON_SLOTS.length)
     assert.equal(report.archives, 2)
     assert.equal(report.storageReopened, true)
     assert.equal(report.copiedAssetsPortable, true)
@@ -75,7 +76,7 @@ ${probe}`,
 })
 
 const probe = String.raw`
-const directory = process.argv[2];
+const directory = process.argv.at(-1);
 app.setPath('userData', join(directory, 'user-data'));
 app.whenReady().then(async () => {
   let networkRequests = 0;

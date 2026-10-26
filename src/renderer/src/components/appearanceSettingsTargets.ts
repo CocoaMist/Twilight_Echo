@@ -7,6 +7,7 @@ export type AppearanceSettingsPanel =
   | 'appearance-surfaces'
   | 'global-font'
   | 'player-bar'
+  | 'player-page'
   | 'outer-panel'
   | 'controls'
   | 'navigation'

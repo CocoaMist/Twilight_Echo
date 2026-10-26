@@ -7,7 +7,9 @@ import { computed, nextTick, ref, reactive, watch } from 'vue'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import { createLibraryStorageState } from '../../stores/library/libraryStorageState.ts'
 import { createLibraryAggregatePlaylist } from '../../stores/library/libraryAggregatePlaylist.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { createCoreLibraryApi } from '../../stores/library/coreLibraryApi.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
+import { coreLibraryPage } from '../../stores/coreTestFixtures.ts'
 import { toSourceVariant } from '../../utils/logicalTrackModel.ts'
 import {
   buildAggregateRows,
@@ -55,6 +57,8 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
     trackSnapshots: { 'ncm:7': remote }
   }
   const lists = ref<Playlist[]>([playlist]),
+    playlistsRevision = ref(1),
+    libraryRevision = ref(db.getMetadata().revision),
     props = reactive({ hasPlayer: false, active: true, initialPlaylistId: 'mix' })
   let legacyReads = 0,
     queryCalls = 0
@@ -76,11 +80,127 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
     .join('\n')
   const patch = (id: string, value: Partial<Playlist>) => {
     lists.value = lists.value.map((item) => (item.id === id ? { ...item, ...value } : item))
+    playlistsRevision.value++
+    core.state.value = { ...core.state.value, playlistsRevision: playlistsRevision.value }
   }
+  const viewIds = new Map<string, { id: string; playlist: Playlist }>()
+  let nextView = 0
+  const ensureView = async (playlist: Playlist, preserveSources: boolean) => {
+    const key = `${playlist.id}:${preserveSources}`
+    const existing = viewIds.get(key)
+    if (existing) return existing.id
+    const id = `core-view-${++nextView}`
+    await db.syncPlaylistView({ kind: 'begin', id, versions: [], preserveSources })
+    const entries = playlist.trackIds.map((trackId) => ({
+      id: trackId,
+      snapshot: playlist.trackSnapshots?.[trackId]
+        ? { ...playlist.trackSnapshots[trackId] }
+        : undefined
+    }))
+    for (let offset = 0; offset < entries.length; offset += 200)
+      await db.syncPlaylistView({
+        kind: 'append',
+        id,
+        sequence: offset / 200 + 1,
+        entries: entries.slice(offset, offset + 200)
+      })
+    await db.syncPlaylistView({
+      kind: 'commit',
+      id,
+      sequence: Math.ceil(entries.length / 200) + 1
+    })
+    viewIds.set(key, { id, playlist })
+    return id
+  }
+  let catalogViewId: string | null = null
+  const ensureCatalog = async () => {
+    if (catalogViewId) return catalogViewId
+    const id = `core-catalog-${++nextView}`
+    await db.syncPlaylistView({
+      kind: 'begin',
+      id,
+      versions: [],
+      preserveSources: true,
+      catalog: true
+    })
+    for (let offset = 0; offset < lists.value.length; offset += 200)
+      await db.syncPlaylistView({
+        kind: 'groups',
+        id,
+        sequence: offset / 200 + 1,
+        groups: lists.value.slice(offset, offset + 200).map(({ id, name, cover, isDefault }) => ({
+          id,
+          name,
+          cover,
+          isDefault
+        }))
+      })
+    const entries = lists.value.flatMap((playlist) =>
+      playlist.trackIds.map((trackId) => ({
+        id: trackId,
+        collectionId: playlist.id,
+        snapshot: playlist.trackSnapshots?.[trackId]
+          ? { ...playlist.trackSnapshots[trackId] }
+          : undefined
+      }))
+    )
+    let sequence = Math.ceil(lists.value.length / 200) + 1
+    for (let offset = 0; offset < entries.length; offset += 200)
+      await db.syncPlaylistView({
+        kind: 'append',
+        id,
+        sequence: sequence++,
+        entries: entries.slice(offset, offset + 200)
+      })
+    await db.syncPlaylistView({ kind: 'commit', id, sequence })
+    catalogViewId = id
+    return id
+  }
+  const core = {
+    state: ref({ playlistsRevision: playlistsRevision.value, versionsRevision: 1 }),
+    query: async (name: string, payload: any) => {
+      queryCalls++
+      if (name === 'library.metadata') return db.getMetadata()
+      if (name === 'playlists.collection')
+        return db.queryCollections('playlists', {
+          ...payload.query,
+          playlistView: await ensureCatalog(),
+          contentRevision: db.getMetadata().revision
+        })
+      if (name !== 'playlists.view') throw new Error(`unsupported Core query ${name}`)
+      const playlist = lists.value.find((item) => item.id === payload.id)
+      if (!playlist) throw new Error('playlist missing')
+      const id = await ensureView(playlist, payload.preserveSources === true)
+      const result = db.queryTracks({
+        ...payload.query,
+        playlistView: id,
+        contentRevision: payload.query?.contentRevision ?? db.getMetadata().revision,
+        aggregate:
+          playlist.kind === 'aggregate'
+            ? {
+                hiddenSources: payload.includeHiddenSources ? [] : playlist.hiddenSources,
+                variantPreferences: playlist.variantPreferences,
+                ...(payload.variantRow !== undefined ? { variantRow: payload.variantRow } : {}),
+                ...(payload.sourceCounts ? { sourceCounts: true } : {})
+              }
+            : undefined
+      })
+      return {
+        viewId: id,
+        revision: payload.revision,
+        versionsRevision: payload.versionsRevision,
+        page: {
+          ...coreLibraryPage(result),
+          definitionIds: result.tracks.map((track) => track.id)
+        }
+      }
+    }
+  }
+  const coreLibrary = createCoreLibraryApi(core as never)
   const entry = runInNewContext(
     ts.transpileModule(
       body +
-        '\n({storage, database, databasePage, databaseSources, databaseVariants, databaseCards, databaseEnabled, databasePending, databaseError, activeTracks, activePlaylist, gridPlaylists, displayTracks, sourceFilters, detailStatsText, rowFor, rowVariants, playRow, playAll, removeRow, chooseVariant, toggleVariantMenu, toggleSourceVisibility, actionError, openPlaylist, backToGrid, searchQuery, rowNumber, visibleRange, visibleTracks, tableTrackCount, totalHeight, retryDatabase})',
+        '\n({ database, databasePage, databaseSources, databaseVariants, databaseCards, databaseEnabled, databasePending, databaseError, activePlaylist, gridPlaylists, displayTracks, sourceFilters, detailStatsText, rowFor, rowVariants, playRow, playAll, removeRow, chooseVariant, toggleVariantMenu, toggleSourceVisibility, actionError, openPlaylist, backToGrid, searchQuery, rowNumber, visibleRange, visibleTracks, tableTrackCount, totalHeight, retryDatabase})',
       { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }
     ).outputText,
     {
@@ -100,6 +220,8 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
       withDefaults: (value: unknown) => value,
       useMusicStore: () => ({
         aggregatePlaylists: lists,
+        playlistsRevision,
+        libraryRevision,
         deletePlaylist: () => {},
         setPlaylistPinned: () => {},
         setPlaylistHiddenSources: (id: string, hiddenSources: string[]) =>
@@ -128,7 +250,17 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
           query: Parameters<typeof db.createLibraryQueue>[0],
           selected?: string
         ) => {
-          queues.push(db.createLibraryQueue(query, selected))
+          const result = db.queryTracks(query)
+          const entry = query.playlistEntryId ? Number(query.playlistEntryId) : 0
+          const selectedIndex = selected?.startsWith('local') ? Number(selected.slice(5)) : 0
+          queues.push({
+            total: result.total,
+            index: Number.isFinite(selectedIndex)
+              ? selectedIndex
+              : Number.isFinite(entry) && entry > 0
+                ? entry - 1
+                : 0
+          } as ReturnType<typeof db.createLibraryQueue>)
         }
       }),
       useSettingsStore: () => ({ settings: ref({ trackActivationMode: 'singleClick' }) }),
@@ -138,6 +270,7 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
       musicVersionRevision: ref(0),
       createLibraryStorageState,
       createLibraryAggregatePlaylist,
+      useCoreLibraryApi: () => coreLibrary,
       toSourceVariant,
       buildAggregateRows,
       collectAggregateSources,
@@ -221,7 +354,10 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
     queues,
     arrayCalls,
     removed,
-    change: () => change?.({ kind: 'database', revision: db.getMetadata().revision }),
+    change: () => {
+      libraryRevision.value = db.getMetadata().revision
+      change?.({ kind: 'database', revision: db.getMetadata().revision })
+    },
     get legacyReads() {
       return legacyReads
     },
@@ -246,6 +382,7 @@ test('production aggregate events play a complete query from deep pages, preserv
   entry.chooseVariant(track, 'ncm', event)
   await until(() => entry.displayTracks.value[0]?.id === 'ncm:7')
   assert.equal(entry.rowFor(entry.displayTracks.value[0]).variantPinned, true)
+  await until(() => !entry.databasePending.value)
   entry.playRow(entry.displayTracks.value[0])
   assert.equal(f.queues.at(-1)!.total, 405)
   await entry.removeRow(entry.displayTracks.value[0], event)
@@ -273,7 +410,6 @@ test('production aggregate events play a complete query from deep pages, preserv
   await until(() => !!entry.databaseCards.value.page)
   assert.equal(entry.gridPlaylists.value[0].trackCount, 406)
 })
-
 test('a background aggregate instance releases reads and cannot play via the array path; scans refresh only active instances', async (t) => {
   const f = fixture(t),
     { entry } = f
@@ -301,20 +437,4 @@ test('a background aggregate instance releases reads and cannot play via the arr
       (track: Track) => track.id === 'local0' && track.title === 'Changed'
     )
   )
-})
-
-test('explicit JSON discovery preserves the legacy aggregate contract, and failed discovery never becomes an empty JSON library', async (t) => {
-  const json = fixture(t, 'json')
-  await until(() => json.entry.storage.mode.value === 'json')
-  assert.equal(json.entry.displayTracks.value.length, 405)
-  json.entry.playAll()
-  assert.equal(json.arrayCalls[0].length, 405)
-  assert.equal(json.queryCalls, 0)
-  const failed = fixture(t, 'unavailable')
-  await until(() => !!failed.entry.databaseError.value)
-  failed.entry.playAll()
-  failed.entry.playRow(failed.records[0])
-  assert.equal(failed.legacyReads, 0)
-  assert.equal(failed.arrayCalls.length, 0)
-  assert.equal(failed.queryCalls, 0)
 })

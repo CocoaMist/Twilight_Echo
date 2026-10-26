@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { computed, effectScope } from 'vue'
 import type { Track } from '../../types/music'
+import { disposeCoreConnection, useCoreConnection } from '../../stores/coreConnection.ts'
 
 const { useSongListContextMenu } = (await import(
   new URL('./useSongListContextMenu.ts', import.meta.url).href
@@ -204,4 +205,35 @@ test('context menu exposes clear metadata match action only for matched local tr
     metadataMatch: matchedLocalTrack.metadataMatch
   }
   assert.equal(menu.canClearMetadataMatchSelectedTrack.value, false)
+})
+
+test('folder reveal submits the local identity to Core without needing a renderer media path', async () => {
+  const menu = createMenu()
+  const requests: Array<{ name: string; payload: unknown }> = []
+  const windowFixture = globalThis.window
+  Object.assign(windowFixture.api, {
+    core: {
+      onMessage: () => () => {},
+      onStatus: () => () => {},
+      connect: async () => ({ ok: true, value: { connectionId: 'menu', snapshot: {
+        protocolVersion: 1, epoch: 'menu-epoch', sequence: 0, phase: 'ready'
+      } } }),
+      disconnect: async () => ({ ok: true, value: undefined }),
+      cancel: async () => ({ ok: true, value: undefined }),
+      request: async (_id: string, request: { name: string; payload: unknown }) => {
+        requests.push(request)
+        return { ok: true, value: undefined }
+      }
+    }
+  })
+  await useCoreConnection().attach()
+  try {
+    const { filePath: _path, ...display } = localTrack
+    menu.selectedTrack.value = display
+    await menu.handleOpenFolder()
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].name, 'library.reveal')
+    assert.deepEqual(requests[0].payload, { id: 'local:hash' })
+    assert.equal(menu.selectedTrack.value, null)
+  } finally { disposeCoreConnection() }
 })

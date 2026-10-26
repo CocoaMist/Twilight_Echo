@@ -115,14 +115,18 @@ ParametricEqProcessor::Biquad makeBiquad(const DspEqBand& sourceBand, EqMode mod
 }  // namespace
 
 float ParametricEqProcessor::BiquadState::process(float input, const Biquad& coeffs) {
-  const double out = coeffs.b0 * static_cast<double>(input) + z1;
-  z1 = coeffs.b1 * static_cast<double>(input) - coeffs.a1 * out + z2;
-  z2 = coeffs.b2 * static_cast<double>(input) - coeffs.a2 * out;
+  return static_cast<float>(processDouble(static_cast<double>(input), coeffs));
+}
+
+double ParametricEqProcessor::BiquadState::processDouble(double input, const Biquad& coeffs) {
+  const double out = coeffs.b0 * input + z1;
+  z1 = coeffs.b1 * input - coeffs.a1 * out + z2;
+  z2 = coeffs.b2 * input - coeffs.a2 * out;
   if (!std::isfinite(out)) {
     reset();
-    return 0.0f;
+    return 0.0;
   }
-  return static_cast<float>(std::clamp(out, -4.0, 4.0));
+  return std::clamp(out, -4.0, 4.0);
 }
 
 void ParametricEqProcessor::BiquadState::reset() {
@@ -155,10 +159,35 @@ void ParametricEqProcessor::process(float* samples, size_t frameCount) {
   for (size_t frame = 0; frame < frameCount; ++frame) {
     for (int channel = 0; channel < channels; ++channel) {
       const size_t index = frame * static_cast<size_t>(channels) + static_cast<size_t>(channel);
-      float value = static_cast<float>(std::clamp(static_cast<double>(samples[index]) * preampLinear_, -4.0, 4.0));
+      double value = std::clamp(static_cast<double>(samples[index]) * preampLinear_, -4.0, 4.0);
       for (auto& filter : filters_) {
         if ((filter.channelMask & (uint32_t{1} << std::min(channel, 31))) == 0) continue;
-        value = filter.channelStates[static_cast<size_t>(channel)].process(value, filter.coeffs);
+        value = filter.channelStates[static_cast<size_t>(channel)].processDouble(value, filter.coeffs);
+      }
+      samples[index] = static_cast<float>(value);
+    }
+  }
+}
+
+void ParametricEqProcessor::processDouble(double* samples, size_t frameCount) {
+  if (!active_ || !samples || frameCount == 0) return;
+
+  const int channels = std::max(1, format_.channelCount);
+  if (filters_.empty()) {
+    const size_t total = frameCount * static_cast<size_t>(channels);
+    for (size_t i = 0; i < total; ++i) {
+      samples[i] = std::clamp(samples[i] * preampLinear_, -4.0, 4.0);
+    }
+    return;
+  }
+
+  for (size_t frame = 0; frame < frameCount; ++frame) {
+    for (int channel = 0; channel < channels; ++channel) {
+      const size_t index = frame * static_cast<size_t>(channels) + static_cast<size_t>(channel);
+      double value = std::clamp(samples[index] * preampLinear_, -4.0, 4.0);
+      for (auto& filter : filters_) {
+        if ((filter.channelMask & (uint32_t{1} << std::min(channel, 31))) == 0) continue;
+        value = filter.channelStates[static_cast<size_t>(channel)].processDouble(value, filter.coeffs);
       }
       samples[index] = value;
     }

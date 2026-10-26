@@ -927,6 +927,19 @@ napi_value GetSpectrumData(napi_env env, napi_callback_info info) {
   return array;
 }
 
+napi_value SetVisualizationDemand(napi_env env, napi_callback_info info) {
+  ensureEngine();
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  bool enabled = false;
+  if (argc < 1 || napi_get_value_bool(env, argv[0], &enabled) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "Visualization demand must be a boolean");
+    return nullptr;
+  }
+  return throwOnError(env, TAE_SetVisualizationDemand(g_engine, enabled ? 1 : 0));
+}
+
 napi_value GetVisualizationData(napi_env env, napi_callback_info info) {
   ensureEngine();
   size_t argc = 1;
@@ -1078,6 +1091,7 @@ napi_value Init(napi_env env, napi_value exports) {
   define(env, exports, "GetLastError", GetLastError);
   define(env, exports, "GetSpectrumData", GetSpectrumData);
   define(env, exports, "GetVisualizationData", GetVisualizationData);
+  define(env, exports, "SetVisualizationDemand", SetVisualizationDemand);
   define(env, exports, "AnalyzeBpm", AnalyzeBpm);
   define(env, exports, "AnalyzeAutoMix", AnalyzeAutoMix);
   define(env, exports, "SetAutoMixMode", SetAutoMixMode);

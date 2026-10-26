@@ -88,7 +88,7 @@ export const BUILTIN_LYRICS_PRESETS: readonly LyricsPreset[] = [
     appearance.inactiveOpacity = 45
     appearance.styles.active.fontSize = 26
     appearance.styles.normal.fontSize = 20
-    appearance.anchorPosition = 0.45
+    appearance.anchorPosition = 0.5
   })
 ]
 

@@ -5,6 +5,7 @@ import { createFtpAdapter } from './ftpAdapter.ts'
 import type { NetworkSourceProfile } from '../../../shared/networkSources.ts'
 
 const FLAC_BYTES = Buffer.from('FTP-DATA-0123456789')
+const LARGE_BYTES = Buffer.alloc(2 * 1024 * 1024, 7)
 const USERNAME = 'alice'
 const PASSWORD = 's3cret'
 
@@ -156,10 +157,14 @@ async function startFtpServer(): Promise<TestFtpServer> {
             void withData((socket) => socket.write(LISTING))
             break
           case 'RETR':
-            if (argument.endsWith('a.flac')) {
+            if (argument.endsWith('a.flac') || argument.endsWith('large.flac')) {
               const offset = restartAt
               restartAt = 0
-              void withData((socket) => socket.write(FLAC_BYTES.subarray(offset).toString()))
+              void withData((socket) =>
+                socket.write(
+                  (argument.endsWith('large.flac') ? LARGE_BYTES : FLAC_BYTES).subarray(offset)
+                )
+              )
             } else {
               reply('550 no such file')
             }
@@ -293,3 +298,20 @@ test('ftp readStream honors a restart offset', async () => {
   assert.deepEqual(Buffer.concat(chunks), FLAC_BYTES.subarray(4))
   await session.close()
 })
+
+test(
+  'FTP files larger than PassThrough capacity drain while the transfer is still running',
+  { timeout: 5000 },
+  async (t) => {
+    const session = await createFtpAdapter().createSession(makeProfile(server.port), {
+      kind: 'password',
+      username: USERNAME,
+      password: PASSWORD
+    })
+    t.after(() => session.close())
+    const stream = await session.readStream('/large.flac')
+    const chunks: Buffer[] = []
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+    assert.deepEqual(Buffer.concat(chunks), LARGE_BYTES)
+  }
+)

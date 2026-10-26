@@ -10,6 +10,64 @@ const {
   new URL('./remoteMediaGrants.ts', import.meta.url).href
 )) as typeof import('./remoteMediaGrants')
 
+test('metadata image permission expiry is absolute, isolated from ordinary tokens and never stored in image caches', async () => {
+  let now = 1000, reads = 0, writes = 0
+  const grants = new RemoteMediaGrantService({ now: () => now })
+  const source = 'https://cover.example/artist.jpg'
+  const ordinary = grants.grant(source, 'image')
+  const expiring = grants.grant(source, 'image', 2000)
+  assert.notEqual(ordinary, expiring)
+  const handler = createRemoteMediaRequestHandler({ grants,
+    imageCache: { read: async () => { reads++; return new Response('cached') }, write: async () => { writes++ } },
+    fetch: async () => new Response('raster', { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'max-age=86400' } })
+  })
+  const response = await handler(new Request(expiring))
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.equal(await response.text(), 'raster')
+  assert.equal(reads, 0)
+  assert.equal(writes, 0)
+  now = 1999
+  assert.equal(grants.resolve(expiring).expiresAt, 2000)
+  now = 2000
+  assert.equal((await handler(new Request(expiring))).status, 403)
+  assert.equal(grants.resolve(ordinary).source, source)
+  assert.throws(() => grants.grant(source, 'image', 2000), /expired/)
+})
+
+test('metadata image expiring during the network request does not return a late raster', async () => {
+  let now = 1000
+  const grants = new RemoteMediaGrantService({ now: () => now })
+  const handle = grants.grant('https://cover.example/artist.jpg', 'image', 2000)
+  let cancelled = false
+  const handler = createRemoteMediaRequestHandler({ grants, fetch: async () => {
+    now = 2000
+    return new Response(new ReadableStream({ cancel() { cancelled = true } }), { headers: { 'Content-Type': 'image/jpeg' } })
+  } })
+  assert.equal((await handler(new Request(handle))).status, 403)
+  assert.equal(cancelled, true)
+})
+
+test('a reissued permitted image reads cached raster bytes offline after the grant service is replaced', async () => {
+  const source = 'https://coverartarchive.org/release/1834eae1-741b-3c03-9ca5-0df3decb43ea/18174904878-500.jpg'
+  const cached = new Map<string, { type: string; bytes: Uint8Array }>()
+  const imageCache = { read: async (url: string) => {
+    const item = cached.get(url)
+    return item ? new Response(new Uint8Array(item.bytes), { headers: { 'Content-Type': item.type } }) : null
+  }, write: async (url: string, type: string, bytes: Uint8Array) => { cached.set(url, { type, bytes }) } }
+  const first = new RemoteMediaGrantService()
+  const response = await createRemoteMediaRequestHandler({ grants: first, imageCache,
+    fetch: async () => new Response('permitted raster', { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'max-age=86400' } })
+  })(new Request(first.grant(source, 'image')))
+  assert.equal(await response.text(), 'permitted raster')
+  first.revokeAll()
+  const replacement = new RemoteMediaGrantService()
+  const offline = await createRemoteMediaRequestHandler({ grants: replacement, imageCache,
+    fetch: async () => { throw new Error('offline') }
+  })(new Request(replacement.grant(source, 'image')))
+  assert.equal(offline.status, 200)
+  assert.equal(await offline.text(), 'permitted raster')
+})
+
 test('remote media grants expose an opaque URL and expire after inactivity', () => {
   let now = 1_000
   const grants = new RemoteMediaGrantService({ now: () => now, createToken: () => 'opaque-token' })
@@ -321,4 +379,122 @@ test('remote media proxy refuses credentialed redirect targets and oversized res
   })
   const oversized = await oversizedHandler(new Request(granted))
   assert.equal(oversized.status, 413)
+})
+
+test('an aborted remote media request starts neither an upstream request nor a cache write', async () => {
+  const grants = new RemoteMediaGrantService()
+  const granted = grants.grant('https://cover.example/aborted.jpg', 'image')
+  const controller = new AbortController()
+  controller.abort()
+  let requests = 0
+  let writes = 0
+  const handler = createRemoteMediaRequestHandler({
+    grants,
+    imageCache: {
+      read: async () => null,
+      write: async () => {
+        writes++
+      }
+    },
+    fetch: async () => {
+      requests++
+      return new Response('image', { headers: { 'content-type': 'image/jpeg' } })
+    }
+  })
+  await assert.rejects(handler(new Request(granted, { signal: controller.signal })), {
+    name: 'AbortError'
+  })
+  assert.equal(requests, 0)
+  assert.equal(writes, 0)
+})
+
+test('cancelling a buffered remote cover propagates through redirects and releases its upstream body', async () => {
+  const grants = new RemoteMediaGrantService()
+  const granted = grants.grant('https://cover.example/slow.jpg', 'image')
+  const controller = new AbortController()
+  let reading!: () => void
+  const started = new Promise<void>((resolve) => {
+    reading = resolve
+  })
+  const signals: Array<AbortSignal | null | undefined> = []
+  let cancelled = false
+  let writes = 0
+  const handler = createRemoteMediaRequestHandler({
+    grants,
+    imageCache: {
+      read: async () => null,
+      write: async () => {
+        writes++
+      }
+    },
+    fetch: async (_source, init) => {
+      signals.push(init.signal)
+      if (signals.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://cdn.example/slow.jpg' }
+        })
+      }
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            reading()
+          },
+          cancel() {
+            cancelled = true
+          }
+        }),
+        { headers: { 'content-type': 'image/jpeg' } }
+      )
+    }
+  })
+  const pending = handler(new Request(granted, { signal: controller.signal }))
+  await started
+  controller.abort()
+  await assert.rejects(pending, { name: 'AbortError' })
+  assert.equal(signals.length, 2)
+  assert.ok(signals.every((signal) => signal?.aborted))
+  assert.equal(cancelled, true)
+  assert.equal(writes, 0)
+})
+
+test('remote media rejection releases bodies for HTTP, type, size and invalid redirects', async () => {
+  const grants = new RemoteMediaGrantService()
+  const granted = grants.grant('https://cover.example/rejected.jpg', 'image')
+  const cases: Array<{ status: number; headers: Record<string, string>; expectedStatus: number }> =
+    [
+      { status: 403, headers: { 'content-type': 'text/html' }, expectedStatus: 502 },
+      { status: 200, headers: { 'content-type': 'text/html' }, expectedStatus: 415 },
+      {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg', 'content-length': String(25 * 1024 * 1024 + 1) },
+        expectedStatus: 413
+      },
+      {
+        status: 302,
+        headers: { location: 'https://user:secret@cdn.example/image.jpg' },
+        expectedStatus: 502
+      },
+      { status: 302, headers: {}, expectedStatus: 502 }
+    ]
+  for (const entry of cases) {
+    let cancelled = false
+    const handler = createRemoteMediaRequestHandler({
+      grants,
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              cancelled = true
+            }
+          }),
+          {
+            status: entry.status,
+            headers: entry.headers
+          }
+        )
+    })
+    assert.equal((await handler(new Request(granted))).status, entry.expectedStatus)
+    assert.equal(cancelled, true, `response ${entry.status} / ${JSON.stringify(entry.headers)}`)
+  }
 })

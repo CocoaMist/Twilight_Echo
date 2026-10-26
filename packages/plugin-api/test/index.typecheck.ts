@@ -1,5 +1,7 @@
 import type {
   Track,
+  PlatformAlbumIdentity,
+  PlatformMetadataResult,
   TwilightMediaProviderHealth,
   TwilightMediaProviderMethodHealth,
   TwilightMediaProviderRegistration,
@@ -13,6 +15,17 @@ import type {
 import { TWILIGHT_PLUGIN_API_VERSION } from '../src/index'
 
 const localSidebarKind: TwilightUiContributionKind = 'localSidebarItem'
+const nativeMetadata: PlatformMetadataResult = {
+  status: 'ok', metadata: { schemaVersion: 1, provider: 'example', kind: 'artist', id: '42', name: 'Artist',
+    texts: [{ field: 'introduction', value: 'Biography', language: 'und', url: 'https://example.org/artist/42',
+      revision: '', attribution: 'Example', license: '', licenseUrl: '',
+      usage: { display: true, cache: true, crossSource: false, export: false } }] }
+}
+const metadataMethods: Pick<TwilightMediaProviderRegistration, 'fetchArtistMetadata' | 'fetchAlbumMetadata'> = {
+  fetchArtistMetadata: async (_id, context) => { context?.signal?.throwIfAborted(); return nativeMetadata },
+  fetchAlbumMetadata: async () => ({ status: 'not_provided' })
+}
+void metadataMethods
 const streamingHomeKind: TwilightUiContributionKind = 'streamingHome'
 
 const localSidebarContribution: TwilightUiContribution = {
@@ -125,3 +138,15 @@ void structuredThemeV3
 void TWILIGHT_PLUGIN_API_VERSION
 void providerRegistration
 void providerTrackWithBpm
+
+const albumIdentity: PlatformAlbumIdentity = {
+  schemaVersion: 1, provider: 'example', id: 'album-1', title: 'Album', artists: [{ name: 'Artist' }],
+  trackCount: null, complete: false,
+  tracks: [{ id: 'song-1', title: 'Song', artists: [{ name: 'Artist' }],
+    durationSeconds: 180.25, disc: null, position: null, isrcs: [] }]
+}
+const identityProvider: TwilightMediaProviderRegistration = {
+  id: 'example', name: 'Example', capabilities: ['playlist'],
+  fetchAlbumIdentity: async () => albumIdentity
+}
+void identityProvider

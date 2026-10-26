@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
+import { nextTick, ref, shallowRef, watch } from 'vue'
+import ts from 'typescript'
 import type { Track } from '../types/music'
-import type { UnifiedSearchResult } from '../utils/unifiedMusicSearch.ts'
+import type { CoreMusicSearchPage as UnifiedSearchResult } from '../../../shared/coreSearch.ts'
 
 const { createUnifiedMusicSearch } = (await import(
   new URL('./useUnifiedMusicSearch.ts', import.meta.url).href
@@ -24,6 +28,7 @@ const localTrack: Track = {
 
 function unifiedResult(track: Track): UnifiedSearchResult {
   return {
+    versionsRevision: 1,
     items: [
       {
         kind: 'track' as const,
@@ -61,11 +66,72 @@ function unifiedResult(track: Track): UnifiedSearchResult {
   }
 }
 
+test('preview search does not react to Core revisions while live searches refresh and clean up', async () => {
+  const state = ref({ epoch: 'core', libraryRevision: 1, versionsRevision: 1, pluginsRevision: 1 })
+  let reads = 0
+  const cleanups: Array<() => void> = []
+  const exports: {
+    useUnifiedMusicSearch?: typeof import('./useUnifiedMusicSearch.ts').useUnifiedMusicSearch
+  } = {}
+  runInNewContext(
+    ts.transpileModule(
+      readFileSync(new URL('./useUnifiedMusicSearch.ts', import.meta.url), 'utf8'),
+      {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+      }
+    ).outputText,
+    {
+      exports,
+      require: (id: string) => {
+        if (id === 'vue')
+          return {
+            ref,
+            shallowRef,
+            watch,
+            onBeforeUnmount: (cleanup: () => void) => cleanups.push(cleanup)
+          }
+        if (id === '../stores/coreConnection.ts')
+          return {
+            useCoreConnection: () => ({
+              state,
+              query: async () => {
+                reads++
+                return unifiedResult(localTrack)
+              }
+            })
+          }
+        throw new Error(`Unexpected dependency: ${id}`)
+      },
+      AbortController,
+      queueMicrotask
+    }
+  )
+  const preview = exports.useUnifiedMusicSearch!({ listen: false })
+  const live = exports.useUnifiedMusicSearch!()
+  try {
+    await preview.search('preview')
+    await live.search('live')
+    state.value.libraryRevision++
+    await nextTick()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(reads, 3)
+    assert.equal(preview.query.value, 'preview')
+    assert.equal(live.query.value, 'live')
+  } finally {
+    for (const cleanup of cleanups) cleanup()
+  }
+  state.value.libraryRevision++
+  await nextTick()
+  assert.equal(reads, 3)
+  assert.equal(preview.query.value, '')
+  assert.equal(live.query.value, '')
+})
+
 test('unified music search composable exposes unified items and provider health', async () => {
   const search = createUnifiedMusicSearch({
-    getLocalTracks: () => [localTrack],
-    searchAllSongs: async ({ localTracks }): Promise<UnifiedSearchResult> => ({
-      items: localTracks.map((track) => ({
+    searchAllSongs: async (): Promise<UnifiedSearchResult> => ({
+      versionsRevision: 1,
+      items: [localTrack].map((track) => ({
         kind: 'track' as const,
         track,
         source: 'local',
@@ -130,10 +196,9 @@ test('unified music search composable exposes unified items and provider health'
 test('unified music search clears state for blank queries', async () => {
   let called = false
   const search = createUnifiedMusicSearch({
-    getLocalTracks: () => [localTrack],
     searchAllSongs: async () => {
       called = true
-      return { items: [], logicalItems: [], health: {}, total: 0 }
+      return { items: [], logicalItems: [], health: {}, total: 0, versionsRevision: 1 }
     }
   })
 
@@ -158,7 +223,6 @@ test('a late unified search page cannot overwrite a newer request with the same 
   const pageZero = { ...localTrack, id: 'local:page-0', title: 'Page zero' }
   const pageThirty = { ...localTrack, id: 'local:page-30', title: 'Page thirty' }
   const search = createUnifiedMusicSearch({
-    getLocalTracks: () => [localTrack],
     searchAllSongs: async ({ offset }) => {
       if (offset === 0) {
         await first
@@ -190,7 +254,6 @@ test('clearing search aborts in-flight requests and cannot publish late results'
     release = resolve
   })
   const search = createUnifiedMusicSearch({
-    getLocalTracks: () => [],
     searchAllSongs: async (options) => {
       signal = options.signal
       await pending
@@ -208,40 +271,11 @@ test('clearing search aborts in-flight requests and cannot publish late results'
   assert.equal(search.total.value, 0)
 })
 
-test('obsolete network-library reads do not start provider searches', async () => {
-  let release!: () => void
-  const pending = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const queries: string[] = []
-  const search = createUnifiedMusicSearch({
-    getLocalTracks: () => [],
-    searchNetworkLibrary: async (query) => {
-      if (query === 'old') await pending
-      return []
-    },
-    searchAllSongs: async ({ query }) => {
-      queries.push(query)
-      return unifiedResult(localTrack)
-    }
-  })
-  const old = search.search('old')
-  await search.search('new')
-  release()
-  await old
-  assert.deepEqual(queries, ['new'])
-  assert.equal(search.query.value, 'new')
-})
-
 test('database refreshes coalesce, retain the page, and reject responses older than the notified content revision', async () => {
   const calls: Array<{ query: string; offset?: number }> = []
   let revision = 3
   const search = createUnifiedMusicSearch({
-    getLocalTracks: () =>
-      assert.fail('an authoritative local source must bypass the renderer array'),
-    localSource: { search: async () => ({ items: [], total: 0 }), confirm: async () => {} },
-    searchAllSongs: async ({ query, offset, localTracks }) => {
-      assert.equal(localTracks.length, 0)
+    searchAllSongs: async ({ query, offset }) => {
       calls.push({ query, offset })
       return { ...unifiedResult(localTrack), libraryRevision: revision }
     }

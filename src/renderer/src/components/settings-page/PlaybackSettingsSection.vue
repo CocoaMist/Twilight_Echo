@@ -6,6 +6,7 @@ import { storeToRefs } from 'pinia'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useAudioOutputDspStore } from '../../stores/useAudioOutputDspStore'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
 import { usePlayerStore } from '../../stores/usePlayerStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import {
@@ -20,11 +21,11 @@ import { isDsdProxyDevice } from '../../../../shared/dsdProxyDrivers.ts'
 import { resolveReasonCode } from '../../../../shared/audio/reasonCodes.ts'
 import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import { useLocale } from '../../app/useLocale.ts'
+import type { CoreAutoMixCapabilities } from '../../../../shared/coreAutoMix.ts'
 import {
   normalizeAutoMixMode,
   normalizeAutoMixStemCacheMiB,
   normalizeAutoMixStemDevice,
-  type AutoMixStemCapabilities,
   type AutoMixMode,
   type AutoMixStemInstallStatus,
   autoMixStemInstallBusy,
@@ -64,6 +65,8 @@ const { settings, updateSettings } = useSettingsStore()
 const { locale, t } = useLocale()
 const audioOutputDspStore = useAudioOutputDspStore()
 const playbackQueueStore = usePlayerStore()
+const core = useCoreConnection()
+const actionError = ref('')
 const {
   exclusiveMode,
   audioOutput,
@@ -73,6 +76,7 @@ const {
   audioOutputDeviceOptions,
   audioProcessing,
   dspOutputStage,
+  dspGraphStatus,
   audioOutputConfig,
   audioOutputConfigApplyStatus,
   playbackInfo,
@@ -111,7 +115,7 @@ function setProfileAttention(message: string): void {
 }
 const exclusiveAutoReleaseApplying = ref(false)
 const autoMixModeApplying = ref(false)
-const stemCapabilities = ref<AutoMixStemCapabilities>({
+const stemCapabilities = ref<CoreAutoMixCapabilities>({
   status: 'missing',
   cpu: false,
   gpu: false,
@@ -166,7 +170,7 @@ async function acceptStemInstallStatus(
 async function pollStemInstall(): Promise<void> {
   if (!stemComponentMounted) return
   try {
-    await acceptStemInstallStatus(await window.api.audioEngine.getAutoMixStemInstallStatus())
+    await acceptStemInstallStatus(await core.query('automix.install.status', {}))
   } catch {
     /* The install invocation reports IPC failures to the user. */
   }
@@ -181,19 +185,10 @@ async function installStemPack(): Promise<void> {
   clearTimeout(stemInstallPoll)
   stemInstallPoll = setTimeout(() => void pollStemInstall(), 400)
   try {
-    const status = await window.api.audioEngine.installAutoMixStemPack()
+    const status = (await core.command('automix.install.start', {
+      enableAfterInstall
+    })) as AutoMixStemInstallStatus
     await acceptStemInstallStatus(status)
-    if (status.phase === 'ready') {
-      try {
-        await updateSettings(
-          enableAfterInstall
-            ? { autoMixStemMode: 'auto', autoMixStemDevice: 'auto' }
-            : { autoMixStemMode: 'off' }
-        )
-      } catch (error) {
-        audioEngineError.value = error instanceof Error ? error.message : String(error)
-      }
-    }
   } catch {
     await acceptStemInstallStatus({
       phase: 'failed',
@@ -205,7 +200,9 @@ async function installStemPack(): Promise<void> {
 }
 async function cancelStemInstall(): Promise<void> {
   try {
-    await acceptStemInstallStatus(await window.api.audioEngine.cancelAutoMixStemInstall())
+    await acceptStemInstallStatus(
+      (await core.command('automix.install.cancel', {})) as AutoMixStemInstallStatus
+    )
   } catch {
     /* Keep polling the main process until installation completes. */
   }
@@ -243,7 +240,7 @@ async function detectStems(refresh = false): Promise<void> {
   if (stemChecking.value) return
   stemChecking.value = true
   try {
-    const capabilities = await window.api.audioEngine.getAutoMixStemCapabilities(refresh)
+    const capabilities = await core.query('automix.capabilities', { refresh })
     if (capabilities && typeof capabilities.status === 'string') {
       stemCapabilities.value = capabilities
     }
@@ -278,7 +275,7 @@ async function toggleStems(): Promise<void> {
       autoMixStemMode: settings.value.autoMixStemMode === 'off' ? 'auto' : 'off'
     })
   } catch (error) {
-    audioEngineError.value = error instanceof Error ? error.message : String(error)
+    actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
     stemApplying.value = false
   }
@@ -300,7 +297,7 @@ async function setStemDevice(event: Event): Promise<void> {
   try {
     await updateSettings({ autoMixStemDevice: device })
   } catch (error) {
-    audioEngineError.value = error instanceof Error ? error.message : String(error)
+    actionError.value = error instanceof Error ? error.message : String(error)
     select.value = settings.value.autoMixStemDevice
   } finally {
     stemApplying.value = false
@@ -338,7 +335,7 @@ async function applyAutoMixMode(mode: AutoMixMode): Promise<void> {
     await updateSettings({ autoMixMode: mode })
     djModeDialog.value?.close()
   } catch (error) {
-    audioEngineError.value = error instanceof Error ? error.message : String(error)
+    actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
     autoMixModeApplying.value = false
   }
@@ -353,7 +350,7 @@ async function toggleExclusiveAutoRelease(): Promise<void> {
       audioExclusiveAutoRelease: !settings.value.audioExclusiveAutoRelease
     })
   } catch (error) {
-    audioEngineError.value = error instanceof Error ? error.message : String(error)
+    actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
     exclusiveAutoReleaseApplying.value = false
   }
@@ -412,9 +409,7 @@ const outputUnderrunWarningText = computed(() => {
 
 const outputDiagnosticsText = computed(() => {
   const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
-  const stage =
-    outputInfo.value?.nativeDsp?.graph?.outputStage ??
-    playbackInfo.value?.outputInfo?.nativeDsp?.graph?.outputStage
+  const stage = dspGraphStatus.value?.outputStage
   const src = describeResampler(dspOutputStage.value.resamplerQuality, stage)
   if (!diagnostics) return `Underrun 0 · Drop 0 · ${src}`
   const underrunRate =
@@ -842,7 +837,7 @@ function setContinuitySampleRate(event: Event): void {
         </div>
       </div>
     </div>
-    <div v-if="audioEngineError" class="engine-error">{{ audioEngineError }}</div>
+    <div v-if="actionError || audioEngineError" class="engine-error">{{ actionError || audioEngineError }}</div>
     <div class="section-block">
       <h3>声音输出</h3>
       <div data-setting-id="audio-device" id="setting-audio-device" class="setting-item">
@@ -1403,12 +1398,12 @@ function setContinuitySampleRate(event: Event): void {
                 目标：{{ audioOutputConfig.continuitySampleRate ?? 48000 }} Hz / 32 bit / 2 声道。
                 需自动声道路由并关闭 PCM 转 DSD；切换策略会保留进度重新打开输出。
               </span>
-              <span v-if="playbackInfo?.source">
+              <span v-if="playbackInfo?.nativePlaybackActive">
                 来源：{{ playbackInfo.sourceSampleRate }} Hz / {{ playbackInfo.sourceBitDepth }} bit
                 / {{ playbackInfo.sourceChannels ?? '—' }} 声道； 实际：{{
-                  playbackInfo.outputSampleRate
+                  playbackInfo.actualSampleRate
                 }}
-                Hz / {{ playbackInfo.outputBitDepth }} bit / {{ playbackInfo.channelCount }} 声道。
+                Hz / {{ playbackInfo.actualBitDepth }} bit / {{ playbackInfo.actualChannels }} 声道。
                 {{
                   gaplessRuntimeStatusCopy({
                     intentEnabled: audioProcessing.gapless,

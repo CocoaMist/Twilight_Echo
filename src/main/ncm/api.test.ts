@@ -1,11 +1,39 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { runInNewContext } from 'node:vm'
-import ts from 'typescript'
-import { normalizeIpcString } from '../security/ipcValidation.ts'
+import { Agent, MockAgent } from 'undici'
+import { NcmApiService } from '../../core/providers/ncmApi.ts'
 import { waitForListeningPort } from './serverBinding.ts'
+import { createNcmLoopbackTransport } from './runtimeAdapter.ts'
+
+test('the production NCM transport reaches Fetch-restricted ports and retains redirects and headers', async () => {
+  const agent = new MockAgent()
+  agent.disableNetConnect()
+  const server = agent.get('http://127.0.0.1:6000')
+  server
+    .intercept({ path: '/redirect', method: 'GET', headers: { cookie: 'a=1' } })
+    .reply(302, '', {
+      headers: { location: '/result' }
+    })
+  server
+    .intercept({ path: '/result', method: 'GET', headers: { cookie: 'a=1' } })
+    .reply(200, '{"code":200}', {
+      headers: { 'content-type': 'application/json' }
+    })
+  const transport = createNcmLoopbackTransport(agent)
+  try {
+    const response = await transport.fetch('http://127.0.0.1:6000/redirect', {
+      signal: new AbortController().signal,
+      headers: { cookie: 'a=1' }
+    })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/json')
+    assert.deepEqual(JSON.parse(await response.text()), { code: 200 })
+    agent.assertNoPendingInterceptors()
+  } finally {
+    await transport.closeTransport()
+  }
+})
 
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   if (!server.listening) return
@@ -13,66 +41,6 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
     server.close((error) => (error ? reject(error) : resolve()))
   })
 }
-
-test('FM and radar requests bypass gateway caches while ordinary playback requests retain caching', async () => {
-  const source = await readFile(new URL('./api.ts', import.meta.url), 'utf8')
-  const ast = ts.createSourceFile('api.ts', source, ts.ScriptTarget.Latest, true)
-  const names = new Set([
-    'requestNcmApi',
-    'shouldTimestampNcmApiPath',
-    'normalizeNcmApiPath',
-    'normalizeNcmCookie',
-    'TIMESTAMPED_NCM_API_PATHS',
-    'NCM_API_HOST',
-    'NCM_API_ORIGIN',
-    'MAX_NCM_API_PATH_LENGTH',
-    'MAX_NCM_COOKIE_LENGTH',
-    'NCM_IDEMPOTENCY_KEY_PATTERN',
-    'NCM_API_REQUEST_TIMEOUT_MS'
-  ])
-  const nodes = ast.statements.filter((node) =>
-    ts.isFunctionDeclaration(node)
-      ? !!node.name && names.has(node.name.text)
-      : ts.isVariableStatement(node) &&
-        node.declarationList.declarations.some((declaration) =>
-          names.has(declaration.name.getText(ast))
-        )
-  )
-  const code = ts.transpileModule(
-    nodes.map((node) => node.getText(ast).replace(/^export /, '')).join('\n'),
-    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
-  ).outputText
-  let now = 1000
-  const urls: URL[] = []
-  const request = runInNewContext(`${code}\nrequestNcmApi`, {
-    URL,
-    AbortController,
-    setTimeout,
-    clearTimeout,
-    normalizeIpcString,
-    Date: { now: () => now },
-    runtime: { ncmServer: {} },
-    getListeningPort: () => 3101,
-    ensureNcmServer: async () => undefined,
-    NCM_KEEP_ALIVE_AGENT: {},
-    fetch: async (url: string) => {
-      urls.push(new URL(url))
-      return { text: async () => '{"code":200,"data":[]}' }
-    }
-  }) as (path: string) => Promise<unknown>
-  for (const path of ['/personal_fm', '/personal/fm/mode?mode=DEFAULT']) {
-    await request(path)
-    now += 1
-    await request(path)
-    const [first, second] = urls.slice(-2)
-    assert.equal(first.searchParams.get('timestamp'), String(now - 1))
-    assert.equal(second.searchParams.get('timestamp'), String(now))
-    if (path.includes('?')) assert.equal(second.searchParams.get('mode'), 'DEFAULT')
-  }
-  await request('/song/url?id=93')
-  assert.equal(urls.at(-1)!.searchParams.has('timestamp'), false)
-  assert.equal(urls.at(-1)!.searchParams.get('id'), '93')
-})
 
 test('NCM API binding reports its actual isolated port instead of a foreign listener', async () => {
   const foreignServer = createServer((_request, response) => response.end('foreign-service'))
@@ -114,21 +82,250 @@ test('NCM API binding rejects when the server cannot listen', async () => {
   }
 })
 
-test('NCM API server starts once on the first request and gates fetch on readiness', async () => {
-  const source = await readFile(new URL('./api.ts', import.meta.url), 'utf8')
+test('FM, radar and writes bypass gateway caches while ordinary playback keeps caching', async () => {
+  let now = 1000
+  const urls: URL[] = []
+  const api = new NcmApiService({
+    startServer: async () => createServer().listen(0, '127.0.0.1'),
+    now: () => now,
+    fetch: async (url) => {
+      urls.push(new URL(String(url)))
+      return new Response('{"code":200,"data":[]}')
+    }
+  })
+  try {
+    for (const path of [
+      '/personal_fm',
+      '/personal/fm/mode?mode=DEFAULT',
+      '/playlist/tracks?op=add',
+      '/like?id=1'
+    ]) {
+      await api.request(path)
+      now++
+      await api.request(path)
+      const [first, second] = urls.slice(-2)
+      assert.equal(first.searchParams.get('timestamp'), String(now - 1))
+      assert.equal(second.searchParams.get('timestamp'), String(now))
+      if (path.includes('mode=')) assert.equal(second.searchParams.get('mode'), 'DEFAULT')
+    }
+    await api.request('/song/url?id=93')
+    assert.equal(urls.at(-1)!.searchParams.has('timestamp'), false)
+    assert.equal(urls.at(-1)!.searchParams.get('id'), '93')
+  } finally {
+    await api.shutdown()
+  }
+})
 
-  assert.match(source, /export function ensureNcmServer\(\): Promise<void>/)
-  assert.match(source, /if \(runtime\.ncmServerPromise\) return runtime\.ncmServerPromise/)
-  assert.match(source, /const startup = startNcmServer\(\)/)
-  assert.match(source, /await ensureNcmServer\(\)/)
-  assert.match(source, /port: NCM_API_EPHEMERAL_PORT/)
-  assert.match(source, /await waitForListeningPort\(ncmApp\.server\)/)
-  assert.match(source, /getListeningPort\(runtime\.ncmServer\)/)
-  assert.match(source, /const res = await fetch\(url, \{/)
-  assert.match(source, /const responseText = await res\.text\(\)/)
-  assert.match(source, /signal: controller\.signal,/)
-  assert.match(source, /headers,/)
-  assert.match(source, /dispatcher: NCM_KEEP_ALIVE_AGENT/)
-  assert.doesNotMatch(source, /NCM_API_PORT = 3100/)
-  assert.doesNotMatch(source, /export async function setupNcmApi/)
+test('concurrent first requests start one listener and use its actual port, cookies and write key', async () => {
+  let starts = 0
+  const received: Array<{ url?: string; cookie?: string; key?: string | string[] }> = []
+  const server = createServer((request, response) => {
+    received.push({
+      url: request.url,
+      cookie: request.headers.cookie,
+      key: request.headers['x-twilight-idempotency-key']
+    })
+    response.end('{"code":200}')
+  })
+  let transportClosed = false
+  const api = new NcmApiService({
+    startServer: async () => {
+      starts++
+      return server.listen(0, '127.0.0.1')
+    },
+    closeTransport: async () => {
+      transportClosed = true
+    }
+  })
+  assert.equal(starts, 0)
+  try {
+    const responses = await Promise.all([
+      api.request('/song/url?id=1', ' a=1; b=2;; '),
+      api.request('/playlist/tracks?op=add', undefined, { idempotencyKey: 'fixture:write:1' })
+    ])
+    assert.deepEqual(responses, [{ code: 200 }, { code: 200 }])
+    assert.equal(starts, 1)
+    assert.equal(api.getServer(), server)
+    assert.equal(received.find((row) => row.url?.startsWith('/song/url'))?.cookie, 'a=1; b=2')
+    assert.equal(received.find((row) => row.url?.startsWith('/playlist/'))?.key, 'fixture:write:1')
+  } finally {
+    await api.shutdown()
+  }
+  assert.equal(server.listening, false)
+  assert.equal(transportClosed, true)
+  assert.equal(((await api.request('/song/url')) as { code: number }).code, -1)
+})
+
+test('invalid API paths do not start a listener and invalid cookies/keys never reach fetch', async () => {
+  let starts = 0
+  let headers: Headers | undefined
+  const api = new NcmApiService({
+    startServer: async () => {
+      starts++
+      return createServer().listen(0, '127.0.0.1')
+    },
+    fetch: async (_url, init) => {
+      headers = new Headers(init?.headers)
+      return new Response('{}')
+    }
+  })
+  try {
+    for (const path of [
+      'https://foreign.test/',
+      '//foreign.test/',
+      '/foo\\bar',
+      '/foo\r\ninjected:1',
+      '/' + 'x'.repeat(4096)
+    ])
+      assert.deepEqual(await api.request(path), { code: -1, message: 'Invalid NetEase API path' })
+    assert.equal(starts, 0)
+    await api.request('/safe', 'cookie=1\r\ninjected:1', { idempotencyKey: 'bad key' })
+    assert.equal(headers!.get('cookie'), null)
+    assert.equal(headers!.get('x-twilight-idempotency-key'), null)
+  } finally {
+    await api.shutdown()
+  }
+})
+
+test('cancellation and shutdown settle requests without replay and close the owned transport', async () => {
+  let fetched!: () => void
+  let calls = 0
+  const started = new Promise<void>((resolve) => {
+    fetched = resolve
+  })
+  const api = new NcmApiService({
+    startServer: async () => createServer().listen(0, '127.0.0.1'),
+    fetch: async (_url, init) => {
+      calls++
+      fetched()
+      return new Promise<Response>((_resolve, reject) =>
+        init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
+      )
+    }
+  })
+  const controller = new AbortController()
+  const first = api.request('/playlist/tracks?op=add', undefined, { signal: controller.signal })
+  await started
+  controller.abort(new Error('cancelled by user'))
+  assert.equal(((await first) as { code: number }).code, -1)
+  const second = api.request('/song/url')
+  await new Promise((resolve) => setImmediate(resolve))
+  await api.shutdown()
+  assert.equal(((await second) as { code: number }).code, -1)
+  assert.equal(calls, 2)
+})
+
+test('shutdown cancels a partial HTTP response and closes its real pooled connection without replay', async () => {
+  const agent = new Agent({
+    connections: 8,
+    keepAliveTimeout: 60_000,
+    keepAliveMaxTimeout: 120_000
+  })
+  let received!: () => void
+  const responding = new Promise<void>((resolve) => {
+    received = resolve
+  })
+  let calls = 0
+  const sockets = new Set<import('node:net').Socket>()
+  const server = createServer((_request, response) => {
+    calls++
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.write('{"code":')
+    received()
+  })
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
+  let transportClosed = false
+  const transport = createNcmLoopbackTransport(agent)
+  const api = new NcmApiService({
+    startServer: async () => server.listen(0, '127.0.0.1'),
+    fetch: transport.fetch,
+    closeTransport: async () => {
+      await transport.closeTransport()
+      transportClosed = true
+    }
+  })
+  const pendingWrite = api.request('/playlist/tracks?op=add', undefined, {
+    idempotencyKey: 'shutdown:write'
+  })
+  await responding
+  await api.shutdown()
+  assert.equal(((await pendingWrite) as { code: number }).code, -1)
+  assert.equal(calls, 1)
+  assert.equal(server.listening, false)
+  assert.equal(transportClosed, true)
+  assert.equal(sockets.size, 0)
+})
+
+test('shutdown releases idle HTTP connections through their Agent before waiting for the listener', async () => {
+  const agent = new Agent({
+    connections: 8,
+    keepAliveTimeout: 60_000,
+    keepAliveMaxTimeout: 120_000
+  })
+  const events: string[] = []
+  const server = createServer((_request, response) => response.end('{"code":200}'))
+  server.once('close', () => events.push('listener closed'))
+  const transport = createNcmLoopbackTransport(agent)
+  const api = new NcmApiService({
+    startServer: async () => server.listen(0, '127.0.0.1'),
+    fetch: transport.fetch,
+    closeTransport: async () => {
+      await transport.closeTransport()
+      events.push('transport closed')
+    }
+  })
+  assert.deepEqual(await api.request('/song/url?id=1'), { code: 200 })
+  await api.shutdown()
+  assert.deepEqual(events, ['transport closed', 'listener closed'])
+  assert.equal(server.listening, false)
+})
+
+test('shutdown during lazy startup waits for and closes the new listener before completing', async () => {
+  let release!: (server: ReturnType<typeof createServer>) => void
+  let fetches = 0
+  const api = new NcmApiService({
+    startServer: () =>
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    fetch: async () => {
+      fetches++
+      return new Response('{}')
+    }
+  })
+  const request = api.request('/song/url')
+  const shutdown = api.shutdown()
+  const server = createServer().listen(0, '127.0.0.1')
+  release(server)
+  await shutdown
+  assert.equal(((await request) as { code: number }).code, -1)
+  assert.equal(server.listening, false)
+  assert.equal(fetches, 0)
+})
+
+test('failed startup can be retried, and non-JSON errors retain the response failure contract', async () => {
+  let starts = 0
+  const api = new NcmApiService({
+    startServer: async () => {
+      if (++starts === 1) throw Error('startup failed')
+      return createServer().listen(0, '127.0.0.1')
+    },
+    fetch: async () =>
+      new Response('<html>bad gateway</html>', {
+        status: 502,
+        headers: { 'content-type': 'text/html' }
+      })
+  })
+  try {
+    assert.deepEqual(await api.request('/song/url'), { code: -1, message: 'startup failed' })
+    const result = (await api.request('/song/url')) as { code: number; message: string }
+    assert.equal(starts, 2)
+    assert.equal(result.code, -1)
+    assert.match(result.message, /invalid JSON \(HTTP 502, text\/html\)/)
+  } finally {
+    await api.shutdown()
+  }
 })

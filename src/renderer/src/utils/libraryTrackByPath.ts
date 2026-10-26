@@ -1,6 +1,6 @@
 import type { LibraryDatabaseApi } from '../../../shared/libraryDatabase.ts'
-import type { Track } from '../types/music'
-import { libraryTrack } from './libraryQueuePlayback.ts'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { libraryTrack } from '../../../core/playback/libraryTrack.ts'
 
 type PathLookupApi = Pick<LibraryDatabaseApi, 'lookupTracksByPaths' | 'getTracksByIds'>
 

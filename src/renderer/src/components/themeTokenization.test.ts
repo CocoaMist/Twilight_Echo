@@ -130,11 +130,11 @@ const themeArchive = readFileSync(
   'utf8'
 )
 const windowInheritance = readFileSync(
-  new URL('../../../main/themes/windowInheritance.ts', import.meta.url),
+  new URL('../../../core/settings/windowInheritance.ts', import.meta.url),
   'utf8'
 )
 const settingsBackup = readFileSync(
-  new URL('../../../main/core/settingsBackup.ts', import.meta.url),
+  new URL('../../../core/settings/backupFormat.ts', import.meta.url),
   'utf8'
 )
 const pluginIpc = readFileSync(new URL('../../../main/ipc/plugins.ts', import.meta.url), 'utf8')

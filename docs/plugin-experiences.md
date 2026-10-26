@@ -15,6 +15,11 @@ plugins continue to use their original lifecycle. An experience requires type
 }
 ```
 
+An experience entry may set `"launch": "panel"` to keep it out of sidebar
+navigation. Panel experiences are opened by the plugin's `titleBarButton`
+contribution and mounted by the host in a right-side flyout overlay instead of
+the main content area.
+
 A declarative experience needs no `main` process. Entry files must exist inside
 the installed package. Assets are served from the entry directory through
 `plugin-ui://<plugin-id>/<version>/...`, only while that installed version is
@@ -44,6 +49,61 @@ Ordinary requests are bounded to 256 KiB and 16 concurrent calls. Explicit
 metadata/import/export operations have larger, method-specific envelopes in
 `experienceRequestLimit`; arbitrary large requests remain denied. Private preferences
 are bounded to 64 KiB and written atomically in the plugin data directory.
+
+## Music metadata and recovery
+
+`music.metadata.read / write` retain the 16 MiB, revision-fenced document contract.
+In the production Core, the first eligible read migrates the original IDs and
+payloads into the music library SQLite. After publication that database is the
+only writable authority; the original JSON and versioned backups are recovery
+snapshots. UI preferences remain separate.
+
+`music.metadata.operate` retains task, preview, import and reconcile. It also
+accepts these `operation` values with arguments in `body`:
+
+- `inventory`: `{ offset, limit }` returns original payloads, source bindings and
+  bound/unassigned/conflict dispositions. These are source assignments, not
+  confirmed shared music identities.
+- `history`: `{ offset, limit }` returns retained document revisions.
+- `history.read`: `{ revision }` returns that historical document or `null`.
+- `restore`: `{ revision, expectedRevision }` restores the retained document and
+  source bindings as a new revision, preserving the previous state in history.
+- `cancel`: `{ operation: 'introductions' | 'credits' | 'enrich' }` cancels the
+  latest batch for that lookup, including an active request, without clearing
+  completed metadata. Cancellation remains available during a library scan.
+
+These operations require the experience's existing `library:write` permission;
+inventory/history pages are capped at 200. Read history and compare it with the
+current document before restoring; a revision conflict requires a fresh read.
+Production introductions/credits/enrich now use the Core's single persistent
+metadata worker. Published batches survive restarts; incomplete submissions are
+abandoned without executing. Existing selection, force and status fields remain
+available. Status also reports batchId, needsReview, blocked, retrying, cancelled
+and nextAttemptAt. A partial result may count as updated while awaiting retry.
+The existing network permission is still required for queries. Explicit source
+prohibitions apply, but the new automatic-identification opt-in is not a new
+prerequisite for these manual operations. Implementation and acceptance gaps are recorded in
+[M2.4](D:/Project/Twilight_Echo/docs/unified-music-library-m2.4.md).
+
+## Talking to the plugin's own background code (`plugin.request`)
+
+The experience sandbox has no network access. A plugin that also ships a
+`main` entry (utility process) can expose background logic to its iframe:
+
+- The iframe calls the bridge method `plugin.request` with a JSON request
+  (requires the plugin's `network` permission; payload ≤ 256 KiB).
+- The host relays it over the plugin service port into the plugin process,
+  where handlers registered via `context.twilight.experience.onRequest(handler)`
+  answer it (long timeouts: agent loops may legitimately stream for minutes).
+- The plugin pushes live events back with
+  `context.twilight.experience.emit(event, value)`; they travel to the mounted
+  iframe as bridge events `{ event: 'plugin', value: { event, value } }` and
+  are dropped while the iframe is unmounted, so background state should stay
+  authoritative in the plugin process and be re-synced via `plugin.request`.
+
+API keys, proxy-aware fetch and screenshot/cover bytes all belong in the
+plugin process behind this relay; they never need to enter the renderer.
+
 
 The host owns the playback engine and queue. Opening, closing or replacing a
 view must not implicitly stop playback. The sample Rhine experience fetches

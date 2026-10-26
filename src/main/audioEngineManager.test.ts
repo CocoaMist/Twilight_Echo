@@ -1529,6 +1529,99 @@ function makeManager(
   })
 }
 
+test('Core AB confirmed mutations await ACK and never publish a lost Seek as success', async () => {
+  class LoopBinding extends DeferredAudioServiceBinding {
+    SetLoopRange = (_start: number, _end: number): void => {}
+  }
+  const service = new LoopBinding(['SetLoopRange', 'Seek'])
+  const manager = makeManager({ exclusiveMode: false }, service)
+  try {
+    await manager.start()
+    let done = false
+    const loop = manager.setLoopRangeConfirmed(1, 2).then((ok) => {
+      done = true
+      return ok
+    })
+    await Promise.resolve()
+    assert.equal(done, false)
+    service.resolveNextDeferredCall()
+    assert.equal(await loop, true)
+    const before = (await manager.getPlaybackInfo()).position
+    const seek = manager.seekConfirmed(12)
+    const rejected = assert.rejects(seek, /reply lost/)
+    service.rejectDeferredCalls(new Error('Seek reply lost'))
+    await rejected
+    assert.equal((await manager.getPlaybackInfo()).position, before)
+    const accepted = manager.seekConfirmed(8)
+    service.resolveNextDeferredCall()
+    await accepted
+    assert.equal((await manager.getPlaybackInfo()).position, 8)
+  } finally {
+    manager.destroy()
+  }
+})
+
+test('Core visualization demand keeps DSP preferences and revisions intact while slow FFT permits Pause', async () => {
+  let resolveRead!: (value: string) => void
+  const demand: boolean[] = []
+  class VisualizationBinding extends FakeAudioServiceBinding {
+    override Play = (source = 'track.flac'): void => {
+      this.playCalls++
+      this.playbackInfo = makePlaybackInfo({ state: 'playing', nativePlaybackActive: true, source })
+    }
+    override callAsync(method: string, args: unknown[]): Promise<unknown> {
+      if (method === 'SetVisualizationDemand') {
+        demand.push(args[0] as boolean)
+        return Promise.resolve()
+      }
+      if (method === 'GetVisualizationData')
+        return new Promise((resolve) => {
+          resolveRead = resolve
+        })
+      return super.callAsync(method, args)
+    }
+  }
+  const service = new VisualizationBinding()
+  const manager = new AudioEngineManager(
+    { exclusiveMode: false, audioProcessing: { fftEnabled: true } },
+    {
+      audioServiceFactory: () => service,
+      scheduler: TEST_SCHEDULER,
+      deviceOptionsProvider: () => DEVICE_OPTIONS
+    }
+  )
+  try {
+    await manager.start()
+    await manager.play('track.flac', 4)
+    const graph = structuredClone(service.lastDspGraphPayload)
+    const preferences = structuredClone(manager.getAudioProcessing())
+    await manager.setVisualizationDemand(false)
+    await manager.setVisualizationDemand(true)
+    assert.deepEqual(service.lastDspGraphPayload, graph)
+    assert.deepEqual(manager.getAudioProcessing(), preferences)
+    const pending = manager.readVisualizationDataAsync({ spectrumPoints: 8, spectrogramFrames: 0 })
+    await manager.pause()
+    assert.equal((await manager.getPlaybackInfo()).state, 'paused')
+    assert.equal(service.playbackInfo.state, 'paused')
+    await manager.setVisualizationDemand(false)
+    resolveRead(JSON.stringify({ spectrum: [0.5], active: false, tapStatus: 'disabled' }))
+    const data = await pending
+    assert.equal(data.tapStatus, 'disabled')
+    assert.equal(data.active, false)
+    assert.equal(data.spectrum.length, 8)
+    assert.deepEqual(demand, [false, true, false])
+    const restored = new Promise<void>((resolve) =>
+      manager.once('audio-service-ready', () => resolve())
+    )
+    service.emit('ready')
+    await restored
+    assert.deepEqual(demand, [false, true, false, false])
+    assert.equal(manager.getAudioProcessing().fftEnabled, true)
+  } finally {
+    manager.destroy()
+  }
+})
+
 test('leaving loudnorm while cache lookup is pending cannot apply measurements or restart analysis', async () => {
   const manager = makeManager(
     {
@@ -6032,8 +6125,10 @@ test('native tick skips full playback-info fanout when only position changes', a
     nativeBinding
   )
   const playbackUpdates: PlaybackInfo[] = []
+  const coreSamples: PlaybackInfo[] = []
   const timePositions: number[] = []
   manager.on('playback-info', (info: PlaybackInfo) => playbackUpdates.push(info))
+  manager.on('playback-sample', (info: PlaybackInfo) => coreSamples.push(info))
   manager.on('property-change', ({ name, data }) => {
     if (name === 'time-pos') timePositions.push(data as number)
   })
@@ -6050,6 +6145,7 @@ test('native tick skips full playback-info fanout when only position changes', a
 
   assert.equal(timePositions.at(-1), 0.25)
   assert.equal(playbackUpdates.length, fullUpdatesAfterPlay)
+  assert.equal(coreSamples.at(-1)?.position, 0.25)
 })
 
 test('native tick keeps time-pos moving when GetPlaybackInfo briefly fails', async () => {
@@ -8024,7 +8120,7 @@ test('getVisualizationData can omit unused visualization payloads', () => {
 
 test('getVisualizationData reuses native visualization data within one visual frame', () => {
   const helpersSource = readFileSync(
-    new URL('./audio/audioEngineHelpers.ts', import.meta.url),
+    new URL('../core/audio/audioEngineHelpers.ts', import.meta.url),
     'utf8'
   )
   assert.match(helpersSource, /export const VISUALIZATION_CACHE_TTL_MS = 24/)
@@ -9338,11 +9434,11 @@ test('loudnorm status event, library RG queue fields, and cancel IPC are wired e
     'utf8'
   )
   const playerStoreSource = readFileSync(
-    new URL('../renderer/src/stores/usePlayerStore.ts', import.meta.url),
+    new URL('../renderer/src/stores/player/corePlayerStore.ts', import.meta.url),
     'utf8'
   )
   const playerSessionTrackSource = readFileSync(
-    new URL('../renderer/src/utils/playerSessionTrack.ts', import.meta.url),
+    new URL('../core/playback/sessionTrack.ts', import.meta.url),
     'utf8'
   )
   const dspStoreSource = readFileSync(
@@ -9361,7 +9457,7 @@ test('loudnorm status event, library RG queue fields, and cancel IPC are wired e
   )
 
   const dspOrchestratorSource = readFileSync(
-    new URL('./audio/dspOrchestrator.ts', import.meta.url),
+    new URL('../core/audio/dspOrchestrator.ts', import.meta.url),
     'utf8'
   )
   assert.ok(managerSource.includes("emit('loudnorm-status'"))
@@ -9397,7 +9493,7 @@ test('loudnorm status event, library RG queue fields, and cancel IPC are wired e
   assert.ok(preloadSource.includes('IPC.audioEngine.loudnormStatus'))
   assert.ok(preloadSource.includes('loudnessAnalysis:cancel'))
   assert.ok(playerStoreSource.includes('loudnormStatus'))
-  assert.ok(playerStoreSource.includes('onLoudnormStatus'))
+  assert.ok(playerStoreSource.includes('core.state.value?.loudness?.status'))
   assert.ok(playerSessionTrackSource.includes('replayGainTrackGainDb'))
   assert.ok(dspStoreSource.includes('loudnormStatus: player.loudnormStatus'))
   assert.ok(hifiSource.includes('loudnormStatusCopy'))

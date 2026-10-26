@@ -2,6 +2,7 @@
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import DownloadSettingsFields from './DownloadSettingsFields.vue'
 import SettingsGroup from './SettingsGroup.vue'
+import MusicMetadataSettings from './MusicMetadataSettings.vue'
 import { ref, watch } from 'vue'
 import type {
   LibraryWatcherStatusSnapshot,
@@ -108,6 +109,7 @@ defineProps<{
         </div>
       </div>
     </div>
+    <MusicMetadataSettings />
     <SettingsGroup
       id="scan-diagnostics"
       title="扫描与诊断"

@@ -3,7 +3,7 @@ import type { GridItem } from './types'
 import AlbumArtwork from './AlbumArtwork.vue'
 import { formatReleaseDate } from '../../../../shared/releaseDate.ts'
 
-defineProps<{ album: GridItem }>()
+withDefaults(defineProps<{ album: GridItem; showTrackCount?: boolean }>(), { showTrackCount: true })
 defineEmits<{ open: [] }>()
 </script>
 
@@ -28,9 +28,11 @@ defineEmits<{ open: [] }>()
       }}</span>
       <span
         class="local-album-meta"
-        :title="`${formatReleaseDate(album.releaseDate)} · ${album.trackCount ?? 0} 首`"
-        >{{ formatReleaseDate(album.releaseDate) }}<span aria-hidden="true"> · </span
-        >{{ album.trackCount ?? 0 }} 首</span
+        :title="`${formatReleaseDate(album.releaseDate)}${showTrackCount ? ` · ${album.trackCount ?? 0} 首` : ''}`"
+        >{{ formatReleaseDate(album.releaseDate)
+        }}<template v-if="showTrackCount"
+          ><span aria-hidden="true"> · </span>{{ album.trackCount ?? 0 }} 首</template
+        ></span
       >
     </span>
   </button>

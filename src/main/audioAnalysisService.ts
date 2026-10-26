@@ -1,3 +1,4 @@
+import { createServicePort } from './services/servicePort.ts'
 import { initializeUtilityDiagnostics } from './diagnostics/utility.ts'
 import { observeDiagnosticOperation } from './diagnostics/observation.ts'
 import { writeDiagnostic } from './diagnostics/logger.ts'
@@ -11,41 +12,13 @@ import {
   loadNativeBindingWithDiagnostics
 } from './audio/nativeBinding.ts'
 import type { NativeAudioBinding } from './audio/audioEngineTypes.ts'
+import { prepareDownloadedMetadata } from '../core/downloads/downloadMetadata.ts'
+import type { DownloadMetadataRequest } from '../shared/coreDownloadMetadata.ts'
+import { runLibraryTagWorker } from '../core/library/tagWorker.ts'
+import type { LibraryTagWorkerRequest } from '../shared/coreLibraryMaintenance.ts'
+import { contentHash } from './library/duplicateDetection.ts'
 
-type ParentPort = {
-  postMessage: (message: AudioAnalysisWorkerMessage) => void
-  on: (event: 'message', listener: (message: AudioAnalysisWorkerRequest) => void) => void
-}
-
-type ElectronParentPort = {
-  postMessage: ParentPort['postMessage']
-  on: (event: 'message', listener: (event: { data: AudioAnalysisWorkerRequest }) => void) => void
-}
-
-type NodeIpcProcess = {
-  send?: ParentPort['postMessage']
-  on?: (event: 'message', listener: (message: AudioAnalysisWorkerRequest) => void) => void
-}
-
-const electronParentPort = (process as unknown as { parentPort?: ElectronParentPort }).parentPort
-const nodeIpc = process as unknown as NodeIpcProcess
-const parentPort: ParentPort | null = electronParentPort
-  ? {
-      postMessage: (message) => electronParentPort.postMessage(message),
-      on: (_event, listener) => electronParentPort.on('message', (event) => listener(event.data))
-    }
-  : typeof nodeIpc.send === 'function' && typeof nodeIpc.on === 'function'
-    ? {
-        postMessage: (message) => nodeIpc.send?.(message),
-        on: (_event, listener) => nodeIpc.on?.('message', listener)
-      }
-    : null
-
-if (!parentPort) {
-  throw new Error('Twilight audio analysis service requires Electron parentPort or Node IPC')
-}
-
-const servicePort = parentPort
+const servicePort = createServicePort<AudioAnalysisWorkerRequest, AudioAnalysisWorkerMessage>()
 initializeUtilityDiagnostics('twilight-audio-analysis')
 const nativeLoad = loadNativeBindingWithDiagnostics()
 const native = nativeLoad.binding
@@ -58,21 +31,25 @@ const startupError = !native
     ? `native audio analysis binding is missing methods: ${missingMethods.join(', ')}`
     : ''
 
-if (startupError) {
-  servicePort.postMessage({ kind: 'fatal', error: startupError })
-} else {
-  servicePort.postMessage({
-    kind: 'ready',
-    protocolVersion: AUDIO_ANALYSIS_PROTOCOL_VERSION,
-    analyses: [
-      'bpm',
-      'loudness',
-      'loudness-batch',
-      'dsp-audition',
-      ...(typeof native?.AnalyzeAutoMix === 'function' ? ['automix' as const] : [])
-    ]
-  })
-}
+servicePort.postMessage({
+  kind: 'ready',
+  protocolVersion: AUDIO_ANALYSIS_PROTOCOL_VERSION,
+  analyses: [
+    'download-metadata',
+    'library-tags',
+    'content-hash',
+    ...(startupError
+      ? []
+      : ([
+          'bpm',
+          'loudness',
+          'loudness-batch',
+          'dsp-audition',
+          ...(typeof native?.GetMetadata === 'function' ? ['metadata' as const] : []),
+          ...(typeof native?.AnalyzeAutoMix === 'function' ? ['automix' as const] : [])
+        ] as const))
+  ]
+})
 
 servicePort.on('message', (message) => {
   if (message.kind !== 'request') return
@@ -82,23 +59,56 @@ servicePort.on('message', (message) => {
   })
 })
 
-function handleRequest(message: AudioAnalysisWorkerRequest): void {
-  if (!native || startupError) {
-    servicePort.postMessage({
-      kind: 'response',
-      requestId: message.requestId,
-      ok: false,
-      error: startupError || 'native audio analysis binding unavailable'
-    })
-    return
-  }
+async function handleRequest(message: AudioAnalysisWorkerRequest): Promise<void> {
   try {
+    if (message.analysis === 'content-hash') {
+      const value = await contentHash(message.source)
+      servicePort.postMessage({ kind: 'response', requestId: message.requestId, ok: true, value })
+      return
+    }
+    if (message.analysis === 'library-tags') {
+      const value = await runLibraryTagWorker(
+        message.source,
+        JSON.parse(message.optionsJson) as LibraryTagWorkerRequest
+      )
+      servicePort.postMessage({ kind: 'response', requestId: message.requestId, ok: true, value })
+      return
+    }
+    if (message.analysis === 'download-metadata') {
+      const request = JSON.parse(message.optionsJson) as DownloadMetadataRequest
+      const value = await prepareDownloadedMetadata({
+        partPath: message.source,
+        targetPath: request.targetPath,
+        track: request.track,
+        preferences: request.preferences,
+        signal: new AbortController().signal,
+        getLyrics: async () => {
+          if (request.lyricFailure) throw new Error('Lyrics unavailable')
+          return request.lyrics
+        },
+        fetchCover: async () => {
+          if (request.coverFailure) throw new Error('Cover unavailable')
+          return request.cover
+            ? {
+                bytes: new Uint8Array(Buffer.from(request.cover.base64, 'base64')),
+                mime: request.cover.mime
+              }
+            : null
+        }
+      })
+      servicePort.postMessage({ kind: 'response', requestId: message.requestId, ok: true, value })
+      return
+    }
+    if (!native || startupError)
+      throw new Error(startupError || 'native audio analysis binding unavailable')
     const method: keyof NativeAudioBinding =
-      message.analysis === 'bpm'
-        ? 'AnalyzeBpm'
-        : message.analysis === 'automix'
-          ? 'AnalyzeAutoMix'
-          : 'AnalyzeLoudness'
+      message.analysis === 'metadata'
+        ? 'GetMetadata'
+        : message.analysis === 'bpm'
+          ? 'AnalyzeBpm'
+          : message.analysis === 'automix'
+            ? 'AnalyzeAutoMix'
+            : 'AnalyzeLoudness'
     const target = native[method]
     if (typeof target !== 'function') throw new Error(`native method unavailable: ${method}`)
     const value = (target as (source: string, optionsJson: string) => unknown)(

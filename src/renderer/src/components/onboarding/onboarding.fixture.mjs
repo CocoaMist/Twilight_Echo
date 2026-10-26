@@ -8,7 +8,7 @@ import '../../assets/base.css'
 import '../../assets/icon-fonts.ts'
 
 const actual = realSettingsStore()
-const settings = actual.settings
+const settings = ref(JSON.parse(JSON.stringify(actual.settings.value)))
 settings.value.motionPreference = 'off'
 document.documentElement.dataset.teMotion = 'off'
 settings.value.theme = 'pureWhite'
@@ -25,6 +25,7 @@ const noop = async () => undefined
 const volume = ref(0.35)
 export const useSettingsStore = () => ({
   ...actual,
+  settings,
   updateSettings: async (patch) => {
     settings.value = { ...settings.value, ...patch }
     return settings.value

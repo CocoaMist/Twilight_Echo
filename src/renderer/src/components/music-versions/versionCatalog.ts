@@ -1,7 +1,9 @@
+import type { TrackData as RawTrack } from '../../../../shared/track.ts'
 import type { Track } from '@renderer/types/music'
+import type { useCoreConnection } from '../../stores/coreConnection.ts'
 import { getAlbumIdentity } from '@renderer/stores/library/musicStoreData.ts'
 import type { LibraryDatabaseApi, LibraryQuery } from '../../../../shared/libraryDatabase.ts'
-import { libraryTrack } from '@renderer/utils/libraryQueuePlayback.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 import { getTrackSource, versionSourceKey } from '@renderer/utils/trackSourceIdentity.ts'
 import type { MusicVersionsDocument, VersionScope } from '@renderer/utils/musicVersions.ts'
 
@@ -24,7 +26,7 @@ export interface VersionCatalogPage {
 }
 
 export function buildVersionCatalog(
-  tracks: readonly Track[],
+  tracks: readonly RawTrack[],
   scope: VersionScope
 ): VersionCatalogItem[] {
   const items = new Map<string, VersionCatalogItem>()
@@ -57,7 +59,7 @@ export function buildVersionCatalog(
         (left, right) =>
           (left.discNumber ?? 1) - (right.discNumber ?? 1) ||
           (left.trackNumber ?? 0) - (right.trackNumber ?? 0) ||
-          left.fileName.localeCompare(right.fileName)
+          (left.fileName ?? left.title).localeCompare(right.fileName ?? right.title)
       )
   return [...items.values()]
 }
@@ -191,4 +193,25 @@ export function versionDescriptions(
       )
   }
   return descriptions
+}
+
+export async function queryCoreVersionCatalog(
+  core: ReturnType<typeof useCoreConnection>,
+  scope: VersionScope,
+  query: import('../../../../shared/coreVersions.ts').CoreVersionsCatalogQuery
+): Promise<VersionCatalogPage> {
+  const page = await core.query('versions.catalog', { ...query, scope })
+  return {
+    ...page,
+    items: page.items.map((item) => ({
+      key: item.key,
+      title: scope === 'tracks' ? item.track.title : item.track.album,
+      artist: item.track.albumArtist || item.track.artist,
+      source: item.track.source ?? 'local',
+      tracks: [item.track],
+      trackCount: item.trackCount ?? 1,
+      trackId: item.track.id,
+      albumId: item.albumId
+    }))
+  }
 }

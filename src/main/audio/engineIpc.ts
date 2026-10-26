@@ -40,7 +40,7 @@ import {
 } from '../audioEngineManager'
 import { normalizeDspScenes, type DspAssetKind } from '../../shared/dspGraph.ts'
 import { normalizeCueRange } from '../../shared/cue.ts'
-import { MAX_NATIVE_QUEUE_ITEMS } from '../../shared/nativeQueue.ts'
+import { MAX_NATIVE_QUEUE_ITEMS, MAX_QUEUE_OCCURRENCE_ID_LENGTH } from '../../shared/nativeQueue.ts'
 import { DspAssetLibrary } from '../dsp/dspAssetLibrary.ts'
 import {
   importCorrectionProfileFile,
@@ -247,7 +247,11 @@ export function toQueueItem(raw: unknown): AudioEngineQueueItem | null {
   try {
     normalizedSource = normalizeIpcString(source, 'queue item source', MAX_AUDIO_SOURCE_LENGTH)
     if (item.queueEntryId !== undefined)
-      queueEntryId = normalizeIpcString(item.queueEntryId, 'queue occurrence', 128)
+      queueEntryId = normalizeIpcString(
+        item.queueEntryId,
+        'queue occurrence',
+        MAX_QUEUE_OCCURRENCE_ID_LENGTH
+      )
     if (queueEntryId !== item.queueEntryId) return null
   } catch {
     return null

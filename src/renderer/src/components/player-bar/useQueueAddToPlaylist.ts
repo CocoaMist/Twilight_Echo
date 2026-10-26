@@ -1,4 +1,5 @@
-import { computed, ref, shallowRef, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue'
+import type { CoreTrackView } from '../../../../shared/coreViews.ts'
 import type { Track } from '../../types/music.ts'
 import {
   getTrackProviderId,
@@ -10,12 +11,14 @@ import {
 import { friendlyStreamingError } from '../streaming-page/friendlyStreamingError.ts'
 
 const MAX_PLAYLIST_NAME_LENGTH = 80
+export type QueuePlaylistEntry = CoreTrackView & { queueEntryId: string; queue: { id: string; revision: number } }
+type PickerTrack = Track | QueuePlaylistEntry
 
 /** Only the fields this picker reads; the music store's `Playlist` satisfies it. */
 export interface QueuePlaylistTarget {
   id: string
   name: string
-  trackIds: string[]
+  count?: number
 }
 
 export interface QueueAddToPlaylistNotice {
@@ -32,12 +35,15 @@ export interface QueueLocalPlaylistRow {
 }
 
 export interface QueueAddToPlaylistOptions {
-  queue: Ref<Track[]>
+  queue: Readonly<Ref<readonly Track[]>>
   playlists: Ref<QueuePlaylistTarget[]> | ComputedRef<QueuePlaylistTarget[]>
   mediaProviders: MediaProviderRegistry
   /** Returns how many entries the playlist actually gained (0 when already a member). */
-  addTracksToPlaylist: (playlistName: string, tracks: Track[]) => number
-  createPlaylistWithTracks: (name: string, tracks: Track[]) => string
+  addTracksToPlaylist: (playlistName: string, tracks: Track[]) => number | Promise<number>
+  addQueueEntry?: (id: string, entry: QueuePlaylistEntry) => Promise<number>
+  getPlaylistMembership?: (id: string, ids: string[]) => Promise<boolean[]>
+  createPlaylist?: (name: string) => string | Promise<string>
+  createPlaylistWithTracks: (name: string, tracks: Track[]) => string | Promise<string>
   notify: (notice: QueueAddToPlaylistNotice) => void
   /** Registers plugin providers before the registry is read. */
   syncProviders?: () => Promise<void>
@@ -56,7 +62,7 @@ function normalizePlaylistName(value: string): string {
  */
 export function useQueueAddToPlaylist(options: QueueAddToPlaylistOptions): {
   open: Ref<boolean>
-  targetTrack: Ref<Track | null>
+  targetTrack: Ref<PickerTrack | null>
   targetLabel: ComputedRef<string>
   localPlaylists: ComputedRef<QueueLocalPlaylistRow[]>
   providerId: Ref<string | null>
@@ -72,19 +78,19 @@ export function useQueueAddToPlaylist(options: QueueAddToPlaylistOptions): {
   newPlaylistName: Ref<string>
   canConfirmCreate: ComputedRef<boolean>
   openForEntry: (queueEntryId: string) => void
-  openForTrack: (track: Track) => void
+  openForTrack: (track: PickerTrack) => void
   close: () => void
   startCreate: (scope: 'local' | 'provider') => void
   cancelCreate: () => void
   reloadProviderPlaylists: () => Promise<void>
-  addToLocalPlaylist: (name: string) => void
+  addToLocalPlaylist: (name: string) => Promise<void>
   confirmCreate: () => Promise<void>
   addToProviderPlaylist: (playlist: MediaProviderPlaylistSummary) => Promise<void>
 } {
   const open = ref(false)
   // Shallow: the detached copy is only ever replaced, and playlist writes must
   // receive a plain object rather than a deep reactive proxy.
-  const targetTrack = shallowRef<Track | null>(null)
+  const targetTrack = shallowRef<PickerTrack | null>(null)
   const errorMessage = ref('')
   const busyTarget = ref<string | null>(null)
   const createScope = ref<'local' | 'provider' | null>(null)
@@ -108,13 +114,25 @@ export function useQueueAddToPlaylist(options: QueueAddToPlaylistOptions): {
     return track.artist ? `${track.title} · ${track.artist}` : track.title
   })
 
+  const memberships = shallowRef(new Map<string, boolean>())
+  watch([open, targetTrack, options.playlists], async () => {
+    memberships.value = new Map()
+    const target = targetTrack.value
+    if (!open.value || !target || !options.getPlaylistMembership) return
+    try {
+      const values = await Promise.all(options.playlists.value.map(async playlist =>
+        [playlist.id, (await options.getPlaylistMembership!(playlist.id, [target.id]))[0]] as const))
+      if (targetTrack.value === target) memberships.value = new Map(values)
+    } catch (error) {
+      if (targetTrack.value === target) errorMessage.value = friendlyStreamingError(error, '读取歌单状态失败')
+    }
+  })
   const localPlaylists = computed<QueueLocalPlaylistRow[]>(() => {
-    const trackId = targetTrack.value?.id
     return options.playlists.value.map((playlist) => ({
       id: playlist.id,
       name: playlist.name,
-      trackCount: playlist.trackIds.length,
-      contains: !!trackId && playlist.trackIds.includes(trackId)
+      trackCount: playlist.count ?? 0,
+      contains: memberships.value.get(playlist.id) ?? false
     }))
   })
 
@@ -148,7 +166,7 @@ export function useQueueAddToPlaylist(options: QueueAddToPlaylistOptions): {
     openForTrack(track)
   }
 
-  function openForTrack(track: Track): void {
+  function openForTrack(track: PickerTrack): void {
     ++providerRequestId
     resetState()
     targetTrack.value = { ...track }
@@ -221,26 +239,45 @@ export function useQueueAddToPlaylist(options: QueueAddToPlaylistOptions): {
     }
   }
 
-  function addToLocalPlaylist(name: string): void {
+  async function addToLocalPlaylist(name: string): Promise<void> {
     const track = targetTrack.value
     if (!track || busyTarget.value) return
     errorMessage.value = ''
-    const added = options.addTracksToPlaylist(name, [{ ...track }])
-    options.notify(
-      added > 0
+    busyTarget.value = `local:${name}`
+    try {
+      let added = 1
+      if ('queue' in track) {
+        const target = options.playlists.value.find(playlist => playlist.name === name)
+        if (!target || !options.addQueueEntry) throw new Error('歌单已变化，请重新选择')
+        added = await options.addQueueEntry(target.id, track)
+      } else {
+        added = await options.addTracksToPlaylist(name, [{ ...track }])
+      }
+      options.notify(added > 0
         ? { kind: 'success', message: `已添加到歌单「${name}」` }
-        : { kind: 'info', message: `「${track.title}」已在歌单「${name}」中` }
-    )
-    close()
+        : { kind: 'info', message: `「${track.title}」已在歌单「${name}」中` })
+      close()
+    } catch (error) {
+      errorMessage.value = friendlyStreamingError(error, '添加到歌单失败')
+    } finally { busyTarget.value = null }
   }
 
-  function createLocalPlaylist(name: string, track: Track): void {
-    options.createPlaylistWithTracks(name, [{ ...track }])
-    options.notify({ kind: 'success', message: `已创建歌单「${name}」并添加` })
-    close()
+  async function createLocalPlaylist(name: string, track: PickerTrack): Promise<void> {
+    busyTarget.value = 'local:create'
+    try {
+      if ('queue' in track) {
+        if (!options.createPlaylist || !options.addQueueEntry) throw new Error('无法创建队列歌单')
+        const id = await options.createPlaylist(name)
+        await options.addQueueEntry(id, track)
+      } else await options.createPlaylistWithTracks(name, [{ ...track }])
+      options.notify({ kind: 'success', message: `已创建歌单「${name}」并添加` })
+      close()
+    } catch (error) {
+      errorMessage.value = friendlyStreamingError(error, '创建歌单或添加歌曲失败')
+    } finally { busyTarget.value = null }
   }
 
-  async function createProviderPlaylist(name: string, track: Track): Promise<void> {
+  async function createProviderPlaylist(name: string, track: PickerTrack): Promise<void> {
     const provider = activeProvider
     const source = providerId.value
     if (!provider?.createPlaylist || !provider.addTracksToPlaylist || !source) return
@@ -276,7 +313,7 @@ export function useQueueAddToPlaylist(options: QueueAddToPlaylistOptions): {
     const name = normalizePlaylistName(newPlaylistName.value)
     if (!track || !scope || !name || busyTarget.value) return
     if (scope === 'local') {
-      createLocalPlaylist(name, track)
+      await createLocalPlaylist(name, track)
       return
     }
     await createProviderPlaylist(name, track)

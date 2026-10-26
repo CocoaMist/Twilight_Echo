@@ -52,9 +52,8 @@ an accidental whole-file Track.
 ## Playback behavior
 
 - Renderer and native positions are relative to the logical track. Seeks are clamped to its logical
-  duration and translated past any virtual prefix to the absolute source offset. The production
-  native path emits real silence for an explicit `PREGAP`; the diagnostic HTMLAudio fallback has
-  no source-independent silence generator and therefore remains a source-range fallback only.
+  duration and translated past any virtual prefix to the absolute source offset. The native
+  decoder emits real silence for an explicit `PREGAP`; local playback has no HTMLAudio fallback.
 - The native decoder stops exactly at `endSeconds`. It preloads the next logical range even when
   it uses the same source file and promotes it without reopening the output device when gapless
   playback is eligible. A preloaded virtual pregap is never consumed underneath the preceding

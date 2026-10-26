@@ -1,109 +1,53 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import type { ProviderDownloadTaskSnapshot } from '../../../../shared/providerDownloads'
-import { useMusicStore } from '../../stores/useMusicStore'
-import { normalizePortableLibraryPath } from '../../stores/library/musicStoreData'
-import type { Track } from '../../types/music'
-import { lookupLibraryTrackByPath } from '../../utils/libraryTrackByPath.ts'
-const props = defineProps<{ task: ProviderDownloadTaskSnapshot }>()
-const music = useMusicStore()
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import type { CoreDownloadTask } from '../../../../shared/coreDownloads.ts'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
+const props = defineProps<{ task: CoreDownloadTask }>()
+const core = useCoreConnection()
 const pending = ref(false)
 const error = ref('')
 const submitted = ref(false)
 const indexState = ref<'checking' | 'indexed' | 'missing' | 'unknown'>('checking')
-const indexedTrack = shallowRef<Track | null>(null)
 const indexError = ref('')
-const storageMode = ref<'json' | 'sqlite' | null>(null)
-const indexed = computed(() => indexState.value === 'indexed' && indexedTrack.value !== null)
+const indexed = computed(() => indexState.value === 'indexed')
 let indexRequest = 0
-let stopLibraryChanged: (() => void) | undefined
-
-async function findIndexedTrack(filePath: string): Promise<Track | null> {
-  const mode = await window.api.library.getStorageMode()
-  storageMode.value = mode === 'json' || mode === 'sqlite' ? mode : null
-  if (mode === 'json') {
-    const path = normalizePortableLibraryPath(filePath)
-    return (
-      music.tracks.value.find((track) => normalizePortableLibraryPath(track.filePath) === path) ??
-      null
-    )
-  }
-  if (mode === 'sqlite')
-    return lookupLibraryTrackByPath(filePath, window.api.library.database)
-  throw new Error('无法确认曲库存储状态')
-}
-
 async function refreshIndexedTrack() {
   const request = ++indexRequest
-  const path = props.task.targetPath || ''
   indexState.value = 'checking'
-  indexedTrack.value = null
   indexError.value = ''
-  if (!path) {
-    indexState.value = 'missing'
-    return
-  }
   try {
-    const track = await findIndexedTrack(path)
+    const result = await core.query('downloads.indexed', { id: props.task.id })
     if (request !== indexRequest) return
-    indexedTrack.value = track
-    indexState.value = track ? 'indexed' : 'missing'
+    indexState.value = result.indexed ? 'indexed' : 'missing'
   } catch (cause) {
     if (request !== indexRequest) return
     indexError.value = cause instanceof Error ? cause.message : String(cause)
     indexState.value = 'unknown'
   }
 }
-
-watch(() => props.task.targetPath, refreshIndexedTrack, { immediate: true })
-watch(
-  () => (storageMode.value === 'json' ? music.tracks.value : null),
-  () => {
-    if (storageMode.value === 'json') void refreshIndexedTrack()
-  }
-)
-onMounted(() => {
-  stopLibraryChanged = window.api.library.onChanged(() => void refreshIndexedTrack())
+watch(() => [props.task.id, core.state.value?.libraryRevision], refreshIndexedTrack, {
+  immediate: true
 })
 onBeforeUnmount(() => {
   indexRequest++
-  stopLibraryChanged?.()
 })
-
 const indexLabel = computed(() => {
   if (indexState.value === 'checking') return '正在检查曲库…'
   if (indexed.value) return '已在曲库'
   if (indexState.value === 'unknown') return '无法确认曲库状态'
   return submitted.value ? '已提交索引；稍后可在曲库查看' : '尚未在曲库索引中'
 })
-
-function fallbackTrack(filePath: string): Track {
-  return {
-    id: `download:${props.task.id}`,
-    source: 'local',
-    title: props.task.track.title,
-    artist: props.task.track.artist,
-    album: props.task.track.album || '',
-    filePath,
-    fileName: filePath.split(/[\\/]/).pop() || '',
-    duration: 0,
-    size: props.task.fileSize || 0,
-    cover: null,
-    lyrics: null
-  }
-}
 async function act(action: 'play' | 'reveal' | 'add') {
   if (pending.value) return
   pending.value = true
   error.value = ''
   try {
-    const filePath = await window.api.providerDownloads.result(props.task.id, action === 'add')
-    if (action === 'add') submitted.value = true
-    if (action === 'reveal') await window.api.shell.showItemInFolder(filePath)
-    if (action === 'play') {
-      const { usePlayerStore } = await import('../../stores/usePlayerStore')
-      const track = (await findIndexedTrack(filePath).catch(() => null)) ?? fallbackTrack(filePath)
-      await usePlayerStore().playTrack(track, [track])
+    if (action === 'play') await core.command('downloads.play', { id: props.task.id })
+    else if (action === 'reveal') await core.command('downloads.reveal', { id: props.task.id })
+    else {
+      await core.command('downloads.result', { id: props.task.id, addToLibrary: true })
+      submitted.value = true
+      await refreshIndexedTrack()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '操作失败，请重试'

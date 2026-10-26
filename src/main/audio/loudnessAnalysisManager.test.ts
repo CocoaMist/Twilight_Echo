@@ -12,6 +12,39 @@ import {
 } from './loudnessCache.ts'
 import { LoudnessAnalysisManager } from './loudnessAnalysisManager.ts'
 
+test('a cache peek spanning maintenance cannot publish the pre-clear measurement after resume', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'loudness-peek-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const filePath = join(root, 'one.wav')
+  await writeFile(filePath, 'source')
+  const cache = new LoudnessAnalysisCache(join(root, 'cache.json'))
+  let started!: () => void, release!: () => void
+  const reading = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  cache.get = async () => {
+    started()
+    await gate
+    return {
+      integratedLufs: -20,
+      truePeakDb: -1,
+      source: 'analyzed',
+      analyzedAt: '2026-10-23T00:00:00Z',
+      algorithmVersion: 2
+    }
+  }
+  const manager = new LoudnessAnalysisManager({ cache, analyzeFile: async () => null })
+  const peek = manager.peekCached({ trackId: 'one', filePath })
+  await reading
+  manager.suspend()
+  manager.resume()
+  release()
+  assert.equal(await peek, null)
+})
+
 class DeferredLoudnessCache extends LoudnessAnalysisCache {
   readonly committed: Promise<void>
   private resolveCommitted: () => void = () => undefined

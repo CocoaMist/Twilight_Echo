@@ -1,17 +1,12 @@
 import { computed, shallowRef, toRaw } from 'vue'
-import {
-  LIBRARY_PAGE_SIZE,
-  type LibraryDatabaseApi,
-  type LibraryQuery,
-  type LibraryPage
-} from '../../../../shared/libraryDatabase.ts'
-import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
-import { createLibraryPlaylistView } from './libraryPlaylistView.ts'
+import { LIBRARY_PAGE_SIZE, type LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { createCoreLibraryApi } from './coreLibraryApi.ts'
+import type { CoreLibraryPage as LibraryPage } from '../../../../shared/coreViews.ts'
 import { createLibraryTrackPages } from './libraryTrackPages.ts'
 import { createLibraryCollectionWindow } from './libraryCollectionWindow.ts'
 import { createLibraryTrackWindow } from './libraryTrackWindow.ts'
 import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
-import type { Playlist } from './musicStoreTypes.ts'
+import type { CorePlaylistDescriptor as Playlist } from '../../../../shared/corePlaylists.ts'
 import type { Track } from '../../types/music.ts'
 
 export type AggregateRowMetadata = NonNullable<LibraryPage['aggregate']>['rows'][number]
@@ -21,18 +16,9 @@ type Input = {
   playlists: Playlist[]
   search: string
   revision: number
-  versions: RecordingVersion[]
 }
 
-/** One visible aggregate page owns its private definitions and bounded reading
- * windows. Background instances release leases; uncertain queue mutations are
- * never replayed. The original JSON arrays remain a separate caller path. */
-export function createLibraryAggregatePlaylist(
-  api: Pick<
-    LibraryDatabaseApi,
-    'syncPlaylistView' | 'queryTracks' | 'queryCollections' | 'getMetadata'
-  >
-) {
+export function createLibraryAggregatePlaylist(api: ReturnType<typeof createCoreLibraryApi>) {
   // All detail, menu, source, catalog and deletion reads share two transport
   // slots, including late responses from a previous selection.
   let activeReads = 0
@@ -53,23 +39,25 @@ export function createLibraryAggregatePlaylist(
       else activeReads--
     }
   }
-  const detail = createLibraryPlaylistView(api),
-    catalog = createLibraryPlaylistView(api)
+  const detail = api.createPlaylistView(),
+    catalog = api.createPlaylistView()
   const input = shallowRef<Input>({
     enabled: false,
     playlist: null,
     playlists: [],
     search: '',
-    revision: 0,
-    versions: []
+    revision: 0
   })
   const mapPage = (page: LibraryPage) => ({
     ...page,
     tracks: page.tracks.map((record) => ({ ...libraryTrack(record) }))
   })
-  const queryTracks = async (query?: LibraryQuery) => {
+  const queryTracks = async (
+    query?: LibraryQuery,
+    options?: { includeHiddenSources?: boolean }
+  ) => {
     try {
-      return mapPage(await read(() => api.queryTracks(query)))
+      return mapPage(await read(() => api.queryTracks(query, options)))
     } catch (error) {
       if (query?.playlistView) detail.recover(query.playlistView, error)
       throw error
@@ -94,16 +82,15 @@ export function createLibraryAggregatePlaylist(
           playlistView: detail.state.value.id,
           sort: 'playlist',
           search: input.value.search,
-          aggregate: {
-            hiddenSources: [...(input.value.playlist.hiddenSources ?? [])],
-            variantPreferences: { ...input.value.playlist.variantPreferences }
-          }
+          aggregate: {}
         }
       : null
   )
   const menu = shallowRef<{ rowId: string; generation: number; revision: number } | null>(null)
   let detailIntent = '',
-    catalogIntent = ''
+    detailScopeIntent = '',
+    catalogIntent = '',
+    detailLeaseIntent = ''
   let pageQuery = '',
     sourceQuery = '',
     cardQuery = '',
@@ -119,13 +106,20 @@ export function createLibraryAggregatePlaylist(
       input.value.playlist?.id,
       input.value.search,
       input.value.playlist?.hiddenSources,
-      input.value.playlist?.variantPreferences
+      input.value.revision
+    ])
+    const scopeIntent = JSON.stringify([
+      input.value.enabled,
+      input.value.playlist?.id,
+      input.value.search,
+      input.value.playlist?.hiddenSources
     ])
     if (key !== pageQuery || intent !== detailIntent) {
       pageQuery = key
       const preservePosition =
-        !!input.value.playlist && input.value.enabled && intent === detailIntent
+        !!input.value.playlist && input.value.enabled && scopeIntent === detailScopeIntent
       detailIntent = intent
+      detailScopeIntent = scopeIntent
       pages.setQuery(next, preservePosition)
       closeVariants()
       generation++
@@ -235,18 +229,21 @@ export function createLibraryAggregatePlaylist(
         previous.enabled !== value.enabled ||
         previous.playlist?.id !== value.playlist?.id ||
         previous.revision !== value.revision ||
-        previous.playlist?.trackIds !== value.playlist?.trackIds ||
-        previous.playlist?.trackSnapshots !== value.playlist?.trackSnapshots
+        previous.playlist !== value.playlist
       )
         generation++
-      void detail.setPlaylist(value.enabled ? value.playlist : null, {
-        revision: value.revision,
-        versions: value.versions,
-        preserveSources: true
-      })
+      const leaseIntent = JSON.stringify([
+        value.enabled,
+        value.playlist?.id,
+        value.revision
+      ])
+      if (leaseIntent !== detailLeaseIntent) {
+        detailLeaseIntent = leaseIntent
+        void detail.setPlaylist(value.enabled ? value.playlist : null, {
+          preserveSources: true
+        })
+      }
       void catalog.setCatalog(value.enabled && !value.playlist ? value.playlists : null, {
-        revision: value.revision,
-        versions: value.versions,
         preserveSources: true
       })
       updateQueries()
@@ -332,22 +329,15 @@ export function createLibraryAggregatePlaylist(
         playlist = input.value.playlist
       if (!row || !page || !next || !playlist) return null
       const captured = generation,
-        ids = playlist.trackIds,
-        snapshots = playlist.trackSnapshots,
-        options = JSON.stringify([playlist.hiddenSources, playlist.variantPreferences]),
+        options = JSON.stringify(playlist.hiddenSources),
         revision = input.value.revision
       const valid = () =>
         !disposed &&
         generation === captured &&
         input.value.enabled &&
         input.value.playlist?.id === playlist.id &&
-        input.value.playlist.trackIds === ids &&
-        input.value.playlist.trackSnapshots === snapshots &&
         input.value.revision === revision &&
-        JSON.stringify([
-          input.value.playlist.hiddenSources,
-          input.value.playlist.variantPreferences
-        ]) === options
+        JSON.stringify(input.value.playlist.hiddenSources) === options
       removing = true
       action.value = { pending: true, error: '' }
       try {
@@ -360,14 +350,11 @@ export function createLibraryAggregatePlaylist(
             offset,
             limit: LIBRARY_PAGE_SIZE,
             aggregate: { variantRow: row.meta.rowId }
-          })
+          }, { includeHiddenSources: true })
           if (!valid()) throw new Error('聚合歌单在移除期间发生变化，请重试')
-          if (part.entryIds?.length !== part.tracks.length) throw new Error('无效的录音成员分页')
-          for (const entry of part.entryIds) {
-            const id = ids[Number(entry)]
-            if (id === undefined) throw new Error('录音成员身份已变化')
-            result.add(id)
-          }
+          if (part.definitionIds?.length !== part.tracks.length)
+            throw new Error('无效的录音成员分页')
+          for (const id of part.definitionIds) result.add(id)
           if (offset + part.tracks.length >= part.total) break
           if (!part.tracks.length) throw new Error('录音成员分页未前进')
         }

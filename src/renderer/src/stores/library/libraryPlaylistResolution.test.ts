@@ -3,13 +3,13 @@ import test, { type TestContext } from 'node:test'
 import { ref, shallowRef } from 'vue'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import type { LibraryDatabaseApi } from '../../../../shared/libraryDatabase.ts'
+import { createLogicalTrackModel } from '../../../../shared/logicalTrackModel.ts'
+import type { PlaylistRuntime } from '../../../../core/playlists/ports.ts'
 import {
   readLibraryPlaylistTracks,
   playlistRecordingIdentity
 } from './libraryPlaylistResolution.ts'
-import { createPlaylistTrackResolver } from './playlistTrackResolver.ts'
-import { loadMusicVersions } from '../musicVersions.ts'
-import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
+import { createPlaylistTrackResolver } from '../../../../core/playlists/trackResolver.ts'
 import { LIBRARY_RECORDING_INDEX_EXPRESSION } from '../../../../main/library/libraryDatabasePlaylist.ts'
 import { createPlaylistController } from './playlistController.ts'
 import {
@@ -18,7 +18,7 @@ import {
 } from '../../utils/playlistLifecycle.ts'
 import type { Playlist, PlaylistPersistenceNotice } from './musicStoreTypes.ts'
 import type { PlaylistPersistenceStatus } from '../playlistPersistence.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 
 function track(id: string, patch: Partial<Track> = {}): Track {
   return {
@@ -127,12 +127,17 @@ test('playlist resolution honors a shared revision and awaits each asynchronous 
 
 test('stable mixed-source playlist export reads every member in 200-record windows, retains duplicates and preserves legacy text', async (t) => {
   const f = fixture(t)
+  const sources = new Map([...f.tracks, f.remote].map((track) => [track.id, track]))
   for (const format of ['m3u', 'm3u8', 'pls'] as const) {
     const writer = createPlaylistDocumentWriter(format)
     await readLibraryPlaylistTracks(f.playlist, f.api, {
       getVersions: () => ({ revision: 0, versions: [] }),
       consume: (tracks) => {
-        for (const track of tracks) writer.append(track)
+        for (const track of tracks) {
+          const source = sources.get(track.id)
+          assert.ok(source)
+          writer.append(source)
+        }
       }
     })
     assert.equal(
@@ -195,11 +200,16 @@ for (const phase of ['lookup', 'hydration', 'final-check', 'preferences', 'incom
         return f.db.getMetadata()
       }
     const writer = createPlaylistDocumentWriter('pls')
+    const sources = new Map([...f.tracks, f.remote].map((track) => [track.id, track]))
     await assert.rejects(
       readLibraryPlaylistTracks(f.playlist, f.api, {
         getVersions: () => ({ revision: version, versions: [] }),
         consume: (batch) => {
-          for (const track of batch) writer.append(track)
+          for (const track of batch) {
+            const source = sources.get(track.id)
+            assert.ok(source)
+            writer.append(source)
+          }
           if (phase === 'preferences') version++
         }
       }),
@@ -250,36 +260,7 @@ test('async export guards playlist identity and concurrent order/snapshot change
   assert.equal(await controller.exportPlaylistDocumentAsync('unknown', 'pls'), null)
 })
 
-function setVersions(t: TestContext, versions: RecordingVersion[] = []) {
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: () =>
-        JSON.stringify({
-          version: 1,
-          tracks: {
-            versions: versions.map((version) => ({ ...version, label: version.id })),
-            families: []
-          },
-          albums: { versions: [], families: [] }
-        })
-    }
-  })
-  loadMusicVersions()
-  t.after(() => {
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: { getItem: () => null }
-    })
-    loadMusicVersions()
-    if (original) Object.defineProperty(globalThis, 'localStorage', original)
-    else Reflect.deleteProperty(globalThis, 'localStorage')
-  })
-}
-
 test('indexed recording fallback exactly matches the existing resolver across duration groups, sources, NFKC and incomplete identities', (t) => {
-  setVersions(t)
   const recording = (id: string, patch: Partial<Track> = {}) =>
     track(id, { title: 'Song', ...patch })
   const tracks = [
@@ -318,7 +299,16 @@ test('indexed recording fallback exactly matches the existing resolver across du
   const resolver = createPlaylistTrackResolver({
     tracks: shallowRef(tracks),
     trackById: new Map(tracks.map((item) => [item.id, item])),
-    getTracksRevision: () => 1
+    getTracksRevision: () => 1,
+    runtime: {
+      now: Date.now,
+      newId: () => 'test',
+      clone: (value) => structuredClone(value),
+      notify: () => {},
+      identity: createLogicalTrackModel(() => undefined),
+      versions: { ensure: () => {}, revision: () => 0 },
+      repository: { load: async () => [], save: async () => ({ data: [], revision: 0 }) }
+    } satisfies PlaylistRuntime
   })
   for (const preserveSources of [false, true]) {
     const expected = snapshots.map((snapshot) => {

@@ -1,431 +1,97 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
-import test, { type TestContext } from 'node:test'
+import test from 'node:test'
 import ts from 'typescript'
-import { computed, nextTick, ref, watch } from 'vue'
-import { LibraryDatabase } from '../../../main/library/libraryDatabase.ts'
-import type { LibraryCollectionSummary, LibraryQuery } from '../../../shared/libraryDatabase.ts'
+import { ref } from 'vue'
+import { readCoreDashboard } from './local-dashboard/coreDashboard.ts'
+import type { CorePlayerClient } from '../stores/player/corePlayerTypes.ts'
 import type { Track } from '../types/music.ts'
-import { createLibraryDashboard } from '../stores/library/libraryDashboard.ts'
-import {
-  createUnifiedRecentTrackResolver,
-  type UnifiedRecentStat
-} from '../utils/unifiedRecentTracks.ts'
-import { getTrackSource } from '../utils/trackSourceIdentity.ts'
 
-const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
-function fixture(t: TestContext, mode: 'json' | 'sqlite' = 'sqlite', preview = false) {
-  const db = new LibraryDatabase(':memory:')
-  const tracks: Track[] = Array.from({ length: 405 }, (_, i) => ({
-    id: `track:${i}`,
-    title: `Song ${i}`,
-    artist: `Artist ${i % 3}`,
-    album: `Album ${i % 7}`,
-    filePath: `D:/Music/${i}.flac`,
-    fileName: `${i}.flac`,
-    duration: 180,
-    size: 1,
-    cover: null,
-    lyrics: null,
-    trackNumber: 405 - i,
-    source: 'local'
-  }))
-  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks })
-  const top = ref<UnifiedRecentStat[]>([]),
-    latest = ref<UnifiedRecentStat[]>([])
-  const current = ref<Track | null>(null),
-    version = ref(0)
-  let fail = false,
-    callback: ((change: { kind: 'database'; revision: number }) => void) | undefined
-  let subscribed = 0,
-    removed = 0,
-    sqlCalls = 0
-  let held = false,
-    lookups = 0
-  const releases: Array<() => void> = []
-  const queries: Array<{ query: LibraryQuery; selected?: string; options?: unknown }> = []
-  const arrays: Array<{ track: Track; ids: string[] }> = []
-  const queues: ReturnType<typeof db.createLibraryQueue>[] = []
-  const modes: string[] = []
-  const player = {
-    currentTrack: current,
-    isPlaying: ref(false),
-    playTrack: (track: Track, items: Track[]) =>
-      arrays.push({ track, ids: items.map((item) => item.id) }),
-    playLibraryQuery: async (query: LibraryQuery, selected?: string, options?: unknown) => {
-      queries.push({ query, selected, options })
-      queues.push(db.createLibraryQueue(query, selected))
-    },
-    setPlayMode: (value: string) => modes.push(value),
-    togglePlay() {},
-    next() {},
-    prev() {}
+const track = (id: string): Track => ({ id, title: id, artist: 'Artist', album: 'Release', duration: 180, size: 1 })
+
+test('home reads Core totals and bounded shelves at one content revision', async () => {
+  const calls: Array<{ name: string; payload: Record<string, unknown> }> = []
+  const core = { query: async (name: string, payload: Record<string, unknown>) => {
+    calls.push({ name, payload })
+    if (name === 'library.artwork') return { revision: 4, items: [{ id: 'song:1', cover: 'cover://one' }] }
+    if (name === 'library.collections') return { revision: 4, items: payload.kind === 'albums' ? [{ id: 'release:1', name: 'Release', trackCount: 100 }] : [], total: payload.kind === 'albums' ? 500 : 800 }
+    const recent = payload.direction === 'desc'
+    return { revision: 4, tracks: Array.from({ length: 6 }, (_, i) => track(`song:${recent ? i + 4 : i}`)), total: 300000, totalDuration: 54000000 }
+  } } as Pick<CorePlayerClient, 'query'>
+  const result = await readCoreDashboard(core)
+  assert.equal(result.total, 300000)
+  assert.equal(result.duration, 54000000)
+  assert.equal(result.albumCount, 500)
+  assert.equal(result.artistCount, 800)
+  assert.equal(result.first.length, 6)
+  assert.equal(result.recent.length, 6)
+  assert.equal(result.first[1].cover, 'cover://one')
+  assert.equal(result.first[0].cover, null)
+  assert.equal(calls.length, 5)
+  assert.deepEqual(calls[0], { name: 'library.tracks', payload: { sort: 'playlist', limit: 6 } })
+  assert.equal((calls[4].payload.ids as string[]).length, 10)
+  assert.equal(calls[4].payload.revision, 4)
+  for (const call of calls.slice(1, 4)) {
+    const query = (call.payload.query ?? call.payload) as Record<string, unknown>
+    assert.equal(query.contentRevision, 4)
   }
-  const mounts: Array<() => void> = [],
-    unmounts: Array<() => void> = [],
-    stops: Array<() => void> = []
-  const forbidden = {
-    get value(): never {
-      throw new Error('full renderer library access')
-    }
-  }
-  const database = Object.fromEntries(
-    [
-      'queryTracks',
-      'queryCollections',
-      'getTracksByIds',
-      'getMetadata',
-      'lookupPlaylistTracks'
-    ].map((method) => [
-      method,
-      async (...args: unknown[]) => {
-        sqlCalls++
-        if (method === 'getTracksByIds') {
-          lookups++
-          if (held)
-            await new Promise<void>((resolve) => {
-              releases.push(resolve)
-            })
-        }
-        if (fail) throw new Error('database offline')
-        return (db[method as keyof LibraryDatabase] as (...args: unknown[]) => unknown).apply(
-          db,
-          args
-        )
-      }
-    ])
-  )
-  const source = readFileSync(new URL('./LocalDashboard.vue', import.meta.url), 'utf8')
-  const script = source
-    .match(/<script\b[^>]*>([\s\S]*?)<\/script>/)![1]
-    .split('// ---------- Listening calendar ----------')[0]
-  const ast = ts.createSourceFile('dashboard.ts', script, ts.ScriptTarget.Latest, true)
-  const code = ast.statements
-    .filter((node) => !ts.isImportDeclaration(node))
-    .map((node) => node.getText(ast))
-    .join('\n')
-  const entry = runInNewContext(
-    ts.transpileModule(
-      code +
-        `\n({dashboard, dashboardTrackCount, dashboardAlbumCount, dashboardArtistCount,
-    databaseDashboard, dashboardError, dashboardReadPending, hasLibrary, heroTrack, recentlyAdded, albumShelf, totalDuration,
-    rankedStats, lastPlayedTrack, playDashboardTrack, shuffleAll, playAlbum, retryDashboard})`,
-      {
-        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
-      }
-    ).outputText,
-    {
-      computed,
-      ref,
-      Error,
-      useDomTrackLocator() {},
-      watch: (...args: Parameters<typeof watch>) => {
-        const stop = watch(...args)
-        stops.push(stop)
-        return stop
-      },
-      onMounted: (mount: () => void) => mounts.push(mount),
-      onBeforeUnmount: (unmount: () => void) => unmounts.push(unmount),
-      defineProps: () => (preview ? { previewTracks: tracks.slice(0, 3) } : {}),
-      defineEmits: () => () => {},
-      useMusicStore: () =>
-        mode === 'sqlite'
-          ? { tracks: forbidden, albums: forbidden, artists: forbidden }
-          : { tracks: ref(tracks), albums: ref([]), artists: ref([]) },
-      useListeningStatsStore: () => ({ listeningStats: ref({ days: {} }) }),
-      usePlayerStore: () => player,
-      useAudioOutputDspStore: () => ({
-        audioProcessing: ref({}),
-        playbackInfo: ref(null),
-        outputInfo: ref(null)
-      }),
-      storeToRefs: (store: unknown) => store,
-      getMostListenedTracks: () => top.value,
-      getRecentTracks: () => latest.value,
-      waitForListeningStatsReady: async () => {},
-      musicVersionRevision: version,
-      getMusicVersions: () => ({ tracks: { versions: [] } }),
-      createLibraryDashboard,
-      createUnifiedRecentTrackResolver,
-      getTrackSource,
-      resolveTimeGreeting: () => '你好',
-      refreshDspRouteState: async () => {},
-      refreshDspGraphStatus: async () => {},
-      refreshDspSceneState: async () => {},
-      dspRoutePoll: null,
-      dspRouteDialogOpen: ref(false),
-      dspRouteDirty: false,
-      dspRoutePollTick: 0,
-      window: {
-        setInterval: () => 1,
-        clearInterval() {},
-        api: {
-          library: {
-            getStorageMode: async () => mode,
-            onChanged: (listener: typeof callback) => {
-              subscribed++
-              callback = listener
-              return () => {
-                removed++
-              }
-            },
-            database
-          }
-        }
-      }
-    }
-  ) as {
-    dashboard: ReturnType<typeof createLibraryDashboard>
-    dashboardTrackCount: { value: number }
-    dashboardAlbumCount: { value: number }
-    dashboardArtistCount: { value: number }
-    databaseDashboard: { value: boolean }
-    dashboardError: { value: string }
-    dashboardReadPending: { value: boolean }
-    hasLibrary: { value: boolean }
-    heroTrack: { value: Track | null }
-    recentlyAdded: { value: Track[] }
-    albumShelf: { value: LibraryCollectionSummary[] }
-    totalDuration: { value: { value: string; unit: string } }
-    rankedStats: { value: Array<{ track: Track | null }> }
-    lastPlayedTrack: { value: Track | null }
-    playDashboardTrack(track: Track): void
-    shuffleAll(): void
-    playAlbum(album: LibraryCollectionSummary): void
-    retryDashboard(): void
-  }
-  async function settled() {
-    await nextTick()
-    for (
-      let i = 0;
-      i < 100 && (entry.dashboard.requests.active || entry.dashboard.requests.pending);
-      i++
-    )
-      await tick()
-    assert.equal(entry.dashboard.requests.active, 0)
-    assert.equal(entry.dashboard.requests.pending, 0)
-  }
-  let mounted = false,
-    closed = false
-  function unmount() {
-    if (closed) return
-    closed = true
-    for (const hook of unmounts) hook()
-    for (const stop of stops) stop()
-  }
-  t.after(() => {
-    unmount()
-    db.close()
+})
+
+test('home reports a changed Core revision instead of mixing shelves', async () => {
+  const core = { query: async (name: string, payload: Record<string, unknown>) => {
+    if (name === 'library.artwork') return { revision: 9, items: [] }
+    if (name === 'library.collections') return { revision: 8, total: 0, items: [] }
+    return { revision: 8, total: 1, tracks: payload.direction ? [] : [track('one')] }
+  } } as Pick<CorePlayerClient, 'query'>
+  await assert.rejects(readCoreDashboard(core), /曲库已变化/)
+})
+
+function playbackFixture(preview = false) {
+  const source = readFileSync(new URL('./LocalDashboard.vue', import.meta.url), 'utf8').match(/<script\b[^>]*>([\s\S]*?)<\/script>/)![1]
+  const ast = ts.createSourceFile('home.ts', source, ts.ScriptTarget.Latest, true)
+  const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && ['playDashboardTrack', 'shuffleAll', 'playAlbum'].includes(node.name?.text ?? '')).map(node => node.getText(ast)).join('\n')
+  const calls: Array<{ kind: string; query?: unknown; selected?: string; options?: unknown; tracks?: Track[] }> = []
+  let failure = ''
+  const error = ref(''), items = Array.from({ length: 405 }, (_, i) => track(String(i)))
+  const js = ts.transpileModule(`${functions}; ({playDashboardTrack,shuffleAll,playAlbum})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const actions = runInNewContext(js, {
+    Error, props: { previewTracks: preview ? items : undefined }, previewTracks: ref(items), DASHBOARD_QUEUE_WINDOW: 200,
+    dashboardActionError: error, dashboardTrackCount: ref(300000), dashboardState: ref({ data: { revision: 8 } }),
+    getTrackSource: (value: Track) => value.source ?? 'local',
+    playTrack: async (_track: Track, tracks: Track[]) => { if (failure) throw Error(failure); calls.push({ kind: 'tracks', tracks }) },
+    playbackStore: { playLibraryQuery: async (query: unknown, selected?: string, options?: unknown) => { if (failure) throw Error(failure); calls.push({ kind: 'query', query, selected, options }) } }
   })
-  return {
-    entry,
-    db,
-    tracks,
-    queries,
-    queues,
-    arrays,
-    modes,
-    top,
-    latest,
-    current,
-    settled,
-    mount: () => {
-      assert.equal(mounted, false)
-      mounted = true
-      for (const hook of mounts) hook()
-    },
-    change: () => callback?.({ kind: 'database', revision: db.getMetadata().revision }),
-    fail: (value: boolean) => {
-      fail = value
-    },
-    unmount,
-    holdLookups: (value: boolean) => {
-      held = value
-    },
-    releaseLookup: () => {
-      assert.ok(releases.length)
-      releases.shift()!()
-    },
-    get lookups() {
-      return lookups
-    },
-    get sqlCalls() {
-      return sqlCalls
-    },
-    get subscribed() {
-      return subscribed
-    },
-    get removed() {
-      return removed
-    }
-  }
+  return { ...actions, calls, error, items, fail: (value: string) => { failure = value } }
 }
 
-test('production home uses SQL totals, bounded shelves and full-library/album playback with no renderer tracks', async (t) => {
-  const f = fixture(t),
-    e = f.entry
-  assert.equal(e.dashboardReadPending.value, true)
-  assert.equal(e.databaseDashboard.value, true)
-  f.mount()
-  await f.settled()
-  assert.equal(e.dashboardError.value, '')
-  assert.equal(e.dashboardTrackCount.value, 405)
-  assert.equal(e.dashboardAlbumCount.value, 7)
-  assert.equal(e.dashboardArtistCount.value, 3)
-  assert.equal(e.totalDuration.value.value, '20.3')
-  assert.equal(e.hasLibrary.value, true)
-  assert.equal(e.heroTrack.value?.id, 'track:0')
-  assert.deepEqual(
-    Array.from(e.recentlyAdded.value, (track) => track.id),
-    f.tracks
-      .slice(-6)
-      .reverse()
-      .map((track) => track.id)
-  )
-  assert.equal(e.albumShelf.value.length, 5)
-  assert.ok(e.albumShelf.value.every((album) => !('tracks' in album)))
-  e.playDashboardTrack(e.recentlyAdded.value[0])
-  await tick()
-  assert.equal(f.queues[0].total, 405)
-  assert.equal(f.queues[0].index, 404)
-  assert.equal(f.db.readLibraryQueue(f.queues[0].id, 0, 1).items[0].track?.id, 'track:0')
-  assert.equal(f.queries[0].query.contentRevision, f.db.getMetadata().revision)
-  e.shuffleAll()
-  assert.equal(f.queues[1].total, 405)
-  assert.deepEqual(JSON.parse(JSON.stringify(f.queries[1].options)), {
-    randomStart: true,
-    playMode: 'shuffle'
-  })
-  e.playAlbum(e.albumShelf.value[0])
-  const album = f.db.readLibraryQueue(f.queues[2].id)
-  assert.equal(album.total, e.albumShelf.value[0].trackCount)
-  assert.deepEqual(
-    album.items.map((item) => item.track?.id),
-    f.tracks
-      .filter((track) => track.album === e.albumShelf.value[0].name)
-      .reverse()
-      .map((track) => track.id)
-  )
-  assert.equal(f.arrays.length, 0)
-  assert.equal(f.subscribed, 1)
-
-  f.latest.value = [
-    {
-      id: 'recent',
-      sourceIds: [{ trackId: 'track:400', source: 'local' }],
-      track: f.tracks[400],
-      title: 'Recent',
-      artist: 'Artist',
-      cover: null,
-      seconds: 100,
-      plays: 1,
-      lastPlayed: 100,
-      skips: 0,
-      completions: 0
-    }
-  ]
-  await f.settled()
-  assert.equal(e.lastPlayedTrack.value?.id, 'track:400')
-  assert.equal(e.heroTrack.value?.id, 'track:400')
-  const remote = { ...f.tracks[0], id: 'ncm:1', source: 'ncm' as const, ncmSongId: 1 }
-  e.playDashboardTrack(remote)
-  assert.deepEqual(Array.from(f.arrays[0].ids), ['ncm:1'])
-  f.current.value = remote
-  assert.equal(e.heroTrack.value?.id, 'ncm:1')
-  e.playDashboardTrack({ ...f.tracks[0], id: 'missing-local' })
-  await tick()
-  assert.deepEqual(
-    Array.from(f.arrays[1].ids),
-    ['missing-local'],
-    'only confirmed missing local snapshots retain singleton playback'
-  )
-  f.fail(true)
-  e.playDashboardTrack(f.tracks[400])
-  await tick()
-  assert.equal(e.dashboardError.value, 'database offline')
-  assert.equal(f.arrays.length, 2, 'database errors cannot fall back to a snapshot')
-  f.fail(false)
-
-  f.db.patchTracks([{ id: 'track:0', expectedVersion: 1, patch: { duration: 3600 } }])
-  f.change()
-  await f.settled()
-  assert.equal(e.totalDuration.value.value, '21.2')
-  f.unmount()
-  const calls = f.sqlCalls
-  f.top.value = f.latest.value
-  await f.settled()
-  assert.equal(f.sqlCalls, calls)
-  assert.equal(f.removed, 1)
+test('home sends library playback and shuffle to Core; preview alone builds a bounded UI queue', async () => {
+  const home = playbackFixture()
+  await home.playDashboardTrack(track('song:1'))
+  home.shuffleAll()
+  home.playAlbum({ id: 'release:1' })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(JSON.parse(JSON.stringify(home.calls)), [
+    { kind: 'query', query: { sort: 'playlist', contentRevision: 8 }, selected: 'song:1' },
+    { kind: 'query', query: { sort: 'playlist', contentRevision: 8 }, options: { randomStart: true, playMode: 'shuffle' } },
+    { kind: 'query', query: { albumId: 'release:1', sort: 'trackNumber', contentRevision: 8 } }
+  ])
+  await home.playDashboardTrack({ ...track('ncm:1'), source: 'ncm' })
+  assert.equal(home.calls.at(-1)?.tracks?.length, 1)
+  const preview = playbackFixture(true)
+  await preview.playDashboardTrack(preview.items[210])
+  assert.equal(preview.calls[0].tracks?.length, 200)
+  assert.equal(preview.calls[0].tracks?.some(item => item.id === '210'), true)
 })
 
-test('home playback checks are serialized and only the latest click can replace the queue', async (t) => {
-  const f = fixture(t)
-  f.mount()
-  await f.settled()
-  f.holdLookups(true)
-  f.entry.playDashboardTrack(f.tracks[0])
-  for (let i = 0; i < 500; i++) f.entry.playDashboardTrack(f.tracks[404])
-  assert.equal(f.lookups, 1)
-  assert.equal(f.queues.length, 0)
-  f.holdLookups(false)
-  f.releaseLookup()
-  await tick()
-  assert.equal(f.lookups, 2)
-  assert.equal(f.queues.length, 1)
-  assert.equal(f.queues[0].index, 404)
-  f.holdLookups(true)
-  f.entry.playDashboardTrack(f.tracks[0])
-  f.entry.shuffleAll()
-  f.releaseLookup()
-  await tick()
-  assert.equal(f.queues.length, 2, 'shuffle supersedes the pending local click')
-  f.entry.playDashboardTrack(f.tracks[0])
-  f.current.value = f.tracks[20]
-  f.releaseLookup()
-  await tick()
-  assert.equal(f.queues.length, 2, 'playback selected elsewhere supersedes the pending home click')
-  f.entry.playDashboardTrack(f.tracks[0])
-  f.unmount()
-  f.releaseLookup()
-  await tick()
-  assert.equal(f.queues.length, 2)
-  assert.equal(f.arrays.length, 0)
-})
-
-test('home database failure remains visible and retryable without using compatibility tracks', async (t) => {
-  const f = fixture(t)
-  f.fail(true)
-  f.mount()
-  await f.settled()
-  assert.equal(f.entry.dashboardError.value, 'database offline')
-  assert.equal(f.entry.hasLibrary.value, false)
-  f.fail(false)
-  f.entry.retryDashboard()
-  await f.settled()
-  assert.equal(f.entry.dashboardError.value, '')
-  assert.equal(f.entry.hasLibrary.value, true)
-})
-
-test('explicit JSON and previews retain the bounded array playback entry', async (t) => {
-  const f = fixture(t, 'json')
-  f.mount()
-  await f.settled()
-  assert.equal(f.entry.databaseDashboard.value, false)
-  assert.equal(f.entry.dashboardTrackCount.value, 405)
-  f.entry.playDashboardTrack(f.tracks[404])
-  assert.equal(f.arrays[0].ids.length, 200)
-  assert.equal(f.arrays[0].ids.at(-1), 'track:404')
-  f.entry.shuffleAll()
-  assert.deepEqual(f.modes, ['shuffle'])
-  assert.equal(f.sqlCalls, 0)
-  const p = fixture(t, 'sqlite', true)
-  p.mount()
-  await p.settled()
-  assert.equal(p.entry.databaseDashboard.value, false)
-  assert.equal(p.entry.dashboardTrackCount.value, 3)
-  p.entry.playDashboardTrack(p.entry.heroTrack.value!)
-  assert.equal(p.arrays[0].ids.length, 3)
-  assert.equal(p.sqlCalls, 0)
-  assert.equal(p.subscribed, 0)
+test('home keeps failed Core commands visible and clears the error on a successful retry', async () => {
+  const home = playbackFixture()
+  home.fail('Core source unavailable')
+  await home.playDashboardTrack(track('song:1'))
+  assert.equal(home.error.value, 'Core source unavailable')
+  assert.equal(home.calls.length, 0)
+  home.fail('')
+  await home.playDashboardTrack(track('song:1'))
+  assert.equal(home.error.value, '')
+  assert.equal(home.calls.length, 1)
 })

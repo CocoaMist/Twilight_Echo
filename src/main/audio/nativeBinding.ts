@@ -65,7 +65,9 @@ export function getNativeAddonCandidates(context: NativeAddonLocationContext = {
 }
 
 export function rendererFallbackAllowed(): boolean {
-  return process.env.TWILIGHT_ENABLE_HTMLAUDIO_FALLBACK === '1'
+  // Retained for older preload clients. Native playback is the only renderer
+  // audio route; a missing native engine is a real playback error.
+  return false
 }
 
 export type NativeBindingLoadAttempt = { candidate: string; error: string }

@@ -1160,7 +1160,7 @@ window.runPlayingMusicLyricsRuntime = async () => {
   )
 
   // Anchoring replaces scrolling: the active line sits near the align position
-  // (0.35 of the stage) rather than being scrolled to.
+  // (0.5 of the stage) rather than being scrolled to.
   const activeTop = rowTop(activeRow)
   expect(
     activeTop < 180 * 0.6,
@@ -1531,6 +1531,7 @@ const subscribe = (list, cb) => {
 const noopSubscribe = () => () => {}
 window.api = {
   ncmCloud: { onProgress: noopSubscribe },
+  library: { getStorageMode: async () => 'json', onChanged: noopSubscribe, database: {} },
   settings: {
     get: async () => settingsSnapshot(),
     update: async (patch) => {

@@ -1,12 +1,19 @@
+import type {
+  MediaProviderAlbumSummary,
+  MediaProviderArtistSummary,
+  MediaProviderPlaylistSummary
+} from '../../../shared/providerSearch.ts'
+export type {
+  MediaProviderAlbumSummary,
+  MediaProviderArtistSummary,
+  MediaProviderPlaylistSummary
+} from '../../../shared/providerSearch.ts'
 import { toRaw } from 'vue'
+import type { MediaProviderLyrics } from '../../../shared/providerLyrics.ts'
+import { assertProviderEnabled } from '../../../core/lyrics/providerLyrics.ts'
 import type { Track } from '../types/music'
 import { getNcmSongId } from './ncmTrack.ts'
-import {
-  unifiedSearchSongs,
-  type UnifiedSearchResult,
-  type UnifiedLocalSearch
-} from '../utils/unifiedMusicSearch.ts'
-import type { NetworkEntry } from '../../../shared/networkSources.ts'
+import type { CoreMusicSearchPage, CoreMusicSearchQuery } from '../../../shared/coreSearch.ts'
 
 export type MediaProviderCapability =
   | 'search'
@@ -18,20 +25,10 @@ export type MediaProviderCapability =
   | 'login'
   | 'download'
 
-export interface MediaProviderLyrics {
-  lyrics: string | null
-  translatedLyrics: string | null
-  /** Optional word-level payload (e.g. NetEase YRC). Prefer for timed display when present. */
-  wordLyrics?: string | null
-}
+export type { MediaProviderLyrics } from '../../../shared/providerLyrics.ts'
 
 export interface MediaProviderCallOptions {
   signal?: AbortSignal
-}
-
-interface ProviderLyricsSearchResult {
-  lyrics: MediaProviderLyrics | null
-  failure: unknown | null
 }
 
 export interface PlaybackUrlOptions {
@@ -42,21 +39,6 @@ export interface PlaybackUrlOptions {
 export interface MediaProviderSearchResult<T> {
   items: T[]
   total: number
-}
-
-export interface MediaProviderPlaylistSummary {
-  id: number | string
-  name: string
-  cover: string | null
-  /** Durable remote origin when `cover` is a session-scoped twilight-media grant. */
-  coverSource?: string | null
-  coverSmall?: string | null
-  coverSmallSource?: string | null
-  trackCount: number
-  playCount?: number
-  creatorName?: string
-  /** True when the signed-in user owns (created) the playlist. */
-  owned?: boolean
 }
 
 export interface MediaProviderPlaylistCatalogue {
@@ -89,32 +71,6 @@ export interface MediaProviderHighQualityPlaylistPage {
   total: number
   hasMore: boolean
   lasttime: number
-}
-
-export interface MediaProviderAlbumSummary {
-  id: number | string
-  name: string
-  artist?: string
-  cover: string | null
-  coverSource?: string | null
-  coverSmall?: string | null
-  coverSmallSource?: string | null
-  trackCount: number
-  publishTime?: number
-  releaseType?: string
-  isExplicit?: boolean
-}
-
-export interface MediaProviderArtistSummary {
-  id: number | string
-  name: string
-  picUrl: string | null
-  /** Durable origin paired with a session-scoped image grant. */
-  picUrlSource?: string | null
-  picUrlSmall?: string | null
-  picUrlSmallSource?: string | null
-  albumSize?: number
-  musicSize?: number
 }
 
 export interface MediaProviderProfile {
@@ -179,7 +135,13 @@ export interface MediaProviderPlaylistTracksPage {
 }
 
 export interface MediaProvider {
-  readPlaylistImportPage?: (playlistId: string, offset: number, limit: number, options?: MediaProviderCallOptions) => Promise<import('../../../shared/externalPlaylist.ts').PlaylistImportPage>
+  call?: <T>(method: string, args: unknown[], options?: MediaProviderCallOptions) => Promise<T>
+  readPlaylistImportPage?: (
+    playlistId: string,
+    offset: number,
+    limit: number,
+    options?: MediaProviderCallOptions
+  ) => Promise<import('../../../shared/externalPlaylist.ts').PlaylistImportPage>
   id: string
   name: string
   source: 'internal' | 'plugin'
@@ -291,13 +253,12 @@ export interface MediaProvider {
   ) => Promise<void>
 }
 
-export function isPluginProviderEnabled(health?: MediaProviderHealth): boolean {
-  // API failures describe service health; they must not disable retries or
-  // invalidate requests that still belong to the same enabled plugin.
-  return health?.pluginStatus ? health.pluginStatus === 'enabled' : health?.available !== false
-}
+import { isPluginProviderEnabled } from '../../../shared/providerAvailability.ts'
+export { isPluginProviderEnabled }
 
 export class MediaProviderRegistry {
+  private readonly search?: (query: CoreMusicSearchQuery, signal?: AbortSignal) => Promise<CoreMusicSearchPage>
+  constructor(search?: (query: CoreMusicSearchQuery, signal?: AbortSignal) => Promise<CoreMusicSearchPage>) { this.search = search }
   private providers = new Map<string, MediaProvider>()
   private generations = new Map<string, number>()
 
@@ -361,13 +322,6 @@ export class MediaProviderRegistry {
     return providerId ? this.get(providerId) : null
   }
 
-  async resolvePlaybackUrl(track: Track, options?: PlaybackUrlOptions): Promise<string | null> {
-    const provider = this.getForTrack(track)
-    if (!provider?.getPlaybackUrl) return null
-    await assertProviderEnabled(provider)
-    return provider.getPlaybackUrl(track, options)
-  }
-
   async searchSongs(
     providerId: string,
     keywords: string,
@@ -420,138 +374,23 @@ export class MediaProviderRegistry {
     return provider.searchArtists(keywords, limit, offset, options)
   }
 
-  async resolveLyrics(
-    track: Track,
-    options?: { timeoutMs?: number; signal?: AbortSignal }
-  ): Promise<MediaProviderLyrics> {
-    return this.resolveLyricsAcrossProviders(track, options)
+  searchAllSongs(options: { query: string; limit?: number; offset?: number; signal?: AbortSignal }): Promise<CoreMusicSearchPage> {
+    if (!this.search) throw new Error('Core search transport is unavailable')
+    const { signal, ...query } = options
+    return this.search(query, signal)
   }
-
-  /**
-   * Prefer the track's own provider, then search every enabled lyric provider
-   * by title and artist. Fallback searches run concurrently against one shared
-   * deadline, so an unavailable provider cannot serially block later sources.
-   * Never throws: individual provider failures are ignored so online fallback
-   * can still run.
-   */
-  async resolveLyricsAcrossProviders(
-    track: Track,
-    options?: { timeoutMs?: number; signal?: AbortSignal }
-  ): Promise<MediaProviderLyrics> {
-    const timeoutMs = options?.timeoutMs ?? 8_000
-    const empty: MediaProviderLyrics = { lyrics: null, translatedLyrics: null, wordLyrics: null }
-    const deadline = Date.now() + timeoutMs
-    const remainingTimeout = (): number => Math.max(0, deadline - Date.now())
-
-    const direct = this.getForTrack(track)
-    let directFailure: unknown = null
-    if (direct?.getLyrics) {
-      try {
-        await assertProviderEnabled(direct)
-        const directTimeoutMs = Math.min(5_000, remainingTimeout())
-        if (directTimeoutMs <= 0) return empty
-        const lyrics = await withTimeout(
-          direct.getLyrics(track, { signal: options?.signal }),
-          directTimeoutMs,
-          options?.signal
-        )
-        if (hasAnyLyrics(lyrics)) return lyrics
-      } catch (error) {
-        directFailure = error
-        // continue fan-out
-      }
-    }
-
-    // Local / unmatched tracks: try lyric-capable providers by title search.
-    const query = [track.title, track.artist]
-      .map((part) => (typeof part === 'string' ? part.trim() : ''))
-      .filter(Boolean)
-      .join(' ')
-    if (!query) return empty
-
-    const candidates = this.list()
-      .filter((provider) => provider.getLyrics && provider.searchSongs)
-      .filter((provider) => provider.id !== direct?.id)
-      .sort((a, b) => providerLyricPriority(a.id) - providerLyricPriority(b.id))
-
-    const fallbackTimeoutMs = remainingTimeout()
-    if (fallbackTimeoutMs <= 0 || options?.signal?.aborted) {
-      if (directFailure) throw directFailure
-      return empty
-    }
-
-    const fallback = await resolveFirstProviderLyrics(
-      candidates.map((provider) =>
-        resolveLyricsFromProviderSearch(provider, query, track, remainingTimeout, options?.signal)
-      ),
-      fallbackTimeoutMs,
-      options?.signal
-    )
-    if (fallback.lyrics) return fallback.lyrics
-    if (fallback.failure) throw fallback.failure
-    if (directFailure) throw directFailure
-    return empty
-  }
-
-  async searchAllSongs(options: {
-    query: string
-    localTracks: Track[]
-    localSource?: UnifiedLocalSearch
-    networkEntries?: Array<{ profileName: string; entry: NetworkEntry }>
-    limit?: number
-    offset?: number
-    signal?: AbortSignal
-  }): Promise<UnifiedSearchResult> {
-    const providers = this.list()
-    return unifiedSearchSongs({
-      ...options,
-      providers: await Promise.all(
-        providers.map(async (provider) => ({
-          id: provider.id,
-          name: provider.name,
-          capabilities: provider.capabilities,
-          available: await isProviderAvailable(provider),
-          health: provider.health
-        }))
-      ),
-      searchProviderSongs: (providerId, keywords, limit, offset) =>
-        this.searchSongs(providerId, keywords, limit, offset, { signal: options.signal })
-    })
-  }
-
   async call<T>(
     providerId: string,
     method: string,
     args: unknown[] = [],
-    options?: MediaProviderCallOptions & { requestId?: string }
+    options?: MediaProviderCallOptions
   ): Promise<T> {
     const provider = this.get(providerId)
     if (!provider) throw new Error('Provider 未启用')
     await assertProviderEnabled(provider)
-    const api = window.api?.providers
-    if (!api) throw new Error('Provider bridge is unavailable')
+    if (!provider.call) throw new Error('Provider transport is unavailable')
     if (options?.signal?.aborted) throw new Error('Provider call was cancelled')
-    let requestId = options?.requestId
-    let onAbort: (() => void) | undefined
-    if (options?.signal && !requestId) {
-      requestId = `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
-      onAbort = (): void => {
-        if (requestId) void api.cancel(requestId)
-      }
-      options.signal.addEventListener('abort', onAbort, { once: true })
-    }
-    try {
-      return (await api.call(
-        providerId,
-        method as never,
-        toProviderIpcArgs(args),
-        requestId ? { requestId } : undefined
-      )) as T
-    } finally {
-      if (options?.signal && onAbort) {
-        options.signal.removeEventListener('abort', onAbort)
-      }
-    }
+    return provider.call<T>(method, toProviderIpcArgs(args), options)
   }
 }
 
@@ -607,190 +446,4 @@ function toProviderIpcValue(value: unknown, seen = new WeakSet<object>()): unkno
 
 function normalizeProviderId(id: string): string {
   return id.trim().toLowerCase()
-}
-
-async function assertProviderEnabled(provider: MediaProvider): Promise<void> {
-  if (!provider.isEnabled) return
-  if (!(await provider.isEnabled())) {
-    throw new Error(`${provider.name} provider is disabled or not logged in`)
-  }
-}
-
-async function isProviderAvailable(provider: MediaProvider): Promise<boolean> {
-  if (!provider.isEnabled) return true
-  try {
-    return await provider.isEnabled()
-  } catch {
-    return false
-  }
-}
-
-function providerLyricPriority(id: string): number {
-  const normalized = normalizeProviderId(id)
-  if (normalized === 'ncm') return 0
-  if (normalized === 'bili') return 2
-  return 1
-}
-
-function hasAnyLyrics(lyrics: MediaProviderLyrics | null | undefined): boolean {
-  if (!lyrics) return false
-  return Boolean(lyrics.lyrics || lyrics.translatedLyrics || lyrics.wordLyrics)
-}
-
-async function resolveLyricsFromProviderSearch(
-  provider: MediaProvider,
-  query: string,
-  track: Track,
-  remainingTimeout: () => number,
-  signal?: AbortSignal
-): Promise<ProviderLyricsSearchResult> {
-  try {
-    const availableTimeoutMs = remainingTimeout()
-    if (availableTimeoutMs <= 0) return { lyrics: null, failure: null }
-    if (!(await withTimeout(isProviderAvailable(provider), availableTimeoutMs, signal))) {
-      return { lyrics: null, failure: null }
-    }
-
-    const searchTimeoutMs = remainingTimeout()
-    if (searchTimeoutMs <= 0) return { lyrics: null, failure: null }
-    const search = await withTimeout(
-      provider.searchSongs!(query, 5, 0, { signal }),
-      searchTimeoutMs,
-      signal
-    )
-    const match = pickBestLyricSearchMatch(track, search.items)
-    if (!match || !provider.getLyrics) return { lyrics: null, failure: null }
-
-    const lyricsTimeoutMs = remainingTimeout()
-    if (lyricsTimeoutMs <= 0) return { lyrics: null, failure: null }
-    const lyrics = await withTimeout(provider.getLyrics(match, { signal }), lyricsTimeoutMs, signal)
-    return { lyrics: hasAnyLyrics(lyrics) ? lyrics : null, failure: null }
-  } catch (error) {
-    return { lyrics: null, failure: error }
-  }
-}
-
-async function resolveFirstProviderLyrics(
-  requests: Array<Promise<ProviderLyricsSearchResult>>,
-  timeoutMs: number,
-  signal?: AbortSignal
-): Promise<ProviderLyricsSearchResult> {
-  const empty: ProviderLyricsSearchResult = { lyrics: null, failure: null }
-  if (requests.length === 0 || timeoutMs <= 0) return empty
-  let firstFailure: unknown = null
-  try {
-    const result = await withTimeout(
-      Promise.any(
-        requests.map(async (request) => {
-          const outcome = await request
-          if (outcome.lyrics) return outcome
-          if (outcome.failure && firstFailure == null) firstFailure = outcome.failure
-          throw new Error('Provider did not return lyrics')
-        })
-      ),
-      timeoutMs,
-      signal
-    )
-    return result
-  } catch (error) {
-    if (signal?.aborted) return empty
-    if (error instanceof AggregateError && firstFailure == null) return empty
-    return { lyrics: null, failure: firstFailure ?? new Error('Lyrics provider timed out') }
-  }
-}
-
-function normalizeMatchText(value: string | null | undefined): string {
-  return (value ?? '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function pickBestLyricSearchMatch(local: Track, candidates: Track[]): Track | null {
-  const localTitle = normalizeMatchText(local.title)
-  const localArtist = normalizeMatchText(local.artist)
-  if (!localTitle) return null
-  const localCompactTitle = compactLyricMatchText(localTitle)
-  const localArtistTokens = lyricArtistTokens(localArtist)
-  let best: Track | null = null
-  let bestScore = -1
-  for (const candidate of candidates) {
-    const title = normalizeMatchText(candidate.title)
-    const compactTitle = compactLyricMatchText(title)
-    if (!title || !compactTitle) continue
-    const titleScore =
-      title === localTitle
-        ? 24
-        : compactTitle === localCompactTitle
-          ? 20
-          : lyricTitleScore(compactTitle, localCompactTitle)
-    if (titleScore === 0) continue
-    const artist = normalizeMatchText(candidate.artist)
-    let artistScore = 0
-    if (localArtist && artist) {
-      if (artist === localArtist) artistScore = 10
-      else if (lyricArtistTokens(artist).some((token) => localArtistTokens.includes(token)))
-        artistScore = 8
-      else if (artist.includes(localArtist) || localArtist.includes(artist)) artistScore = 4
-    }
-    let durationScore = 0
-    if (
-      typeof local.duration === 'number' &&
-      local.duration > 0 &&
-      typeof candidate.duration === 'number' &&
-      candidate.duration > 0
-    ) {
-      const delta = Math.abs(local.duration - candidate.duration)
-      if (delta <= 3) durationScore = 5
-      else if (delta <= 8) durationScore = 2
-      else if (delta > 30) continue
-    }
-    if (artistScore === 0 && durationScore === 0) continue
-    const score = titleScore + artistScore + durationScore
-    if (score > bestScore) {
-      bestScore = score
-      best = candidate
-    }
-  }
-  return bestScore >= 16 ? best : null
-}
-
-function compactLyricMatchText(value: string): string {
-  return value
-    .replace(/[（(][^）)]*(?:feat|ft|with)[^）)]*[）)]/giu, '')
-    .replace(/[^\p{L}\p{N}]+/gu, '')
-}
-
-function lyricTitleScore(candidate: string, local: string): number {
-  if (candidate.length < 4 || local.length < 4) return 0
-  return candidate.includes(local) || local.includes(candidate) ? 14 : 0
-}
-
-function lyricArtistTokens(value: string): string[] {
-  return value
-    .split(/[\\/＆&、,，;；]/u)
-    .map((part) => compactLyricMatchText(part))
-    .filter((part) => part.length >= 2)
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  signal?: AbortSignal
-): Promise<T> {
-  if (signal?.aborted) throw new Error('Aborted')
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let rejectTimeout: ((reason?: unknown) => void) | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    rejectTimeout = reject
-    timer = setTimeout(() => reject(new Error('Lyrics provider timed out')), timeoutMs)
-  })
-  const onAbort = (): void => {
-    if (timer) clearTimeout(timer)
-    rejectTimeout?.(new Error('Aborted'))
-  }
-  signal?.addEventListener('abort', onAbort, { once: true })
-  try {
-    return await Promise.race([promise, timeout])
-  } finally {
-    if (timer) clearTimeout(timer)
-    signal?.removeEventListener('abort', onAbort)
-  }
 }

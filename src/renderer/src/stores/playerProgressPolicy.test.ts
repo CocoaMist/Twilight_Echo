@@ -17,7 +17,7 @@ test('native time-pos applies while the native engine owns playback', () => {
   )
 })
 
-test('native time-pos is ignored during HTMLAudio fallback so the bar cannot freeze', () => {
+test('an inactive native clock cannot overwrite restored or cast progress', () => {
   assert.equal(
     shouldApplyNativeTimePosition({ nativePlaybackActive: false, nativeQueueDelegated: false }),
     false

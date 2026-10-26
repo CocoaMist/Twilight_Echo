@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
-import type { LibraryPage, LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
+import type { CoreLibraryPage as LibraryPage } from '../../../../shared/coreViews.ts'
+import { coreLibraryPage } from '../coreTestFixtures.ts'
+import { projectCoreTrack } from '../../../../core/projections.ts'
 import { createLibraryTrackWindow } from './libraryTrackWindow.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -20,8 +23,10 @@ function page(query: LibraryQuery = {}, revision = 1, total = 300_000): LibraryP
     total,
     totalDuration: total * 180,
     tracks: Array.from({ length: Math.max(0, Math.min(200, total - offset)) }, (_, i) => ({
-      id: `${query.search ?? 'song'}:${offset + i}`,
-      filePath: `D:/Music/${offset + i}.flac`
+      ...projectCoreTrack({
+        id: `${query.search ?? 'song'}:${offset + i}`,
+        filePath: `D:/Music/${offset + i}.flac`
+      })
     })),
     versions: {}
   }
@@ -229,7 +234,7 @@ test('continuous locate uses complete SQL order and retains the absolute anchor 
   const source = createLibraryTrackWindow({
     queryTracks: async (query = {}) => {
       queries.push(query)
-      return db.queryTracks(query)
+      return coreLibraryPage(db.queryTracks(query))
     }
   })
   t.after(() => {

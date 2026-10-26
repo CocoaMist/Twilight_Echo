@@ -67,7 +67,10 @@ test('mini player style registry supports future styles and reversible registrat
 })
 
 const component = readFileSync(new URL('./MiniPlayerApp.vue', import.meta.url), 'utf8')
-const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8')
+const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8').replaceAll(
+  '\r\n',
+  '\n'
+)
 
 /** The top-level rule whose selector is exactly `selector`. */
 function cssRule(selector: string): string {

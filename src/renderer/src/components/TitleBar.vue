@@ -6,6 +6,8 @@ import { useProviderStore } from '../stores/useProviderStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import { useExtensionRegistry } from '../extensions/registry.ts'
+import { usePluginFlyout } from '../stores/usePluginFlyout'
 import PageDock from './PageDock.vue'
 import type { PageDockAction } from '../app/pageDock'
 
@@ -41,8 +43,9 @@ defineEmits<{
 }>()
 
 const { isLoggedIn, profile } = useNcmStore()
-const providerStore = useProviderStore()
+const providerStore = useProviderStore({ listen: !props.preview })
 const loginProvider = computed(() => {
+  if (props.preview) return undefined
   const providers = providerStore.providers.value.filter((provider) =>
     provider.capabilities.includes('login')
   )
@@ -59,10 +62,29 @@ const loginLabel = computed(() =>
 const { canGoBack, backHint } = useBackStack()
 const { unreadCount, activeTaskCount, doNotDisturb } = useAppNoticeStore()
 const { maximized } = useWindowChrome(() => props.preview === true)
+const { uiContributions } = useExtensionRegistry({ listen: !props.preview })
+const pluginFlyout = usePluginFlyout()
+/** Plugin-provided titlebar entries sit between the page dock and appearance. */
+const pluginTitleButtons = computed(() =>
+  (uiContributions.value ?? []).filter(
+    (contribution) => contribution.kind === 'titleBarButton' && !props.preview
+  )
+)
+const pluginFlyoutOpenFor = (pluginId: string): boolean =>
+  pluginFlyout.target.value?.pluginId === pluginId
+const togglePluginFlyout = (contribution: { pluginId: string; title: string }): void => {
+  pluginFlyout.toggle({ pluginId: contribution.pluginId, title: contribution.title })
+}
 const avatarLoadFailed = ref(false)
-watch([() => profile.value?.userId, () => profile.value?.avatarUrl], () => {
-  avatarLoadFailed.value = false
-})
+watch(
+  [
+    () => (props.preview ? undefined : profile.value?.userId),
+    () => (props.preview ? undefined : profile.value?.avatarUrl)
+  ],
+  () => {
+    avatarLoadFailed.value = false
+  }
+)
 const titleBar = ref<HTMLElement | null>(null)
 let titleObserver: ResizeObserver | undefined
 onMounted(() => {
@@ -170,6 +192,22 @@ function close(): void {
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <div v-if="!closeOnly" class="title-bar-tools" role="group" aria-label="应用工具">
         <PageDock :actions="pageDockActions ?? []" />
+        <button
+          v-for="contribution in pluginTitleButtons"
+          :key="contribution.pluginId + ':' + contribution.id"
+          type="button"
+          :aria-label="contribution.title"
+          :title="contribution.title"
+          :aria-pressed="pluginFlyoutOpenFor(contribution.pluginId)"
+          class="settings-btn plugin-titlebar-btn"
+          @click="togglePluginFlyout(contribution)"
+        >
+          <svg class="plugin-titlebar-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3.2c.5 2.5 1.5 4 3.4 4.7-1.9.8-2.9 2.3-3.4 4.7-.5-2.4-1.5-3.9-3.4-4.7 1.9-.7 2.9-2.2 3.4-4.7ZM18.4 12.6c.3 1.6 1 2.6 2.3 3.1-1.3.6-2 1.6-2.3 3.2-.3-1.6-1-2.6-2.3-3.2 1.3-.5 2-1.5 2.3-3.1ZM6.4 14.2c.4 1.9 1.2 3 2.7 3.6-1.5.7-2.3 1.7-2.7 3.6-.4-1.9-1.2-3-2.7-3.6 1.5-.6 2.3-1.7 2.7-3.6Z"
+            />
+          </svg>
+        </button>
         <button
           type="button"
           aria-label="外观"
@@ -487,6 +525,18 @@ function close(): void {
   padding: 0;
   flex-shrink: 0;
   font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
+}
+
+.plugin-titlebar-btn {
+  font-size: calc(var(--te-font-size-body, 14px) * 15 / 14);
+}
+
+.plugin-titlebar-icon {
+  display: block;
+  width: var(--te-titlebar-icon-size, 17px);
+  height: var(--te-titlebar-icon-size, 17px);
+  fill: currentColor;
+  stroke: none;
 }
 
 .login-btn {

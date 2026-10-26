@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { fork, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { DatabaseSync } from 'node:sqlite'
+import type { NativeAudioMetadata } from '../../shared/audioEngineTypes.ts'
 import { LibraryDatabaseServiceClient } from './libraryDatabaseServiceClient.ts'
 import { LocalLibraryScanServiceClient } from './libraryScanServiceClient.ts'
 import {
@@ -90,6 +92,158 @@ async function fixture(t: test.TestContext, count = 300) {
   })
   return { root, database, scanner, scanners, coordinator }
 }
+
+function downgradeDateMarkers(root: string) {
+  const sql = new DatabaseSync(join(root, 'music-library.sqlite'))
+  try { sql.exec("UPDATE files SET metadata_version=0,status='complete',identity=json_set(identity,'$.metadataVersion',0)") }
+  finally { sql.close() }
+}
+
+function addWaveDate(file: string, date: string) {
+  const wave = readFileSync(file), text = Buffer.from(`${date}\0`)
+  const list = Buffer.alloc(20 + text.length + text.length % 2)
+  list.write('LIST'); list.writeUInt32LE(list.length - 8, 4); list.write('INFOICRD', 8)
+  list.writeUInt32LE(text.length, 16); text.copy(list, 20)
+  const result = Buffer.concat([wave, list])
+  result.writeUInt32LE(result.length - 8, 4)
+  writeFileSync(file, result)
+}
+
+test('actual workers narrowly stage legacy dates, including CUE inheritance, absent tags and retryable failures', { timeout: 30_000 }, async (t) => {
+  const { coordinator, database, root } = await fixture(t, 3)
+  addWaveDate(join(root, '0000.wav'), '2002-04-05')
+  writeFileSync(join(root, '0002.wav'), 'Unreadable legacy audio')
+  await coordinator.start('full', [root])
+  const page = await database.queryTracks({ sort: 'insertion' })
+  await database.patchTracks(page.tracks.map((track) => ({ id: track.id, expectedVersion: page.versions[track.id],
+    patch: { title: `Handwritten ${track.id}`, artist: 'Manual artist', album: 'Manual album',
+      cover: 'manual-cover', lyrics: 'manual lyrics', releaseDate: '1979', metadataMatch: { provider: 'kept', trackId: 'remote' } } })))
+  downgradeDateMarkers(root)
+  const before = await database.queryTracks({ sort: 'insertion' })
+  const commit = database.commitScanBatch.bind(database)
+  let staged = 0
+  database.commitScanBatch = async (batch) => {
+    assert.ok(batch.files.every((file) => file.releaseDateOnly && file.tracks.length === 0))
+    const saved = await commit(batch)
+    staged += batch.files.length
+    assert.deepEqual(await database.queryTracks({ sort: 'insertion' }), before, 'a batch ACK must not expose staged dates')
+    assert.ok((await database.getFileIdentities()).every((identity) => identity.metadataVersion === 0))
+    return saved
+  }
+  const result = await coordinator.start('startup', [root])
+  assert.equal(result.progress.state, 'completed')
+  assert.equal(staged, 3)
+  assert.equal(result.progress.failedFiles, 1)
+  const after = await database.queryTracks({ sort: 'insertion' })
+  assert.deepEqual(after.tracks, before.tracks.map((track) => {
+    if (track.filePath.endsWith('0002.wav')) return track
+    const next = { ...track }; delete next.releaseDate
+    if (track.filePath.endsWith('0000.wav')) next.releaseDate = '2002-04-05'
+    return next
+  }))
+  const identities = await database.getFileIdentities()
+  assert.ok(identities.filter((i) => !i.filePath.endsWith('0002.wav')).every((i) => i.metadataVersion === 1))
+  assert.equal(identities.find((i) => i.filePath.endsWith('0002.wav'))!.metadataVersion, 0)
+})
+
+test('actual worker cancellation drops date staging while a mixed ordinary batch remains playable', { timeout: 30_000 }, async (t) => {
+  const { coordinator, database, root } = await fixture(t, 2)
+  addWaveDate(join(root, '0000.wav'), '2001')
+  await coordinator.start('full', [root])
+  downgradeDateMarkers(root)
+  const before = await database.queryTracks({ sort: 'insertion' })
+  writeFileSync(join(root, 'new.wav'), readFileSync(join(root, '0001.wav')))
+  const commit = database.commitScanBatch.bind(database)
+  let committed = false
+  database.commitScanBatch = async (batch) => {
+    const saved = await commit(batch)
+    committed = true
+    coordinator.cancel()
+    return saved
+  }
+  const result = await coordinator.start('startup', [root])
+  assert.equal(committed, true)
+  assert.equal(result.cancelled, true)
+  const old = await database.getTracksByIds(before.tracks.map((track) => track.id))
+  assert.deepEqual(old.tracks, before.tracks)
+  assert.deepEqual(old.versions, before.versions)
+  const identities = await database.getFileIdentities()
+  assert.ok(identities.filter((i) => !i.filePath.endsWith('new.wav')).every((i) => i.metadataVersion === 0))
+  assert.equal(identities.find((i) => i.filePath.endsWith('new.wav'))!.metadataVersion, 1)
+  assert.ok((await database.queryTracks()).tracks.some((track) => track.filePath.endsWith('new.wav')))
+  const sql = new DatabaseSync(join(root, 'music-library.sqlite'), { readOnly: true })
+  try { assert.equal(sql.prepare('SELECT count(*) n FROM scan_release_dates').get()!.n, 0) }
+  finally { sql.close() }
+})
+
+test('actual worker restart retries staged legacy dates without exposing them or rebuilding Track payloads', { timeout: 30_000 }, async (t) => {
+  const { coordinator, database, root, scanners } = await fixture(t, 2)
+  addWaveDate(join(root, '0000.wav'), '2007')
+  await coordinator.start('full', [root])
+  downgradeDateMarkers(root)
+  const page = await database.queryTracks({ sort: 'insertion' })
+  await database.patchTracks(page.tracks.map((track) => ({ id: track.id, expectedVersion: page.versions[track.id],
+    patch: { title: `Keep ${track.id}`, releaseDate: '1970', lyrics: 'Retain manual lyrics' } })))
+  const before = await database.queryTracks({ sort: 'insertion' })
+  const commit = database.commitScanBatch.bind(database)
+  database.commitScanBatch = async (batch) => {
+    const saved = await commit(batch)
+    scanners.at(-1)!.kill()
+    return saved
+  }
+  await assert.rejects(coordinator.start('startup', [root]), /exited|stopped/)
+  assert.equal(coordinator.getStatus()!.state, 'interrupted')
+  assert.deepEqual(await database.queryTracks({ sort: 'insertion' }), before)
+  assert.ok((await database.getFileIdentities()).every((identity) => identity.metadataVersion === 0))
+  let retried = 0
+  database.commitScanBatch = async (batch) => {
+    assert.ok(batch.files.every((file) => file.releaseDateOnly && !file.tracks.length))
+    retried += batch.files.length
+    return commit(batch)
+  }
+  assert.equal((await coordinator.recoverInterruptedScan())!.progress.state, 'completed')
+  assert.equal(retried, 2)
+  assert.deepEqual((await database.queryTracks({ sort: 'insertion' })).tracks, before.tracks.map((track) => {
+    const next = { ...track }; delete next.releaseDate
+    if (track.filePath.endsWith('0000.wav')) next.releaseDate = '2007'
+    return next
+  }))
+})
+
+test('actual ISO date-only work uses the native reader without expanding or replacing existing logical tracks', { timeout: 30_000 }, async (t) => {
+  const { database, scanner, root } = await fixture(t, 0)
+  const filePath = join(root, 'disc.iso')
+  writeFileSync(filePath, 'Legacy ISO')
+  const tracks = ['stereo', 'multi'].map((area) => ({ id: area, filePath, subTrack: `sacd://${area}`,
+    title: `Manual ${area}`, cover: 'manual-cover', lyrics: 'manual lyrics', releaseDate: '1980' }))
+  await database.replaceDocument({ version: 2, revision: 0, folders: [root], exclusions: [], tracks })
+  const info = statSync(filePath), sql = new DatabaseSync(join(root, 'music-library.sqlite'))
+  try { sql.prepare("UPDATE files SET identity=?,status='complete',metadata_version=0").run(JSON.stringify({ filePath, size: info.size, mtimeMs: info.mtimeMs, metadataVersion: 0 })) }
+  finally { sql.close() }
+  let reads = 0
+  let native = { year: '1999', isoTracks: [{ year: '2000', source: 'new-area' }] } as unknown as NativeAudioMetadata
+  const coordinator = new LibraryDatabaseScanCoordinator({ database, scanner, coverCacheDir: join(root, 'covers'), log() {},
+    readSacdIsoMetadata: async () => { reads++; return native } })
+  const result = await coordinator.start('startup', [root])
+  assert.equal(result.progress.state, 'completed')
+  assert.equal(reads, 1)
+  assert.deepEqual((await database.queryTracks({ sort: 'insertion' })).tracks, tracks.map((track) => ({ ...track, releaseDate: '1999' })))
+  assert.equal((await database.getFileIdentities())[0].metadataVersion, 1)
+  downgradeDateMarkers(root)
+  native = { error: 'Native ISO is unreadable' } as NativeAudioMetadata
+  assert.equal((await coordinator.start('startup', [root])).progress.failedFiles, 1)
+  assert.equal((await database.getFileIdentities())[0].metadataVersion, 0)
+  assert.ok((await database.queryTracks()).tracks.every((track) => track.releaseDate === '1999'))
+  native = { isoTracks: [] } as unknown as NativeAudioMetadata
+  assert.equal((await coordinator.start('startup', [root])).progress.failedFiles, 0)
+  assert.equal((await database.getFileIdentities())[0].metadataVersion, 1)
+  assert.ok((await database.queryTracks()).tracks.every((track) => !Object.hasOwn(track, 'releaseDate')))
+  downgradeDateMarkers(root)
+  const missingReader = new LibraryDatabaseScanCoordinator({ database, scanner, coverCacheDir: join(root, 'covers'), log() {} })
+  assert.equal((await missingReader.start('startup', [root])).progress.failedFiles, 1)
+  assert.equal((await database.getFileIdentities())[0].metadataVersion, 0)
+  assert.equal(reads, 3)
+})
 
 test(
   'actual workers expose committed playable CUE tracks, pause/cancel, and resume without rereading completed metadata',

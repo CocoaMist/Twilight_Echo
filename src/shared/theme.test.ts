@@ -707,3 +707,66 @@ test('theme isolation manages all per-page image palette markers', () => {
     assert.ok(THEME_MANAGED_DATA_ATTRIBUTES.includes(`data-te-${page}-image-palette`))
   }
 })
+
+test('player page customization modes and tokens normalize and map to managed attributes', () => {
+  const modes = normalizeThemeModes({
+    player: {
+      backdrop: 'fluid',
+      lyricsAlign: 'center',
+      lyricHighlight: 'glow',
+      timeStyle: 'glass',
+      stageAlign: 'top'
+    },
+    artwork: {
+      frame: 'polaroid',
+      spin: 'on'
+    }
+  })
+  assert.deepEqual(modes, {
+    player: {
+      backdrop: 'fluid',
+      lyricsAlign: 'center',
+      lyricHighlight: 'glow',
+      timeStyle: 'glass',
+      stageAlign: 'top'
+    },
+    artwork: {
+      frame: 'polaroid',
+      spin: 'on'
+    }
+  })
+  const attributes = themeModesToDataAttributes(resolveThemeModes(modes))
+  assert.equal(attributes['data-te-player-backdrop'], 'fluid')
+  assert.equal(attributes['data-te-player-lyrics-align'], 'center')
+  assert.equal(attributes['data-te-player-lyric-highlight'], 'glow')
+  assert.equal(attributes['data-te-player-time-style'], 'glass')
+  assert.equal(attributes['data-te-player-stage-align'], 'top')
+  assert.equal(attributes['data-te-artwork-frame'], 'polaroid')
+  assert.equal(attributes['data-te-artwork-spin'], 'on')
+  const overrides = normalizeThemeTokenOverrides({
+    'surface.player': '#121826',
+    'playback.cover.border': 'rgba(255, 255, 255, 0.28)',
+    'playback.cover.scale': '92%',
+    'playback.stage.spread': '56px',
+    'playback.stage.span': '900px',
+    'playback.lyrics.karaoke': '#38bdf8',
+    'playback.lyrics.density': '14px',
+    'playback.lyrics.activeScale': '106%',
+    'playback.lyrics.inactiveOpacity': '55%',
+    'playback.lyrics.inactiveBlur': '1.2px',
+    'playback.backdrop.tempo': '24s'
+  })
+  assert.deepEqual(overrides, {
+    'surface.player': '#121826',
+    'playback.cover.border': 'rgba(255, 255, 255, 0.28)',
+    'playback.cover.scale': '92%',
+    'playback.stage.spread': '56px',
+    'playback.stage.span': '900px',
+    'playback.lyrics.karaoke': '#38bdf8',
+    'playback.lyrics.density': '14px',
+    'playback.lyrics.activeScale': '106%',
+    'playback.lyrics.inactiveOpacity': '55%',
+    'playback.lyrics.inactiveBlur': '1.2px',
+    'playback.backdrop.tempo': '24s'
+  })
+})

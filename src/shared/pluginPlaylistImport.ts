@@ -2,15 +2,10 @@
  * Plugin → host request to materialise playlists into the user's local
  * playlists (the ones stored in `playlists.json`).
  *
- * The plugin host runs in a utilityProcess and cannot touch the renderer's
- * playlist store, so the request is forwarded to the main window, which applies
- * it through the normal store actions and therefore through the normal
- * revision-guarded persistence.
- *
- * The call is deliberately **fire-and-forget and batched**: plugins import tens
- * of playlists at once, so they arrive in a single payload and the renderer
- * reports one combined toast rather than one per playlist. A plugin never has
- * to wait on the UI thread.
+ * Core resolves the paths and acknowledges only after revision-guarded
+ * persistence. Batched requests retain one combined UI notice; no BrowserWindow
+ * is needed to consume or finish the import. Legacy main-window channels below
+ * remain only until the production owner/caller cutover.
  */
 
 export const PLUGIN_IMPORT_PLAYLIST_CHANNEL = 'plugins:importPlaylist'

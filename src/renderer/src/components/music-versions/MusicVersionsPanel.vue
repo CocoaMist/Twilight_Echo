@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
+import { useCoreLibraryApi } from '../../stores/library/coreLibraryApi.ts'
 import type { Track } from '@renderer/types/music'
-import { getAlbumIdentity } from '@renderer/stores/library/musicStoreData.ts'
 import { libraryTrack } from '@renderer/utils/libraryQueuePlayback.ts'
-import { getTrackSource, versionSourceKey } from '@renderer/utils/trackSourceIdentity.ts'
 import {
-  editMusicVersions,
   type MusicVersionsDocument,
   type VersionOperation,
   type VersionScope
@@ -14,13 +13,13 @@ import {
   getMusicVersions,
   loadMusicVersions,
   musicVersionError,
+  previewMusicVersionEdit,
   saveMusicVersions
 } from '@renderer/stores/musicVersions.ts'
 import {
   buildVersionCatalog,
   localAlbumIdFromVersionKey,
-  queryVersionCatalogPage,
-  resolveLocalTrackVersionKey,
+  queryCoreVersionCatalog,
   resolvePreferredSourceKey,
   versionDescriptions,
   resolvePreferredVersion
@@ -41,6 +40,8 @@ const emit = defineEmits<{
   play: [tracks: Track[]]
   playQuery: [query: LibraryQuery, selectedId: string]
 }>()
+const core = useCoreConnection(),
+  libraryApi = useCoreLibraryApi()
 const scope = ref<VersionScope>(props.initialScope)
 const query = ref('')
 const label = ref('')
@@ -58,7 +59,7 @@ const detailsKey = ref<string | null>(null)
 const detailPage = ref(0)
 const relatedKeys = shallowRef<Set<string> | null>(null)
 const document = computed(() => getMusicVersions())
-const externalCatalog = computed(() => buildVersionCatalog(props.tracks, scope.value))
+const externalCatalog = computed<ReturnType<typeof buildVersionCatalog>>(() => [])
 const databasePage = shallowRef<{
   items: ReturnType<typeof buildVersionCatalog>
   total: number
@@ -218,14 +219,16 @@ watch(
 )
 if (props.initialTrack) {
   const track = props.initialTrack
-  selection.value = new Set([
-    scope.value === 'tracks'
-      ? versionSourceKey(track)
-      : JSON.stringify(['album', getTrackSource(track), getAlbumIdentity(track)])
-  ])
   query.value = scope.value === 'tracks' ? track.title : track.album
+  void core
+    .query('versions.catalog', { scope: scope.value, trackId: track.id, limit: 1 })
+    .then((page) => {
+      if (page.items[0]) selection.value = new Set([page.items[0].key])
+    })
+    .catch((cause) => {
+      error.value = String(cause)
+    })
 }
-
 async function loadDatabasePage(): Promise<void> {
   const generation = ++databaseGeneration
   if (!props.sqliteMode) {
@@ -246,7 +249,7 @@ async function loadDatabasePage(): Promise<void> {
   databaseLoading.value = true
   databaseError.value = ''
   try {
-    const result = await queryVersionCatalogPage(window.api.library.database, scope.value, {
+    const result = await queryCoreVersionCatalog(core, scope.value, {
       ...(query.value.trim() ? { search: query.value.trim() } : {}),
       offset,
       limit: 50
@@ -288,7 +291,7 @@ async function loadDatabaseDetails(): Promise<void> {
   }
   databaseDetailLoading.value = true
   try {
-    const result = await window.api.library.database.queryTracks({
+    const result = await libraryApi.queryTracks({
       albumId: item.albumId,
       sort: 'trackNumber',
       direction: 'asc',
@@ -347,10 +350,8 @@ function toggle(key: string): void {
 function prepare(operation: VersionOperation, name: string): void {
   try {
     error.value = ''
-    const before = document.value
     preview.value = {
-      before,
-      after: editMusicVersions(before, scope.value, operation, [...selection.value], label.value),
+      ...previewMusicVersionEdit(scope.value, operation, [...selection.value], label.value),
       operation: name
     }
     previewPage.value = 0
@@ -358,10 +359,10 @@ function prepare(operation: VersionOperation, name: string): void {
     error.value = cause instanceof Error ? cause.message : '无法预览版本操作'
   }
 }
-function commit(): void {
+async function commit(): Promise<void> {
   if (!preview.value) return
   try {
-    saveMusicVersions(preview.value.after, preview.value.before)
+    await saveMusicVersions(preview.value.after, preview.value.before)
     preview.value = null
     error.value = ''
     notice.value = '版本关系已保存；原收藏、歌单条目和文件保持完整。'
@@ -388,7 +389,7 @@ async function playPreferred(): Promise<void> {
           sort: 'trackNumber',
           direction: 'asc'
         }
-        const first = await window.api.library.database.queryTracks({
+        const first = await libraryApi.queryTracks({
           ...query,
           offset: 0,
           limit: 1
@@ -402,9 +403,11 @@ async function playPreferred(): Promise<void> {
     } else {
       const track =
         sourceItem?.tracks[0] ??
-        (await resolveLocalTrackVersionKey(window.api.library.database, sourceKey))
+        (await core.query('versions.catalog', { scope: 'tracks', key: sourceKey, limit: 1 }))
+          .items[0]?.track
       if (!track) throw new Error('偏好来源已不在曲库中，关系仍保留，可重新关联其他来源')
-      emit('playQuery', { ids: [track.id] }, track.id)
+      if ((track.source ?? 'local') === 'local') emit('playQuery', { ids: [track.id] }, track.id)
+      else emit('play', [track])
     }
     error.value = ''
   } catch (cause) {

@@ -30,6 +30,7 @@ export const state={mode:'broken',calls:0,invalidations:0,pending:[]}
 const good='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#456"/></svg>')
 export function clearLocalCoverDataCache(){}
 export function invalidateRemoteCoverGrant(){state.invalidations++}
+export function readCachedCover(){return null}
 export async function resolveCover(cover,source){
  state.calls++
  if(state.mode==='reject')throw Error('Grant failed')

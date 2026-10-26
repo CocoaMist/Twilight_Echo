@@ -7,7 +7,7 @@ export type NetworkProtocol = 'webdav' | 'ftp' | 'ftps' | 'sftp' | 'scp' | 'smb'
 
 export type NetworkCredentialKind = 'anonymous' | 'password' | 'privateKey'
 
-/** 凭据引用：明文只存在于主进程内存；落盘为 secureStorage 密文（encryptedId）。 */
+/** 凭据引用：明文只在私有平台/Core 通道使用；落盘沿用 secureStorage 密文。 */
 export interface NetworkCredentialRef {
   kind: NetworkCredentialKind
   encryptedId: string

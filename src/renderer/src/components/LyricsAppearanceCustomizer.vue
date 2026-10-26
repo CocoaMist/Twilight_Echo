@@ -681,19 +681,6 @@ watch(
               /></label>
               <label class="range-field"
                 ><span
-                  >当前行位置 <strong>{{ Math.round(draft.anchorPosition * 100) }}%</strong></span
-                ><input
-                  type="range"
-                  :min="ranges.anchorPosition.min"
-                  :max="ranges.anchorPosition.max"
-                  :step="ranges.anchorPosition.step"
-                  :value="draft.anchorPosition"
-                  @input="
-                    setGlobal('anchorPosition', Number(($event.target as HTMLInputElement).value))
-                  "
-              /></label>
-              <label class="range-field"
-                ><span
                   >封面尺寸 <strong>{{ draft.coverSize }}%</strong></span
                 ><input
                   type="range"

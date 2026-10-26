@@ -9,8 +9,7 @@ import { resolveTimeGreeting } from '@renderer/utils/timeGreeting'
 import { useDomTrackLocator } from '@renderer/composables/useDomTrackLocator'
 
 const playback = inject(soundFieldPlaybackKey, null)
-const { volume, setVolume, playMode, setPlayMode, queue } = usePlayerStore()
-const lastVolume = ref(1)
+const { volume, setVolume, muted, toggleMute: toggleCoreMute, playMode, setPlayMode, queueCount } = usePlayerStore()
 const now = ref(new Date())
 let resizeObserver: ResizeObserver | null = null
 let clockTimer: ReturnType<typeof setInterval> | undefined
@@ -33,12 +32,7 @@ onBeforeUnmount(() => {
 })
 
 function toggleMute(): void {
-  if (volume.value > 0) {
-    lastVolume.value = volume.value
-    setVolume(0)
-  } else {
-    setVolume(lastVolume.value)
-  }
+  void toggleCoreMute()
 }
 
 function cycleRepeat(): void {
@@ -313,13 +307,13 @@ function seekFromInput(event: Event): void {
                   <button
                     type="button"
                     class="sf-icon-button"
-                    :aria-label="volume > 0 ? '静音' : '取消静音'"
-                    :title="volume > 0 ? '静音' : '取消静音'"
-                    :aria-pressed="volume === 0"
+                    :aria-label="!muted ? '静音' : '取消静音'"
+                    :title="!muted ? '静音' : '取消静音'"
+                    :aria-pressed="muted"
                     @click="toggleMute"
                   >
                     <i
-                      :class="volume > 0 ? 'ph ph-speaker-high' : 'ph ph-speaker-slash'"
+                      :class="!muted ? 'ph ph-speaker-high' : 'ph ph-speaker-slash'"
                       aria-hidden="true"
                     ></i>
                   </button>
@@ -338,7 +332,7 @@ function seekFromInput(event: Event): void {
                 <div class="sf-utility-buttons">
                   <button type="button" @click="playback.openQueue()">
                     <i class="ph ph-queue" aria-hidden="true"></i>队列
-                    <span>{{ queue.length }}</span>
+                    <span>{{ queueCount }}</span>
                   </button>
                   <button type="button" @click="playback.openLyrics()">
                     <i class="ph ph-subtitles" aria-hidden="true"></i>歌词

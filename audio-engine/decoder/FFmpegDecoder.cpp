@@ -265,6 +265,7 @@ struct FFmpegDecoder::Impl {
   std::string terminalReadError;
   FFmpegDecoder::ResamplerQuality resamplerQuality = FFmpegDecoder::ResamplerQuality::Native;
   FFmpegDecoder::ResamplerQuality effectiveResamplerQuality = FFmpegDecoder::ResamplerQuality::Native;
+  FFmpegDecoder::ResamplerPhase resamplerPhase = FFmpegDecoder::ResamplerPhase::Linear;
   FFmpegDecoder::ResamplerEngine resamplerEngine = FFmpegDecoder::ResamplerEngine::Unknown;
   // ICY StreamTitle snapshot (decode-thread writes; control/status may read).
   mutable std::mutex streamTitleMutex;
@@ -882,16 +883,18 @@ bool FFmpegDecoder::setOutputFormat(const AudioFormat& format, std::string* erro
         nullptr);
   };
   const auto applySwrQuality = [&](ResamplerQuality quality) {
+    const bool smoothRolloff = impl_->resamplerPhase == ResamplerPhase::LinearSmooth ||
+                               impl_->resamplerPhase == ResamplerPhase::MinimumSmooth;
     switch (quality) {
       case ResamplerQuality::Ultra:
         av_opt_set_int(impl_->swr, "filter_size", 64, 0);
         av_opt_set_int(impl_->swr, "phase_shift", 10, 0);
-        av_opt_set_double(impl_->swr, "cutoff", 0.99, 0);
+        av_opt_set_double(impl_->swr, "cutoff", smoothRolloff ? 0.91 : 0.99, 0);
         break;
       case ResamplerQuality::High:
         av_opt_set_int(impl_->swr, "filter_size", 32, 0);
         av_opt_set_int(impl_->swr, "phase_shift", 10, 0);
-        av_opt_set_double(impl_->swr, "cutoff", 0.97, 0);
+        av_opt_set_double(impl_->swr, "cutoff", smoothRolloff ? 0.91 : 0.97, 0);
         break;
       case ResamplerQuality::Native:
       default:
@@ -971,6 +974,10 @@ bool FFmpegDecoder::setOutputFormat(const AudioFormat& format, std::string* erro
 
 void FFmpegDecoder::setResamplerQuality(ResamplerQuality quality) {
   impl_->resamplerQuality = quality;
+}
+
+void FFmpegDecoder::setResamplerPhase(ResamplerPhase phase) {
+  impl_->resamplerPhase = phase;
 }
 
 size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* error) {
@@ -1128,6 +1135,10 @@ FFmpegDecoder::ResamplerEngine FFmpegDecoder::resamplerEngine() const {
 
 FFmpegDecoder::ResamplerQuality FFmpegDecoder::effectiveResamplerQuality() const {
   return impl_->effectiveResamplerQuality;
+}
+
+FFmpegDecoder::ResamplerPhase FFmpegDecoder::resamplerPhase() const {
+  return impl_->resamplerPhase;
 }
 
 const AudioStreamInfo& FFmpegDecoder::streamInfo() const {

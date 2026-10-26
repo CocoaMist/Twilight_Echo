@@ -1886,7 +1886,7 @@
         const centroid = weightedIndex / totalLevel
         const normalizedFlux = Math.min(1, flux / limit / 0.08)
         const motionRate = 0.65 + centroid * 1.25 + normalizedFlux * 1.8
-        lowFrequencyContourPhase += Math.max(0.001, deltaSeconds) * motionRate * 4.2
+        lowFrequencyContourPhase += Math.max(0.001, deltaSeconds) * motionRate * 0.35
         return lowFrequencyContourPhase
       }
 
@@ -1983,7 +1983,8 @@
 
       function currentPrecomputedBarValue(index, now) {
         const elapsed = now - precomputedBarsTransitionStartedAt
-        const progress = Math.max(0, Math.min(1, elapsed / PRECOMPUTED_BAR_TRANSITION_MS))
+        const transitionMs = Math.max(PRECOMPUTED_BAR_TRANSITION_MS, 64)
+        const progress = Math.max(0, Math.min(1, elapsed / transitionMs))
         const eased = progress * progress * (3 - 2 * progress)
         const previousValue = previousPrecomputedBars[index] || 0
         const targetValue = precomputedBars[index] || 0

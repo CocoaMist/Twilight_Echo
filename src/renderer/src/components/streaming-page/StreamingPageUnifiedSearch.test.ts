@@ -5,13 +5,14 @@ import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { compileStyle } from '@vue/compiler-sfc'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import type { LocalLibraryRemoveResult } from '../../../../shared/localLibrary.ts'
+import type { CoreLibraryRemovalResult } from '../../../../shared/coreLibraryMaintenance.ts'
 import type { Track, TrackArtistRef } from '../../types/music.ts'
 import type {
   MediaProviderAlbumSummary,
   MediaProviderArtistSummary
 } from '../../providers/mediaProvider.ts'
 import { appendUniqueTracks } from './streamingPageModel.ts'
+import { createCoreCollectionSearch } from './coreCollectionSearch.ts'
 import { createNcmPlaylistEditor } from './ncmPlaylistEditor.ts'
 import { getTrackSource } from '../../utils/logicalTrackModel.ts'
 import {
@@ -130,6 +131,7 @@ test('album search detail opens the result source, retries in place and ignores 
   let token = 0
   const calls: Array<{ providerId: string; id: string }> = []
   const scope = {
+    detailNavigationToken: 0,
     activeProvider: { value: 'another-provider' },
     beginDetailTransition: () => {},
     pushDetail: (view: { providerId: string }) => stack.push(view),
@@ -144,7 +146,7 @@ test('album search detail opens the result source, retries in place and ignores 
     albumSearch: {
       loadAlbumTracks: async (album: { providerId: string; id: string }) => {
         calls.push(album)
-        if (album.providerId === 'local') return local
+        if (album.providerId === 'qq') return local
         return new Promise<Track[]>((resolve) => {
           finishRemote = resolve
         })
@@ -165,7 +167,7 @@ test('album search detail opens the result source, retries in place and ignores 
     trackCount: 1,
     cover: null,
     providerName: 'Local',
-    providerId: 'local'
+    providerId: 'qq'
   }
   const remote = handlers.openSearchAlbum({ ...album, providerId: 'ncm' })
   await handlers.openSearchAlbum(album)
@@ -175,13 +177,13 @@ test('album search detail opens the result source, retries in place and ignores 
   assert.equal(scope.activeProvider.value, 'another-provider')
   assert.equal(scope.detailLoading.value, false)
   assert.equal(scope.detailError.value, '')
-  assert.equal(stack.at(-1)?.providerId, 'local')
+  assert.equal(stack.at(-1)?.providerId, 'qq')
   const depth = stack.length
-  await handlers.openAlbum(album, 'local', true)
+  await handlers.openAlbum(album, 'qq', true)
   assert.equal(stack.length, depth)
   assert.deepEqual(
     calls.map((call) => call.providerId),
-    ['ncm', 'local', 'local']
+    ['ncm', 'qq', 'qq']
   )
 })
 test('album links retain native local release navigation and online source', async () => {
@@ -199,11 +201,8 @@ test('album links retain native local release navigation and online source', asy
     selectDetailProvider: async () => undefined,
     isCurrentDetailNavigation: () => true,
     emit: (...args: unknown[]) => localViews.push(args),
-    musicStore: {
-      albums: {
-        value: [{ id: 'release:1', name: 'Album', tracks: [track], cover: null, trackCount: 1 }]
-      }
-    },
+    localSearchSource: { resolveAlbum: async () => ({ albumId: 'release:1', mode: 'sqlite' }) },
+    friendlyStreamingError: (error: Error) => error.message,
     openAlbum: async (album: { id: string | number }, providerId: string) =>
       opened.push({ providerId, id: album.id }),
     pushNotice: () => assert.fail('the local library supplies the album identity')
@@ -236,7 +235,8 @@ test('streaming page renders NetEase cloud as a dedicated sidebar surface', () =
 test('streaming page exposes unified song search beyond the NetEase-only surface', () => {
   assert.match(source, /useMediaProviders\(\)/)
   assert.match(source, /mediaProviders\.searchAllSongs\(\{/)
-  assert.match(source, /localTracks: musicStore\.tracks\.value/)
+  assert.doesNotMatch(source, /localTracks:|musicStore\.tracks|createUnifiedRecentTrackResolver/)
+  assert.match(source, /createCoreCollectionSearch/ )
   assert.match(source, /searchUnifiedSongs/)
   assert.match(source, /const showUnifiedSearch = computed/)
   assert.doesNotMatch(source, /const showNcmSearch = computed/)
@@ -351,7 +351,7 @@ function createTrackMetadataNavigationHarness() {
         ]
       })
     },
-    musicStore: { albums: { value: [{ id: 'local-release', tracks: [] as Track[] }] } },
+    localSearchSource: { resolveAlbum: async () => ({ albumId: 'local-release', mode: 'sqlite' }) },
     selectProvider: (id: string, persist = true) => {
       providerSelections.push([id, persist])
       scope.activeProvider.value = id
@@ -498,7 +498,6 @@ test('metadata navigation uses local library identities and exposes only support
   assert.equal(h.runtime.canOpenTrackAlbum({ ...h.track, source: 'unsupported' }), false)
 
   const local = { ...createTrack('local-file', 'local'), albumId: undefined }
-  h.scope.musicStore.albums.value[0].tracks = [local]
   assert.equal(h.runtime.canOpenTrackArtist(local), true)
   assert.equal(h.runtime.canOpenTrackAlbum(local), true)
   h.runtime.openTrackArtist(local)
@@ -557,8 +556,7 @@ for (const phase of ['providers', 'search'] as const) {
       const h = createTrackMetadataNavigationHarness()
       t.after(h.runtime.stop)
       const local = createTrack('local-file', 'local')
-      h.scope.musicStore.albums.value[0].tracks = [local]
-      const release = await holdArtistNavigation(h, phase)
+          const release = await holdArtistNavigation(h, phase)
       if (kind === 'artist') h.runtime.openTrackArtist(local)
       else await h.runtime.openTrackAlbum(local)
       await release()
@@ -640,8 +638,8 @@ test('platform history is delegated to the independent recent page', () => {
 
 test('ranking detail uses cross-source listening stats before provider play records', () => {
   assert.match(source, /getTopTracks\(\)/)
-  assert.match(source, /topStats/)
-  assert.match(source, /resolveUnifiedRecentTracks\(\{/)
+  assert.match(source, /stat\.displayTrack/)
+  assert.doesNotMatch(source, /resolveUnifiedRecentTracks|musicStore\.tracks/)
   assert.doesNotMatch(source, /const tracks = await fetchPlayRecords\(1\)/)
 })
 
@@ -780,24 +778,11 @@ test('external provider home removes the redundant provider masthead', () => {
   assert.match(providerHomeSource, /class="music-hero"/)
 })
 
-test('private FM and radar use a session-fenced queue stream in shuffle mode', () => {
-  assert.match(source, /playbackStore\.queue\.value\.length - playbackStore\.queueIndex\.value > 3/)
-  assert.match(source, /async function loadMorePersonalizedStream/)
-  assert.match(source, /session: PersonalizedStreamSession \| null = null/)
-  assert.match(source, /let additions = appendUniqueTracks\(existing, incoming\)/)
-  assert.match(source, /key === 'radar' &&\s*additions\.length === 0/)
-  assert.match(source, /providerStore\.callProvider<Track\[]>\(providerId,\s*'fetchPersonalFm'\)/)
-  assert.match(source, /if \(session\) appendPersonalizedStreamTracks\(session, additions\)/)
-  assert.match(source, /playTrack\(track, trackQueue\)[\s\S]*startPersonalizedStream\(streamKey\)/)
-  assert.match(source, /personalizedStreamRemaining/)
-  assert.match(source, /personalizedStreamLoading\[session\.key\]/)
-  assert.doesNotMatch(source, /queueLength - index > PERSONALIZED_STREAM_QUEUE_THRESHOLD/)
-  assert.doesNotMatch(source, /activePersonalizedStreamKey/)
-  assert.match(homeSource, /function playPersonalizedStream/)
+test('private FM and radar start the Core session without renderer queue ownership', () => {
+  assert.match(source, /startPersonalizedStream\(streamKey, getTrackSource\(track\), track\.id\)/)
+  assert.doesNotMatch(source, /appendPersonalizedStreamTracks|personalizedStreamRemaining|session: PersonalizedStreamSession/)
   assert.match(homeSource, /@click="playPersonalizedStream\(fmSection\)"/)
   assert.match(homeSource, /@click="playPersonalizedStream\(radarSection\)"/)
-  assert.doesNotMatch(homeSource, /@click="emit\('openRecSection', fmSection\)"/)
-  assert.doesNotMatch(homeSource, /@click="emit\('openRecSection', radarSection\)"/)
 })
 
 test('each streaming destination stays mounted across page switches', () => {
@@ -882,7 +867,7 @@ test('mixed streaming deletion batches locals and keeps provider semantics separ
     removeLocalTracks: async (selected) => {
       localCalls.push(selected.map((track) => track.id))
       const response = createLocalResult(selected, [local.id])
-      response.failures.push({ filePath: failedLocal.filePath, message: 'local failed' })
+      response.failures.push({ id: failedLocal.id, message: 'local failed' })
       return response
     },
     removeProviderTrack: async (track) => {
@@ -893,7 +878,7 @@ test('mixed streaming deletion batches locals and keeps provider semantics separ
   assert.deepEqual(localCalls, [['local:first', 'local:failed']])
   assert.deepEqual(providerCalls, ['ncm:42'])
   assert.deepEqual(result.removedTrackIds, ['local:first', 'ncm:42'])
-  assert.deepEqual(result.failures, [{ filePath: failedLocal.filePath, message: 'local failed' }])
+  assert.deepEqual(result.failures, [{ id: failedLocal.id, message: 'local failed' }])
 })
 
 test('external provider unfavorite still runs when the local removal phase rejects', async () => {
@@ -922,7 +907,7 @@ test('external provider unfavorite still runs when the local removal phase rejec
         removeNcmFavorite: async () => {
           throw new Error('unexpected NCM fallback')
         },
-        removeSnapshotFavorite: (removed) => removedSnapshots.push(removed.id)
+        removeSnapshotFavorite: (removed) => { removedSnapshots.push(removed.id) }
       })
   })
 
@@ -930,21 +915,14 @@ test('external provider unfavorite still runs when the local removal phase rejec
   assert.deepEqual(removedSnapshots, ['bili:BV1xx'])
   assert.deepEqual(result.removedTrackIds, ['bili:BV1xx'])
   assert.equal(result.failures.length, 1)
-  assert.equal(result.failures[0].filePath, local.filePath)
+  assert.equal(result.failures[0].id, local.id)
 })
 
-test('local dashboard top tracks resolve logical stats to playable local variants', () => {
+test('local dashboard renders Core-resolved listening identities', () => {
   const dashboardSource = readFileSync(new URL('../LocalDashboard.vue', import.meta.url), 'utf8')
-
-  assert.match(
-    dashboardSource,
-    /import \{ createUnifiedRecentTrackResolver \} from '\.\.\/utils\/unifiedRecentTracks'/
-  )
   assert.match(dashboardSource, /getMostListenedTracks\(TOP_TRACK_COUNT\)/)
-  assert.match(dashboardSource, /createUnifiedRecentTrackResolver\(tracks\.value\)/)
-  assert.doesNotMatch(dashboardSource, /recentStats: \[stat\]/)
-  assert.doesNotMatch(dashboardSource, /Object\.entries\(listeningStats\.value\.tracks\)/)
-  assert.doesNotMatch(dashboardSource, /track: byId\.get\(id\) \?\? stat\.track/)
+  assert.match(dashboardSource, /stat\.displayTrack/)
+  assert.doesNotMatch(dashboardSource, /createUnifiedRecentTrackResolver|musicVersionRevision|window\.api\.library/)
 })
 
 function createFmHarness() {
@@ -956,8 +934,8 @@ function createFmHarness() {
     personalizedStreamLoading: { fm: false },
     personalizedStreamRetryAfter: { fm: 0 },
     currentTrack: { value: current },
-    activeProvider: { value: 'qq' },
-    recommendationTracks: { value: { fm: [createTrack('qq:visible', 'qq')] } },
+    activeProvider: { value: 'kugou' },
+    recommendationTracks: { value: { fm: [current] } },
     recommendationRequestId: 1,
     currentDetail: { value: null },
     playbackStore: { queue: { value: [current] } },
@@ -980,7 +958,7 @@ function createFmHarness() {
   const load = runInNewContext(
     `${stripTypeScriptTypes(functionSource)}\nloadMorePersonalizedStream`,
     scope
-  ) as (key: string, session: unknown) => Promise<void>
+  ) as (key: string) => Promise<void>
   return { load, scope, requests, appended, current, incoming }
 }
 
@@ -1034,36 +1012,35 @@ test('guest home skips private daily recommendations while retaining public char
   assert.equal(scope.recsError.value, '')
 })
 
-test('FM continues from its playing provider after browsing another homepage', async () => {
+test('browsing a further FM shelf changes only displayed recommendations', async () => {
   const harness = createFmHarness()
-  const visible = harness.scope.recommendationTracks.value
-  await harness.load('fm', { key: 'fm', id: 1 })
+  await harness.load('fm')
   assert.deepEqual(harness.requests, ['kugou'])
-  assert.equal(harness.scope.recommendationTracks.value, visible)
-  assert.deepEqual(harness.appended[0], [harness.incoming])
+  assert.equal(harness.scope.recommendationTracks.value.fm[0], harness.current)
+  assert.equal(harness.scope.recommendationTracks.value.fm[1], harness.incoming)
+  assert.equal(harness.appended.length, 0)
   assert.equal(harness.scope.personalizedStreamLoading.fm, false)
 })
 
-test('a repeated FM batch backs off without appending duplicate queue tracks', async () => {
+test('a repeated display FM batch backs off without writing the Core playback queue', async () => {
   const harness = createFmHarness()
-  harness.scope.playbackStore.queue.value = [harness.current, harness.incoming]
-  await harness.load('fm', { key: 'fm', id: 1 })
+  harness.scope.recommendationTracks.value = { fm: [harness.current, harness.incoming] }
+  await harness.load('fm')
   assert.equal(harness.appended.length, 0)
   assert.ok(harness.scope.personalizedStreamRetryAfter.fm > Date.now())
 })
 
-test('FM completion cannot overwrite a homepage refreshed during the request', async () => {
+test('a late display FM response cannot overwrite a refreshed homepage', async () => {
   const harness = createFmHarness()
-  harness.scope.activeProvider.value = 'kugou'
   const refreshed = { fm: [createTrack('kugou:refreshed', 'kugou')] }
   harness.scope.providerStore.callProvider = async () => {
     harness.scope.recommendationRequestId += 1
     harness.scope.recommendationTracks.value = refreshed
     return [harness.incoming]
   }
-  await harness.load('fm', { key: 'fm', id: 1 })
+  await harness.load('fm')
   assert.equal(harness.scope.recommendationTracks.value, refreshed)
-  assert.deepEqual(harness.appended[0], [harness.incoming])
+  assert.equal(harness.appended.length, 0)
 })
 
 function createTrack(id: string, source: string): Track {
@@ -1082,30 +1059,51 @@ function createTrack(id: string, source: string): Track {
   }
 }
 
-function createLocalResult(tracks: Track[], removedTrackIds: string[]): LocalLibraryRemoveResult {
-  const removed = new Set(removedTrackIds)
-  const removedTracks = tracks.filter((track) => removed.has(track.id))
-  return {
-    mode: 'library',
-    library: {
-      version: 2,
-      revision: 1,
-      tracks: tracks.filter((track) => !removed.has(track.id)),
-      folders: [],
-      exclusions: removedTracks.map((track) => ({
-        filePath: track.filePath,
-        title: track.title,
-        artist: track.artist,
-        excludedAt: '2026-01-01T00:00:00.000Z'
-      }))
-    },
-    removedTrackIds,
-    removedFilePaths: removedTracks.map((track) => track.filePath),
-    failures: []
-  }
+function createLocalResult(_tracks: Track[], removedTrackIds: string[]): CoreLibraryRemovalResult {
+  return { revision: 1, removedTrackIds, removedFileCount: 0, failures: [] }
 }
 
 test('saved streaming scroll positions stay bounded', () => {
   assert.match(source, /SAVED_SCROLL_POSITION_LIMIT = \d+/)
   assert.match(source, /while \(savedScrollPositions\.size > SAVED_SCROLL_POSITION_LIMIT\)/)
+})
+
+
+test('collection UI forwards source, bounded paging and cancellation to Core without provider fan-out', async () => {
+  const requests: unknown[] = [], warnings: string[] = []
+  const controller = new AbortController()
+  const search = createCoreCollectionSearch({
+    read: async (query, signal) => {
+      requests.push({ query, signal })
+      return { kind: query.kind, total: 90, offset: query.offset ?? 0, hasMore: false, warning: 'One provider failed', items: [{ kind: query.kind, id: 'release:1', name: 'Release', providerId: 'ncm', providerName: 'NetEase' }] }
+    }, warning: message => warnings.push(message)
+  })
+  const albums = await search.albums('all', 'release', 40, 80, { signal: controller.signal })
+  assert.equal(albums.total, 90)
+  assert.equal(albums.albums[0].cover, null)
+  assert.equal(albums.albums[0].trackCount, 0)
+  await search.artists('local', 'artist', 20, 0)
+  await search.playlists('ncm', 'playlist')
+  assert.deepEqual(requests, [
+    { query: { kind: 'albums', query: 'release', limit: 40, offset: 80, scope: 'all' }, signal: controller.signal },
+    { query: { kind: 'artists', query: 'artist', limit: 20, offset: 0, scope: 'local' }, signal: undefined },
+    { query: { kind: 'playlists', query: 'playlist', limit: 30, offset: 0, providerId: 'ncm' }, signal: undefined }
+  ])
+  assert.equal(warnings.length, 3)
+})
+
+test('a provider unfavorite waits for Core favorite persistence before reporting removal', async () => {
+  const order: string[] = []
+  let acknowledge!: () => void
+  const track = { ...createTrack('ncm:42', 'ncm'), ncmSongId: 42 }
+  const operation = removeStreamingProviderFavorite(track, {
+    providers: { getForTrack: () => null },
+    removeNcmFavorite: async () => { order.push('provider') },
+    removeSnapshotFavorite: async () => { await new Promise<void>(resolve => { acknowledge = resolve }); order.push('core') }
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(order, ['provider'])
+  acknowledge()
+  await operation
+  assert.deepEqual(order, ['provider', 'core'])
 })

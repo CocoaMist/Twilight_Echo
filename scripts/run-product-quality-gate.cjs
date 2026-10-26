@@ -31,9 +31,11 @@ const PRODUCT_GATES = [
   {
     name: 'application-and-boundaries',
     scripts: [
+      'test:core',
       'test:plugins',
       'test:plugin-tooling',
       'test:themes',
+      'test:appearance-workspace',
       'test:app',
       'test:renderer-data-tooling',
       'test:cross-cutting-regressions'

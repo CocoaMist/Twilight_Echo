@@ -92,6 +92,7 @@ const cache = createProtocolAssetCache()
 
 /** The existing protocol entry point shares one process-local, bounded LRU. */
 export const readCachedProtocolFile = cache.read
+export const clearProtocolAssetCache = cache.clear
 
 export function resetProtocolAssetCacheForTests(): void {
   cache.clear()

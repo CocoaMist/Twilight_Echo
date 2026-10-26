@@ -44,6 +44,9 @@ test('real Electron quits once with an Afterglow anchor and a stuck diagnostic w
       let anchor,cleaned=false;
       const shutdownAfterglowMode=()=>{if(anchor&&!anchor.isDestroyed())anchor.destroy();cleaned=true};
       const destroyDesktopLyrics=()=>{},destroyDynamicIsland=()=>{};
+      // The migrated handler consults the Core application before deferring a
+      // quit; without a Core runtime the synchronous legacy path must run.
+      const getCoreApplication=()=>null;
       ${transpile(beforeQuit)}
       { const exports={}; ${transpile(quit)}
         exports.registerDiagnosticQuit(app,()=>new Promise(()=>{}),50);

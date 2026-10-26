@@ -6,7 +6,7 @@
 
 `TAE_Pause` / `audioEngine.togglePause()` 暂停 PCM 播放时，先在音频回调中执行 200 毫秒线性淡出，再提交 paused 状态；继续播放仍使用原来的软件音量。淡出是独立的临时增益，不修改或持久化 `volume`，支持 Float32、整数 PCM 直通及 PCM 转 DSD 调制前的 PCM。独占设备的自动释放发生在淡出结束之后。回调停止或设备异常时，控制线程最多等待 300 毫秒后完成暂停，避免无限等待。
 
-淡出期间和暂停后的输出报告 `pause_fade_active`，`outputPerfect` / `sourceExact` / `pcmPassthrough` 为 false；继续播放后按实际输出路线恢复这些事实。DoP 与原生 DSD 直通保留原有暂停行为，不缩放其传输数据。renderer HTMLAudio 备用播放也执行 200 毫秒淡出，再次播放、换曲或销毁播放器会清理待执行的暂停，并恢复最新音量。外部投放设备仍由自身的播放控制处理暂停。
+淡出期间和暂停后的输出报告 `pause_fade_active`，`outputPerfect` / `sourceExact` / `pcmPassthrough` 为 false；继续播放后按实际输出路线恢复这些事实。DoP 与原生 DSD 直通保留原有暂停行为，不缩放其传输数据。外部投放设备仍由自身的播放控制处理暂停。
 
 ## PlaybackInfo 与 OutputInfo
 
@@ -94,7 +94,7 @@ PCM 直通无缝衔接保留实际设备的 Int16 / Int24 / Int24-in-32 / Int32 
 - `defaultBackend`：当前平台默认 backend id。
 - `pcmPassthrough`：当前构建具备 per-playback PCM passthrough 判定能力；实际状态以 `outputInfo.pcmPassthrough` 为准。
 - `outputPerfectRequiresPcmPassthrough`：`outputPerfect` 是否要求 PCM passthrough；当前为 `true`。
-- `htmlAudioFallbackDefault`：Electron 是否默认允许 HTMLAudio 兜底；现阶段为 `false`。
+- `htmlAudioFallbackDefault`：兼容旧客户端的字段，固定为 `false`。HTMLAudio 播放实现与环境变量启用路径已移除；原生播放不可用时返回实际错误。
 - `backends` / `backendCapabilities`：后端能力列表，两个字段保持兼容。
 - `features`：FFmpeg、WASAPI、ASIO、CoreAudio、ALSA、Native DSD、DoP、SACD ISO 能力布尔值。
 - `dsd`：DSD 能力模型。DSF/DFF 与 SACD ISO 未压缩 DSD area 可进入 Native DSD / DoP / PCM fallback 决策链；DST 压缩曲目（SACD ISO DST area 与 DSDIFF `'DST '` form/CMPR `"DST "`，含 DSTF 帧表 + FRTE 帧率，seek 按帧索引）通过 DSD-preserving provider（vendored dstdec 算术核心，LGPL-2.1+，输出原始 DSD 字节而非 PCM）解出 DSD 后，同样进入该决策链。管线播放前探测同样接有 provider，DST 源的 `dsdProbe` 不会因缺解码器而失败。provider 默认可用，此时 `sacdIsoDst=true`、`sacdIsoDstMode="native"`、`sacdIsoDstDsdProvider=true`；provider 不可用时退回 `sacdIsoDst=false`、`sacdIsoDstMode=unavailable`、`sacdIsoDstReasonCode=dst_dsd_provider_unavailable`。

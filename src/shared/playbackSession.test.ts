@@ -81,3 +81,64 @@ test('database sessions use one compact occurrence reference, never an array que
       false
     )
 })
+
+test('personalized context is backward-compatible and bound to the exact durable queue', () => {
+  const value = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    position: 0,
+    track: { id: 'ncm:1', queueEntryId: 'one' },
+    libraryQueue: { id: 'q', revision: 2, entryId: 'one', index: 0 },
+    personalizedStream: { queueId: 'q', providerId: 'ncm', key: 'fm' }
+  }
+  assert.equal(isPlaybackSession(value), true)
+  for (const patch of [{ queueId: 'other' }, { providerId: '../provider' }, { key: 'heart' }])
+    assert.equal(
+      isPlaybackSession({
+        ...value,
+        personalizedStream: { ...value.personalizedStream, ...patch }
+      }),
+      false
+    )
+  assert.equal(
+    isPlaybackSession({ ...session(), personalizedStream: value.personalizedStream }),
+    false
+  )
+})
+
+test('heart persistence binds the liked/base queues and explicitly represents an outside recommendation', () => {
+  const value = {
+    version: 1,
+    savedAt: '',
+    mode: 'trackAndPosition',
+    playMode: 'heart',
+    position: 12,
+    track: { id: 'ncm:1', queueEntryId: 'seed' },
+    libraryQueue: { id: 'heart', revision: 2, entryId: 'seed', index: 0 },
+    heart: {
+      queueId: 'heart',
+      likedPlaylistId: 123,
+      baseQueue: { id: 'liked', revision: 1, entryId: 'seed', index: 9 }
+    }
+  }
+  assert.equal(isPlaybackSession(value), true)
+  for (const heart of [
+    { ...value.heart, queueId: 'other' },
+    { ...value.heart, likedPlaylistId: -1 },
+    { ...value.heart, baseQueue: { ...value.heart.baseQueue, id: 'heart' } },
+    { ...value.heart, baseQueue: { ...value.heart.baseQueue, revision: -1 } }
+  ])
+    assert.equal(isPlaybackSession({ ...value, heart }), false)
+  const detached = {
+    ...value,
+    playMode: 'sequential',
+    heart: { queueId: 'heart', likedPlaylistId: 123 },
+    track: { id: 'ncm:10', queueEntryId: 'outside' },
+    detachedHeartTrack: true
+  }
+  assert.equal(isPlaybackSession(detached), true)
+  assert.equal(isPlaybackSession({ ...detached, detachedHeartTrack: undefined }), false)
+  assert.equal(isPlaybackSession({ ...detached, heart: undefined }), false)
+  assert.equal(isPlaybackSession({ ...detached, playMode: 'heart' }), false)
+})

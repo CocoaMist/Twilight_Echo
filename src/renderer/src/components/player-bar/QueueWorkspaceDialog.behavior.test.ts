@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('queue workspace supports keyboard, 20,000-entry save/restore, undo, CRUD, failure retry and bounded history in Electron', async () => {
+test('Core queue workspace supports summary-only save/restore, undo, CRUD, failure retry and bounded history in Electron', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-queue-dialog-'))
   try {
     await writeFile(join(directory, 'entry.ts'), runtime)
@@ -53,11 +53,11 @@ test('queue workspace supports keyboard, 20,000-entry save/restore, undo, CRUD, 
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:960,height:900,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runQueueDialogTests()');if(process.env.TWILIGHT_QUEUE_DIALOG_SCREENSHOT){await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');fs.writeFileSync(process.env.TWILIGHT_QUEUE_DIALOG_SCREENSHOT,(await win.webContents.capturePage()).toPNG())}console.log('QUEUE_DIALOG_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');app.setPath('userData',__dirname+'/profile');app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:960,height:900,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runQueueDialogTests()');if(process.env.TWILIGHT_QUEUE_DIALOG_SCREENSHOT){await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');fs.writeFileSync(process.env.TWILIGHT_QUEUE_DIALOG_SCREENSHOT,(await win.webContents.capturePage()).toPNG())}console.log('QUEUE_DIALOG_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const result = await promisify(execFile)(
       require('electron'),
-      ['--no-sandbox', join(directory, 'runner.cjs'), join(directory, 'index.html')],
+      [join(directory, 'runner.cjs'), join(directory, 'index.html')],
       { windowsHide: true, timeout: 60_000 }
     )
     assert.match(result.stdout, /QUEUE_DIALOG_OK/)
@@ -72,24 +72,39 @@ test('queue workspace supports keyboard, 20,000-entry save/restore, undo, CRUD, 
 
 const runtime = `import {createApp,h,nextTick,ref,shallowRef} from 'vue'
 import QueueWorkspaceDialog from '@renderer/components/player-bar/QueueWorkspaceDialog.vue'
-import {createQueueWorkspaceStore} from '@renderer/stores/player/queueWorkspaceStore.ts'
-import {createQueueSessionController} from '@renderer/stores/player/queueSessionController.ts'
-import {createQueueCommandController} from '@renderer/stores/player/queueCommandController.ts'
-import {toPlaybackQueueSnapshots} from '@renderer/utils/playbackQueueVirtualization.ts'
+import {createCorePlayerPersonal} from '@renderer/stores/player/corePlayerPersonal.ts'
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const pause=(delay=30)=>new Promise(resolve=>setTimeout(resolve,delay))
-const song=id=>({id,queueEntryId:'q:'+id,title:id,artist:'测试艺术家',album:'测试专辑',filePath:'C:/music/'+id+'.flac',fileName:id,source:'local',duration:180,size:1,cover:null,lyrics:null})
+const song=id=>({id,title:id,artist:'测试艺术家',album:'测试专辑',source:'local',duration:180})
 window.runQueueDialogTests=async()=>{
-  let disk=null,fail=false,plays=0,bubbled=0
-  const queue=shallowRef(toPlaybackQueueSnapshots(Array.from({length:20000},(_,i)=>song('歌曲 '+i))))
-  const library=new Map(queue.value.map(track=>[track.id,track]))
-  const originalQueue=shallowRef([...queue.value]),currentTrack=shallowRef(queue.value[19999]),queueIndex=ref(19999),playMode=ref('sequential'),playing=ref(false)
-  const workspace=createQueueWorkspaceStore(()=>({loadQueueWorkspace:async()=>disk,saveQueueWorkspace:async(data,revision)=>{if(fail)throw new Error('磁盘已满');disk={version:2,revision:revision+1,savedAt:new Date().toISOString(),data:structuredClone(data)};return disk}}))
-  const commands=createQueueCommandController({queue,originalQueue,currentTrack,queueIndex,playMode,getPosition:()=>25,prepareSelection:track=>{currentTrack.value=track;playing.value=false},onMutation:()=>{}})
-  const controller=createQueueSessionController({workspace,queue,originalQueue,currentTrack,playMode,revision:commands.revision,getPosition:()=>25,
-    getSources:async()=>({localTracks:library,savedStreams:new Map(),availableProviders:new Set(),networkProfiles:new Set(),authorizeFiles:async paths=>paths.map(()=>true)}),
-    prepare:result=>{commands.replace(result.queue,result.index,{original:result.original,select:false});currentTrack.value=result.queue[result.index];playing.value=false},play:async()=>{playing.value=true;plays++}})
-  const app=createApp({render:()=>controller.open.value?h(QueueWorkspaceDialog,{workspace,controller,queueLength:queue.value.length,canUndo:commands.canUndo.value,undoLabel:commands.undoLabel.value,undo:commands.undo,onClose:()=>controller.open.value=false}):null})
+  let fail=false,plays=0,bubbled=0,revision=0,sessions=[],recorded=[]
+  const count=ref(20000),index=ref(19999),playing=ref(false),canUndo=ref(false)
+  const state=shallowRef({phase:'ready',epoch:'test',workspaceRevision:0,workspaceContentRevision:0,lyricsRevision:null,bookmarksRevision:null})
+  const core={state,query:async(name,input)=>{
+    if(name==='workspace.state')return {revision,contentRevision:revision,error:''}
+    if(name==='workspace.sessions')return {revision,contentRevision:revision,items:sessions.map(s=>({...s})),total:sessions.length,offset:0}
+    if(name==='workspace.history')return {revision,contentRevision:revision,items:recorded.slice(-200),total:Math.min(recorded.length,200),offset:0}
+    throw Error('Unexpected query '+name)
+  },command:async(name,payload)=>{
+    if(name==='lifecycle.flush')return
+    expect(payload.revision===revision,'Core revision was not forwarded')
+    if(name==='workspace.restore'){
+      const saved=sessions.find(s=>s.id===payload.id);count.value=saved.count;index.value=saved.index;playing.value=payload.play;if(payload.play)plays++
+      return {restored:saved.count,unavailable:0,deferred:0,issues:[]}
+    }
+    expect(name==='workspace.edit','unexpected command '+name)
+    if(fail)throw Error('磁盘已满')
+    const edit=payload.edit
+    if(edit.kind==='saveCurrent'){
+      const saved={id:edit.id??'saved:'+revision,name:edit.name,count:count.value,index:index.value,storage:'libraryQueue',playMode:'sequential'}
+      const at=sessions.findIndex(s=>s.id===saved.id);if(at<0)sessions.push(saved);else sessions[at]=saved
+    }
+    if(edit.kind==='rename')sessions=sessions.map(s=>s.id===edit.id?{...s,name:edit.name}:s)
+    if(edit.kind==='remove')sessions=sessions.filter(s=>s.id!==edit.id)
+    revision++;state.value={...state.value,workspaceRevision:revision,workspaceContentRevision:revision}
+  }}
+  const {queueWorkspace:workspace,queueSessions:controller}=createCorePlayerPersonal(core,error=>{throw error})
+  const app=createApp({render:()=>controller.open.value?h(QueueWorkspaceDialog,{workspace,controller,queueLength:count.value,canUndo:canUndo.value,undoLabel:'清空队列',undo:async()=>{count.value=20000;index.value=19999;playing.value=false;canUndo.value=false;return true},onClose:()=>controller.open.value=false}):null})
   const opener=document.querySelector('#opener');opener.focus();controller.show();app.mount('#app');await pause()
   const button=text=>[...document.querySelectorAll('button')].find(button=>button.textContent.trim()===text)
   const click=async text=>{const target=button(text);expect(target&&!target.disabled,'missing or disabled button: '+text);target.click();await pause(70)}
@@ -97,21 +112,22 @@ window.runQueueDialogTests=async()=>{
   expect(document.querySelector('dialog').matches(':modal'),'not a modal dialog')
   expect(document.activeElement===document.querySelector('input'),'name input not focused')
   await type('工作');await click('保存为新会话')
-  expect(workspace.sessions.value[0]?.entries.length===20000,'large queue save failed')
+  expect(workspace.sessions.value[0]?.count===20000&&!('entries' in workspace.sessions.value[0]),'large queue summary failed')
   expect(document.querySelectorAll('.session-row').length===1,'saved session missing')
   document.querySelector('.session-row').click();await pause()
-  commands.replace([], -1);await pause();expect(queue.value.length===0,'clear failed')
-  await click('撤销队列操作');expect(queue.value.length===20000&&queueIndex.value===19999&&!playing.value,'undo did not recover paused cursor')
-  await click('恢复队列');expect(queueIndex.value===19999&&plays===0&&!playing.value,'restore started playback or reused a wrong index')
+  count.value=0;index.value=-1;canUndo.value=true;await pause()
+  await click('撤销队列操作');expect(count.value===20000&&index.value===19999&&!playing.value,'undo did not recover paused cursor')
+  await click('恢复队列');expect(index.value===19999&&plays===0&&!playing.value,'restore started playback or reused a wrong index')
   await click('恢复并播放');expect(plays===1&&playing.value,'explicit restore play failed')
-  commands.replace([song('歌曲 0')],0);await pause()
-  await click('用当前队列覆盖');expect(workspace.sessions.value[0].entries.length===1,'overwrite failed')
+  count.value=1;index.value=0;await pause()
+  await click('用当前队列覆盖');expect(workspace.sessions.value[0].count===1,'overwrite failed')
   await type('睡前');await click('应用新名称');expect(workspace.sessions.value[0].name==='睡前','rename failed')
   await click('删除会话');await click('确认删除');expect(workspace.sessions.value.length===0,'delete failed')
   fail=true;await type('工作');await click('保存为新会话')
   expect(document.querySelector('[role="alert"]').textContent.includes('磁盘已满'),'write failure hidden')
   fail=false;await click('保存为新会话');expect(workspace.sessions.value.length===1,'save retry failed')
-  for(let i=0;i<205;i++)workspace.record(song('实际 '+i),i%2?'shuffle':'heart')
+  for(let i=0;i<205;i++)recorded.push({id:'history:'+i,track:song('实际 '+i),playMode:i%2?'shuffle':'heart',playedAt:Date.now()})
+  revision++;state.value={...state.value,workspaceRevision:revision,workspaceContentRevision:revision};await pause()
   await click('实际播放顺序')
   expect(document.querySelector('.history-list').textContent.includes('实际 204'),'latest playback order missing')
   expect(document.querySelectorAll('[data-playback-history-row]').length<=12,'history DOM not bounded')
@@ -125,6 +141,6 @@ window.runQueueDialogTests=async()=>{
   controller.show();await pause()
   document.querySelector('.session-row').click();await pause()
   await click('恢复队列')
-  workspace.dispose();commands.dispose()
+  window.disposeQueueDialog=()=>app.unmount()
 }
 `

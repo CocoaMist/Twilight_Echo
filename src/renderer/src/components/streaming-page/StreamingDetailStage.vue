@@ -2,6 +2,8 @@
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import TrackInfoDialog from '@renderer/components/TrackInfoDialog.vue'
+import EntityMetadataPanel from '../music-metadata/EntityMetadataPanel.vue'
+import type { EntityMetadataContext } from '../music-metadata/entityMetadataView.ts'
 import { computed, nextTick, shallowRef, watch } from 'vue'
 import { useStreamingTrackLocator } from './useStreamingTrackLocator.ts'
 import StreamingTrackToolbar from '@renderer/components/streaming-page/StreamingTrackToolbar.vue'
@@ -42,6 +44,7 @@ const props = withDefaults(
     coverSource?: string | null
     description?: string
     intro?: string
+    metadataTarget?: EntityMetadataContext | null
     icon?: string
     trackCountLabel: string
     tracks: Track[]
@@ -336,7 +339,7 @@ const infoTrack = shallowRef<Track | null>(null)
         </div>
 
         <p v-if="description" class="stage-desc">{{ description }}</p>
-        <p v-if="intro" class="stage-intro">{{ intro }}</p>
+        <p v-if="intro && !metadataTarget" class="stage-intro">{{ intro }}</p>
 
         <div class="stage-meta-row">
           <span v-if="totalDurationLabel" class="stage-chip">{{ totalDurationLabel }}</span>
@@ -384,6 +387,8 @@ const infoTrack = shallowRef<Track | null>(null)
         <p v-if="followError" class="stage-follow-error">{{ followError }}</p>
       </div>
     </header>
+
+    <EntityMetadataPanel v-if="metadataTarget" :target="metadataTarget" :fallback-intro="intro" />
 
     <StreamingTrackToolbar
       v-if="showPlayActions && !showFollow"

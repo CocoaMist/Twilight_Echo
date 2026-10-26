@@ -54,11 +54,15 @@ test('legacy appearance color mode persists all three choices, follows native ch
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
-      env,
-      windowsHide: true,
-      timeout: 30_000
-    })
+    const result = await promisify(execFile)(
+      require('electron'),
+      [join(directory, 'runner.cjs')],
+      {
+        env,
+        windowsHide: true,
+        timeout: 30_000
+      }
+    )
     assert.match(result.stdout, /SETTINGS_COLOR_MODE_OK/)
     console.info(
       'SETTINGS_COLOR_MODE_OK: native light/dark, preview override, save failure, reopen and palette frames'
@@ -84,7 +88,7 @@ const expect=(ok,message)=>{if(!ok)throw Error(message)};
 const settle=async()=>{await nextTick();for(let i=0;i<4;i++)await new Promise(resolve=>requestAnimationFrame(resolve))};
 const settingsListeners=new Set(),nativeToneListeners=new Set(),writes=[];let failSave=false;
 const snapshot=()=>({settings:confirmed,defaults:confirmed,paths:{},appVersion:'test',platform:'win32',windowTransparencySupported:false,restartReasons:[]});
-window.api={settings:{get:async()=>snapshot(),onChanged:listener=>{settingsListeners.add(listener);return()=>settingsListeners.delete(listener)},update:async patch=>{if(failSave)throw Error('保存失败');writes.push(patch);confirmed={...confirmed,...patch};const result=snapshot();for(const listener of settingsListeners)listener(result);return result}},themes:{onChanged:()=>()=>{},onSystemToneChanged:listener=>{nativeToneListeners.add(listener);return()=>nativeToneListeners.delete(listener)}},plugins:{onChanged:()=>()=>{},onNotice:()=>()=>{}},extensions:{list:async()=>[]}};
+window.api={core:{onMessage:()=>()=>{},onStatus:()=>()=>{}},settings:{get:async()=>snapshot(),onChanged:listener=>{settingsListeners.add(listener);return()=>settingsListeners.delete(listener)},update:async patch=>{if(failSave)throw Error('保存失败');writes.push(patch);confirmed={...confirmed,...patch};const result=snapshot();for(const listener of settingsListeners)listener(result);return result}},themes:{onChanged:()=>()=>{},onSystemToneChanged:listener=>{nativeToneListeners.add(listener);return()=>nativeToneListeners.delete(listener)}},plugins:{onChanged:()=>()=>{},onNotice:()=>()=>{}},extensions:{list:async()=>[]}};
 const settingsStore=useSettingsStore(),theme=useThemeStore();
 let confirmed={...settingsStore.settings.value,theme:'dark',appBackground:normalizeAppBackgroundSettings({global:{kind:'image',image:'background://palette.png',imagePalette:{image:'background://palette.png',average:'#640d1e',accent:'#c44868'}}})};
 window.runColorModeTests=async()=>{

@@ -2,6 +2,7 @@ import { app, nativeImage, type ThumbarButton } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { runtime } from '../core/runtime'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
 
 // Windows taskbar-thumbnail toolbar (thumbnail hover / taskbar preview).
 // This is deliberately separate from Windows System Media Transport Controls:
@@ -29,6 +30,11 @@ function buildTaskbarThumbarButtons(): ThumbarButton[] {
       icon: nativeImage.createFromPath(getThumbarIconPath('previous')),
       flags: hasTrack ? ['enabled'] : ['disabled'],
       click: () => {
+        const core = getCoreSystemPlayer()
+        if (core) {
+          core.shortcut('previous')
+          return
+        }
         runtime.mainWindow?.webContents.send('player:shortcut', 'previous')
       }
     },
@@ -37,6 +43,11 @@ function buildTaskbarThumbarButtons(): ThumbarButton[] {
       icon: nativeImage.createFromPath(getThumbarIconPath(isPlaying ? 'pause' : 'play')),
       flags: hasTrack ? ['enabled'] : ['disabled'],
       click: () => {
+        const core = getCoreSystemPlayer()
+        if (core) {
+          core.shortcut('playPause')
+          return
+        }
         runtime.mainWindow?.webContents.send('player:shortcut', 'playPause')
       }
     },
@@ -45,6 +56,11 @@ function buildTaskbarThumbarButtons(): ThumbarButton[] {
       icon: nativeImage.createFromPath(getThumbarIconPath('next')),
       flags: hasTrack ? ['enabled'] : ['disabled'],
       click: () => {
+        const core = getCoreSystemPlayer()
+        if (core) {
+          core.shortcut('next')
+          return
+        }
         runtime.mainWindow?.webContents.send('player:shortcut', 'next')
       }
     }

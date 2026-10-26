@@ -17,7 +17,17 @@ import {
   createTaskbarThumbarButtons,
   destroyTaskbarThumbarButtons
 } from '../integrations/taskbarThumbar.ts'
-import { destroyWindowsSmtc, initializeWindowsSmtc } from '../integrations/windowsSmtc.ts'
+import {
+  destroyWindowsSmtc,
+  initializeWindowsSmtc,
+  rebindWindowsSmtc
+} from '../integrations/windowsSmtc.ts'
+import { getCoreApplication } from './coreApplication.ts'
+import {
+  createAfterglowAnchorWindow,
+  destroyAfterglowAnchorWindow,
+  getAfterglowAnchorHandle
+} from './afterglowAnchorWindow.ts'
 import { ClosePersistenceAttemptGate } from './closePersistence.ts'
 import { isSafeExternalUrl } from '../security/externalUrl.ts'
 import { isTrustedIpcSenderUrl } from '../security/electronSecurity.ts'
@@ -86,11 +96,19 @@ export async function requestRendererPlaybackSessionSave(
   })
 }
 
+/** The renderer saves navigation/drafts; Core checkpoints the actual music session. */
+export async function requestApplicationPersistence(
+  options: PlaybackSessionSaveOptions = {}
+): Promise<void> {
+  await requestRendererPlaybackSessionSave(options)
+  await getCoreApplication()?.flush()
+}
+
 async function closeMainWindowAfterPlaybackSessionSave(win: BrowserWindow): Promise<void> {
   runtime.savingPlaybackSessionBeforeClose = true
   try {
     await closePersistenceAttemptGate.run({
-      requestPersistence: requestRendererPlaybackSessionSave,
+      requestPersistence: requestApplicationPersistence,
       close: () => closeMainWindowAfterSuccessfulPersistence(win),
       showFailure: async (error) => await showClosePersistenceFailure(win, error)
     })
@@ -208,6 +226,7 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
       allowRunningInsecureContent: false
     }
   })
+  getCoreApplication()?.register(runtime.mainWindow)
 
   syncWindowFrameAppearance(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   installWindowChromePublisher(runtime.mainWindow)
@@ -254,6 +273,12 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
       return
     }
 
+    if (getCoreApplication() && !runtime.forceQuit) {
+      event.preventDefault()
+      app.quit()
+      return
+    }
+
     if (!runtime.closingAfterPlaybackSessionSave) {
       event.preventDefault()
       if (!runtime.savingPlaybackSessionBeforeClose && runtime.mainWindow) {
@@ -268,12 +293,20 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
       afterglowUnloading = false
     } else {
       destroyTaskbarThumbarButtons()
-      destroyWindowsSmtc()
+      if (getCoreApplication() && !runtime.forceQuit) {
+        createAfterglowAnchorWindow({
+          showInTaskbar: false,
+          onRestore: () => {
+            createWindow()
+          }
+        })
+        rebindWindowsSmtc(getAfterglowAnchorHandle())
+      } else destroyWindowsSmtc()
     }
     runtime.mainWindow = null
   })
 
-  installAudioDeviceHotplugWatcher(runtime.mainWindow)
+  if (!getCoreApplication()) installAudioDeviceHotplugWatcher(runtime.mainWindow)
 
   if (process.platform === 'win32') {
     try {
@@ -282,7 +315,10 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
       console.warn('[thumbar] unable to initialize taskbar buttons:', error)
     }
     try {
-      initializeWindowsSmtc()
+      if (getCoreApplication()) {
+        rebindWindowsSmtc()
+        destroyAfterglowAnchorWindow()
+      } else initializeWindowsSmtc()
     } catch (error) {
       console.warn('[smtc] unable to initialize Windows media session:', error)
     }
@@ -312,6 +348,7 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
     if (!isDspEditorWindowRequest(details.url, details.frameName)) return
     const owner = runtime.mainWindow!
     registerDspEditorWindow(owner, child)
+    getCoreApplication()?.register(child)
     child.setMenu(null)
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     child.webContents.on('will-navigate', (event) => event.preventDefault())
