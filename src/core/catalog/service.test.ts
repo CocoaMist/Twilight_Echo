@@ -117,8 +117,7 @@ test('changed playlist generations abort staging and reconcile only the current 
   }
   const before = Array.from({ length: 401 }, (_, i) => track(`ncm:${i}`, 'ncm'))
   const current = [track('ncm:current', 'ncm')]
-  let service!: CoreCatalogService
-  service = new CoreCatalogService({
+  const service = new CoreCatalogService({
     database: api,
     versions: { getRevision: () => 0, snapshot: emptyMusicVersions },
     playlists: { getRevision: () => revision, sourceTracks: () => (old ? before : current) },

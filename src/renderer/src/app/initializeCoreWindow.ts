@@ -17,7 +17,9 @@ export async function initializeCoreWindow(core: ReturnType<typeof createCoreCon
           await core.command('migration.commit', { id }) as CoreMigrationStatus
       },
       storage: localStorage,
-      freezeBusinessWrites() {}, // Core rejects business mutations until atomic publication.
+      freezeBusinessWrites() {
+        // Core rejects business mutations until atomic publication; this window has no legacy writers.
+      },
       source: () => openBrowserMusicMigrationSource(localStorage, indexedDB),
       newId: () => crypto.randomUUID()
     })

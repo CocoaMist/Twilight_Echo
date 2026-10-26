@@ -167,7 +167,7 @@ window.api.core = {
           break
         case 'radio.stations':
           value = page(
-            radioDoc.stations.map(({ streamUrl, ...station }) => station),
+            radioDoc.stations.map(({ streamUrl: _streamUrl, ...station }) => station),
             radioRevision
           )
           break
@@ -195,7 +195,7 @@ window.api.core = {
         case 'podcasts.subscriptions': {
           const { data } = await window.api.podcast.loadSubscriptions()
           value = page(
-            data.subscriptions.map(({ episodes, feedUrl, ...sub }) => ({
+            data.subscriptions.map(({ episodes, feedUrl: _feedUrl, ...sub }) => ({
               ...sub,
               episodeCount: episodes.length
             })),
@@ -207,7 +207,7 @@ window.api.core = {
           value = page(
             doc.subscriptions
               .find((sub) => sub.id === payload.id)
-              .episodes.map(({ mediaUrl, ...episode }) => episode),
+              .episodes.map(({ mediaUrl: _mediaUrl, ...episode }) => episode),
             revision
           )
           break

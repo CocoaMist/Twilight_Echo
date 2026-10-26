@@ -414,7 +414,7 @@ test('production selection bindings retain compact CUE occurrence identity off-p
   assert.deepEqual(
     selected.map(f.context.tableTrackKey),
     ['view:0', 'view:5'],
-    'keys=' + JSON.stringify(selected.map(f.context.tableTrackKey)) + ' entries=' + JSON.stringify([...f.context.tableEntryIds.value.keys()].map(k => 'obj')) + ' playlist=' + JSON.stringify(f.context.databasePlaylistState.value)
+    'keys=' + JSON.stringify(selected.map(f.context.tableTrackKey)) + ' entries=' + JSON.stringify([...f.context.tableEntryIds.value.keys()].map(() => 'obj')) + ' playlist=' + JSON.stringify(f.context.databasePlaylistState.value)
   )
   assert.deepEqual(
     selected.map((track) => f.context.playlistDefinitionTrack(ref(track).value).id),

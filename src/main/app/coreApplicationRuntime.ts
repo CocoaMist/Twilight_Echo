@@ -62,7 +62,6 @@ export function createCoreApplication(): CoreApplicationRuntime {
     ipc: ipcMain,
     trustedUrl: isTrustedIpcSenderUrl
   })
-  let application!: CoreApplicationRuntime
   const settingsBridge = installCoreSettingsBridge({
     request: (name, payload) => application.request(name, payload as never) as never,
     project: projectCoreSettings,
@@ -76,7 +75,7 @@ export function createCoreApplication(): CoreApplicationRuntime {
     now: Date.now,
     failed: (error) => console.error('[core.system]', error)
   })
-  application = new CoreApplicationRuntime({
+  const application = new CoreApplicationRuntime({
     supervisor,
     windows,
     settings: settingsBridge,

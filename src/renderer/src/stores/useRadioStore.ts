@@ -36,7 +36,7 @@ async function readAll(radioRevision?: number): Promise<void> {
   if (revisionToRead == null) throw new Error('流媒体服务尚未就绪')
   const items: CoreRadioStation[] = []
   let offset = 0
-  do {
+  for (;;) {
     const page = await core.query('radio.stations', {
       revision: revisionToRead,
       offset,
@@ -50,7 +50,7 @@ async function readAll(radioRevision?: number): Promise<void> {
       loaded.value = true
       return
     }
-  } while (true)
+  }
 }
 
 async function ensureLoaded(): Promise<void> {
