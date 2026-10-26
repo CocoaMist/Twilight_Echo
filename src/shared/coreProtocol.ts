@@ -327,6 +327,8 @@ export interface CoreCommands extends CorePlaylistCommands, CoreRemoteCommands {
   'ncm.cloud.cancel': { id: string }
   'library.inbox.refresh': { duplicatesId?: string }
   'library.inbox.mark': CoreInboxMark
+  'library.health.start': Record<string, never>
+  'library.health.repair': import('./libraryHealth.ts').LibraryHealthRepair
   'library.loudness.prepare': CoreLoudnessPlanRequest
   'library.loudness.start': { id: string }
   'library.loudness.cancel': { id: string }
@@ -533,6 +535,8 @@ export interface CoreQueries
   'ncm.cloud.state': { input: Record<string, never>; output: CoreCloudTransferState }
   'ncm.cloud.page': { input: CoreCloudTransferQuery; output: CoreCloudTransferPage }
   'library.inbox.page': { input: CoreInboxQuery; output: CoreInboxPage }
+  'library.health.status': { input: Record<string, never>; output: import('./libraryHealth.ts').LibraryHealthState }
+  'library.health.page': { input: import('./libraryHealth.ts').LibraryHealthPageQuery; output: import('./libraryHealth.ts').LibraryHealthPage }
   'library.loudness.state': { input: Record<string, never>; output: CoreLoudnessState | null }
   'library.loudness.page': {
     input: { id: string; offset?: number; limit?: number }
@@ -659,7 +663,7 @@ export interface CoreQueries
   'identification.candidates': { input: IdentificationCandidatesQuery; output: { total: number; items: IdentificationCandidate[] } }
   'identification.inbox': { input: import('./musicIdentification.ts').IdentificationInboxQuery; output: import('./musicIdentification.ts').IdentificationInboxPage }
   'identification.preview': { input: IdentificationReview; output: IdentificationPreview }
-  'metadata.entity.detail': { input: { entityId: string; language: EntityMetadataLanguage; sourceProvider?: string }; output: EntityMetadataDetail }
+  'metadata.entity.detail': { input: { entityId: string; language: EntityMetadataLanguage; sourceProvider?: string; includeAutomaticArtwork?: boolean }; output: EntityMetadataDetail }
   'metadata.entity.jobs': { input: EntityMetadataJobsQuery; output: { total: number; items: EntityMetadataJob[] } }
   'metadata.entity.tasks': { input: import('./entityMetadataTasks.ts').MetadataTasksQuery; output: import('./entityMetadataTasks.ts').MetadataTasksPage }
   'metadata.entity.demands': { input: import('./entityMetadataTasks.ts').MetadataTaskDemandsQuery; output: import('./entityMetadataTasks.ts').MetadataTaskDemandsPage }
@@ -803,6 +807,10 @@ const OPERATIONS: Record<
   'library.inbox.refresh': { kind: 'command', permission: 'library:read' },
   'library.inbox.mark': { kind: 'command', permission: 'library:write' },
   'library.inbox.page': { kind: 'query', permission: 'library:read' },
+  'library.health.start': { kind: 'command', permission: 'library:read' },
+  'library.health.repair': { kind: 'command', permission: 'library:write' },
+  'library.health.status': { kind: 'query', permission: 'library:read' },
+  'library.health.page': { kind: 'query', permission: 'library:read' },
   'library.loudness.prepare': { kind: 'command', permission: 'library:read' },
   'library.loudness.start': { kind: 'command', permission: 'library:read' },
   'library.loudness.cancel': { kind: 'command', permission: 'library:read' },

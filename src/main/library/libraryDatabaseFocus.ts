@@ -45,6 +45,10 @@ function numeric(expr: string, value: MusicFocusNumber): Sql {
 export class LibraryDatabaseFocus {
   private readonly owner: MusicFocusOwner
   private collections = new Map<string, string>()
+  private collectionsRevision = -1
+  private readonly totalCache = new Map<string, number>()
+  private readonly queryCache = new Map<string, Omit<MusicFocusPage, 'token'>>()
+  private readonly facetCache = new Map<string, Omit<MusicFocusFacetsPage, 'token'>>()
   private clock = 0
   constructor(owner: MusicFocusOwner) {
     this.owner = owner
@@ -78,8 +82,18 @@ export class LibraryDatabaseFocus {
     const now = this.clock, token = { ...this.state(), queryKey: musicFocusQueryKey(query), asOf: expected?.asOf ?? now,
       ...classificationDimensionsContext(this.sql, context, now) }
     if (expected && (expected.asOf > now || (expected.expiresAt !== null && expected.expiresAt <= now) || !sameFocusToken(expected, token))) throw stale()
-    this.collections = genreBrowseCollectionMap(this.owner.albumAliases())
+    if (query.entity !== 'recording') this.ensureCollections(token.contentRevision)
     return token
+  }
+  private ensureCollections(contentRevision: number) {
+    if (this.collectionsRevision !== contentRevision) {
+      this.collections = genreBrowseCollectionMap(this.owner.albumAliases())
+      this.collectionsRevision = contentRevision
+    }
+  }
+  private revisionKey(token: MusicFocusToken): string {
+    const changes = Number((this.sql.prepare('SELECT total_changes() c').get() as Row)?.c ?? 0)
+    return `${changes}:${token.catalogRevision}:${token.contentRevision}:${token.genresRevision}:${token.metadataRevision}:${token.ratingsRevision}:${token.preferencesRevision}:${token.tagsRevision}:${token.linkRevision}:${token.historyRevision}:${token.queryKey}:${token.contextKey}:${token.expiresAt ?? ''}:${token.expiresAt !== null ? `${token.asOf}:${this.clock}` : ''}`
   }
   private finish(token: MusicFocusToken) { if (token.expiresAt !== null && (this.owner.now?.() ?? Date.now()) >= token.expiresAt) throw stale() }
   private source(value: MusicFocusSource, alias = 's'): Sql {
@@ -135,6 +149,13 @@ export class LibraryDatabaseFocus {
     if ('not' in node) return this.needsBlocked(node.not)
     return 'automaticPlaybackBlocked' in node
   }
+  private needsText(node?: MusicFocusNode): boolean {
+    if (!node) return false
+    if ('all' in node) return node.all.some(n => this.needsText(n))
+    if ('any' in node) return node.any.some(n => this.needsText(n))
+    if ('not' in node) return this.needsText(node.not)
+    return 'text' in node
+  }
   private mandatoryAutomatic(node: MusicFocusNode): Sql {
     if ('all' in node) return combine(node.all.map(n => this.mandatoryAutomatic(n)))
     if ('any' in node) return combine(node.any.map(n => this.mandatoryAutomatic(n)), 'OR', '0')
@@ -151,8 +172,8 @@ export class LibraryDatabaseFocus {
     return this.sourceLeaf(node) ?? this.predicate(node)
   }
   private kind: 'recording' | 'release' = 'recording'
-  private dimensions(node?: MusicFocusNode, facet?: ClassificationDimension): ClassificationDimension[] {
-    const result = new Set<ClassificationDimension>(['releaseYear'])
+  private dimensions(node?: MusicFocusNode, facet?: ClassificationDimension, displayYear = true): ClassificationDimension[] {
+    const result = new Set<ClassificationDimension>(displayYear ? ['releaseYear'] : [])
     if (facet) result.add(facet)
     const visit = (value: MusicFocusNode) => {
       if ('all' in value) value.all.forEach(visit)
@@ -167,17 +188,32 @@ export class LibraryDatabaseFocus {
     if (node) visit(node)
     return [...result]
   }
-  private compile(query: MusicFocusQuery, token: MusicFocusToken, context: MusicFocusReadContext, anchorSourceId?: string, facet?: ClassificationDimension): Sql {
+  private compile(query: MusicFocusQuery, token: MusicFocusToken, context: MusicFocusReadContext, anchorSourceId?: string, facet?: ClassificationDimension, page?: { limit: number; offset: number; reverse?: boolean }, isFacet = false): Sql {
     this.kind = query.entity
-    const dimensions = classificationDimensionsCtes(query.entity, token.asOf, context, this.clock, this.dimensions(query.where, facet))
-    const base = genreBrowseCtes({ ctes: dimensions.sql, physical: true, scope: query.scope ?? 'library', kind: query.entity }).replaceAll('genre_browse_collection(', 'focus_collection(')
+    const sortYear = query.sort?.some(sort => sort.field === 'releaseYear') ?? false
+    const dimensions = classificationDimensionsCtes(query.entity, token.asOf, context, this.clock, this.dimensions(query.where, facet, (!page && !isFacet) || sortYear))
+    const pageDimensions = page && !sortYear ? classificationDimensionsCtes(query.entity, token.asOf, context, this.clock, ['releaseYear'], 'focus-page') : null
+    const resultSources = page ? 'focus_page_sources' : 'focus_result_sources'
+    const base = genreBrowseCtes({
+      ctes: dimensions.sql,
+      physical: true,
+      deferSourceDetails: true,
+      scope: query.scope ?? 'library',
+      kind: query.entity,
+      deferClassification: true,
+      hasGenreFilter: false,
+      hasEntityFilter: false
+    }).replaceAll('genre_browse_collection(', 'focus_collection(')
+    const hasSourceFilter = Boolean(query.where && (this.hasSource(query.where) || this.needsBlocked(query.where)))
+    const hasTextFilter = this.needsText(query.where)
     const where = query.where ? this.predicate(query.where) : { sql: '1', params: [] }
-    const range = query.where ? this.range(query.where) : { sql: '1', params: [] }
+    const range = query.where && hasSourceFilter ? this.range(query.where) : { sql: '1', params: [] }
+    const needMatchedJoin = where.sql !== '1' && (!page || sortYear || range.sql !== '1')
     const physical = query.entity === 'recording' ? 'recording_id' : 'release_id'
     // The membership test is independent of cached scope and is also the only playback input.
-    const member = `EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id)
-      AND (s.provider<>'local' OR (EXISTS(SELECT 1 FROM tracks t WHERE t.id=s.track_id)
-        AND NOT EXISTS(SELECT 1 FROM catalog_pending p WHERE p.track_id=s.track_id)))`
+    const member = `EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=b.id)
+      AND (b.provider<>'local' OR (EXISTS(SELECT 1 FROM tracks t WHERE t.id=b.track_id)
+        AND NOT EXISTS(SELECT 1 FROM catalog_pending p WHERE p.track_id=b.track_id)))`
     const key = (entity: string, kind: string) => `coalesce((SELECT json_array('identity','${kind}',l.target_id) FROM metadata_identity_links l JOIN metadata_entities me ON me.id=l.target_id AND me.kind='${kind}' WHERE l.entity_id=${entity} AND l.kind='${kind}' AND l.state='confirmed'),json_array('entity','${kind}',${entity}))`
     const blocked = this.needsBlocked(query.where) ? `CASE WHEN
       EXISTS(SELECT 1 FROM personal_preference_values p WHERE p.profile_id='default' AND p.state='ban'
@@ -189,63 +225,96 @@ export class LibraryDatabaseFocus {
         JOIN personal_preference_values p ON p.profile_id='default' AND p.state='ban'
           AND p.target_key=json_array('identity','artist',l.target_id) WHERE a.source_id=s.id)
       THEN 1 ELSE 0 END` : '0'
-    return { params: [null, 0, null, '', query.entity, null, ...dimensions.params, ...where.params, ...range.params, ...(anchorSourceId ? [anchorSourceId] : [])], sql: `WITH RECURSIVE ${base},
+    return { params: [null, 0, null, '', query.entity, null, ...dimensions.params, ...where.params, ...range.params,
+      ...(page ? [page.limit, page.offset] : []), ...(pageDimensions?.params ?? []), ...(anchorSourceId ? [anchorSourceId] : [])], sql: `WITH RECURSIVE ${base},
       focus_genre_tree(ancestor,id) AS (SELECT id,id FROM music_genres UNION SELECT p.ancestor,g.id FROM focus_genre_tree p JOIN music_genres g ON g.parent_id=p.id),
-      focus_physical AS MATERIALIZED (
-        SELECT ce.id,${key('ce.id', query.entity)} group_key FROM catalog_entities ce
-        WHERE ce.kind='${query.entity}' AND ce.identity='source'),
-      focus_members AS MATERIALIZED (
-        SELECT DISTINCT fp.* FROM scoped_sources s JOIN focus_physical fp ON fp.id=s.${query.entity}),
+      focus_confirmed_links AS MATERIALIZED (
+        SELECT l.entity_id,json_array('identity','${query.entity}',l.target_id) group_key
+        FROM metadata_identity_links l JOIN metadata_entities me ON me.id=l.target_id AND me.kind='${query.entity}'
+        WHERE l.kind='${query.entity}' AND l.state='confirmed'),
       focus_source_values AS (
-        SELECT s.id,s.provider,s.recording recording_id,s.release release_id,s.preferred_recording,
-          ${query.entity === 'release' ? "json_extract(c.payload,'$.discNumber')" : 'NULL'} disc_number,
-          ${query.entity === 'release' ? "json_extract(c.payload,'$.trackNumber')" : 'NULL'} track_number,
-          fp.group_key,${query.scope === 'catalog' ? `CASE WHEN ${member} THEN 1 ELSE 0 END` : '1'} in_library,
-          CASE WHEN added.value<>'' AND added.value NOT GLOB '*[^0-9]*' AND CAST(added.value AS INTEGER) BETWEEN 0 AND 9007199254740991 THEN CAST(added.value AS INTEGER) END member_added,
-          ${blocked} blocked
-        FROM scoped_sources s JOIN focus_members fp ON fp.id=s.${query.entity}
-        ${query.entity === 'release' ? 'JOIN catalog_sources c ON c.id=s.id' : ''}
-        LEFT JOIN catalog_state added ON added.key='membership_added:'||s.id),
+        SELECT s.id,s.provider,s.recording recording_id,s.release release_id,
+          coalesce(cl.group_key,json_array('entity','${query.entity}',s.${query.entity})) group_key,${blocked} blocked
+        FROM scoped_sources s
+        LEFT JOIN focus_confirmed_links cl ON cl.entity_id=s.${query.entity}
+        WHERE s.${query.entity} IS NOT NULL),
       focus_sources AS MATERIALIZED (SELECT * FROM focus_source_values),
-      focus_genres AS MATERIALIZED (
+      focus_members AS (
+        SELECT DISTINCT ${query.entity}_id id,group_key FROM focus_sources),
+      focus_genres AS ${query.entity === 'recording' ? `(
+        SELECT s.group_key,g.genre_id FROM focus_sources s CROSS JOIN target_genres g
+          ON g.target_kind='source' AND g.target_id=s.id)` : `MATERIALIZED (
         SELECT DISTINCT fm.group_key,eg.genre_id FROM focus_members fm JOIN entity_genres eg ON eg.entity_id=fm.id
-        WHERE '${query.entity}'='recording' OR NOT EXISTS(SELECT 1 FROM focus_members dm JOIN entity_direct ed ON ed.entity_id=dm.id WHERE dm.group_key=fm.group_key)
-          OR EXISTS(SELECT 1 FROM entity_direct ed WHERE ed.entity_id=fm.id)),
-      focus_history AS (
-        SELECT fp.group_key,max(h.last_played) last_played FROM focus_physical fp JOIN catalog_sources s ON s.${physical}=fp.id
-        JOIN library_history h ON h.id=json_array('focus-source-v1',s.provider,
+        WHERE NOT EXISTS(SELECT 1 FROM focus_members dm JOIN entity_direct ed ON ed.entity_id=dm.id WHERE dm.group_key=fm.group_key)
+          OR EXISTS(SELECT 1 FROM entity_direct ed WHERE ed.entity_id=fm.id))`},
+      focus_history_rows AS MATERIALIZED (
+        SELECT h.id,h.last_played,json_extract(h.id,'$[1]') provider,json_extract(h.id,'$[2]') raw_id
+        FROM library_history h
+        WHERE h.last_played>0 AND h.id LIKE '["focus-source-v1",%' AND json_valid(h.id)=1),
+      focus_history AS MATERIALIZED (
+        SELECT coalesce(cl.group_key,json_array('entity','${query.entity}',s.${physical})) group_key,max(h.last_played) last_played
+        FROM focus_history_rows h
+        CROSS JOIN catalog_sources s ON s.provider=h.provider AND s.track_id IN (h.raw_id,h.provider||':'||h.raw_id)
+        CROSS JOIN catalog_entities ce ON ce.id=s.${physical} AND ce.kind='${query.entity}' AND ce.identity='source'
+        LEFT JOIN focus_confirmed_links cl ON cl.entity_id=s.${physical}
+        WHERE h.id=json_array('focus-source-v1',s.provider,
           CASE WHEN s.provider<>'local' AND substr(s.track_id,1,length(s.provider)+1)=s.provider||':' THEN substr(s.track_id,length(s.provider)+2) ELSE s.track_id END)
-        WHERE h.last_played>0 GROUP BY fp.group_key),
+        GROUP BY 1),
+      focus_groups AS (
+        SELECT group_key,min(${query.entity}_id) id FROM focus_sources GROUP BY group_key),
       focus_values AS MATERIALIZED (
-        SELECT fm.group_key,min(fm.id) id,rv.steps/2.0 personal_rating,coalesce(pv.state,'none') preference,h.last_played
-        FROM focus_members fm LEFT JOIN personal_rating_values rv ON rv.profile_id='default' AND rv.target_key=fm.group_key
-        LEFT JOIN personal_preference_values pv ON pv.profile_id='default' AND pv.target_key=fm.group_key
-        LEFT JOIN focus_history h ON h.group_key=fm.group_key GROUP BY fm.group_key),
-      focus_entities AS (SELECT v.*,ce.title,ce.artist FROM focus_values v CROSS JOIN catalog_entities ce ON ce.id=v.id),
-      focus_matches AS MATERIALIZED (SELECT e.* FROM focus_entities e WHERE ${where.sql}),
-      focus_matched_sources AS MATERIALIZED (SELECT s.* FROM focus_sources s JOIN focus_matches e ON e.group_key=s.group_key WHERE ${range.sql}),
+        SELECT fg.group_key,fg.id,rv.steps/2.0 personal_rating,coalesce(pv.state,'none') preference,h.last_played
+        FROM focus_groups fg LEFT JOIN personal_rating_values rv ON rv.profile_id='default' AND rv.target_key=fg.group_key
+        LEFT JOIN personal_preference_values pv ON pv.profile_id='default' AND pv.target_key=fg.group_key
+        LEFT JOIN focus_history h ON h.group_key=fg.group_key),
+      focus_filtered_values AS (
+        SELECT e.* FROM focus_values e ${hasTextFilter ? '' : `WHERE ${where.sql}`}),
+      focus_entities AS (SELECT v.*,ce.title,ce.artist FROM focus_filtered_values v CROSS JOIN catalog_entities ce ON ce.id=v.id),
+      focus_matches AS MATERIALIZED (SELECT e.* FROM focus_entities e ${hasTextFilter ? `WHERE ${where.sql}` : ''}),
+      focus_matched_sources AS MATERIALIZED (
+        SELECT s.id,s.group_key,s.provider FROM focus_sources s ${needMatchedJoin ? 'JOIN focus_matches e ON e.group_key=s.group_key ' : ''}WHERE ${range.sql}),
+      ${page ? `focus_result_groups AS MATERIALIZED (
+        SELECT e.*${sortYear ? ',y.release_year' : ''} FROM focus_matches e
+        ${sortYear ? 'LEFT JOIN focus_result_years y ON y.group_key=e.group_key' : ''}
+        ${range.sql === '1' ? '' : 'WHERE EXISTS(SELECT 1 FROM focus_matched_sources s WHERE s.group_key=e.group_key)'}),
+      focus_page_groups AS MATERIALIZED (
+        SELECT * FROM focus_result_groups ORDER BY ${this.order(query, false, page.reverse)} LIMIT ? OFFSET ?),` : ''}
+      ${resultSources} AS MATERIALIZED (
+        SELECT s.id,s.group_key,s.provider,b.recording_id,b.release_id,b.recording_id recording,b.release_id release,
+          ${query.scope === 'catalog' ? `CASE WHEN ${member} THEN 1 ELSE 0 END` : '1'} in_library,b.preferred_recording,
+          ${query.entity === 'release' ? "json_extract(b.payload,'$.discNumber')" : 'NULL'} disc_number,
+          ${query.entity === 'release' ? "json_extract(b.payload,'$.trackNumber')" : 'NULL'} track_number,
+          CASE WHEN added.value<>'' AND added.value NOT GLOB '*[^0-9]*' AND CAST(added.value AS INTEGER) BETWEEN 0 AND 9007199254740991 THEN CAST(added.value AS INTEGER) END member_added
+        FROM focus_matched_sources s ${page ? 'CROSS JOIN focus_page_groups e ON e.group_key=s.group_key' : ''}
+        CROSS JOIN catalog_bindings b ON b.id=s.id
+        LEFT JOIN catalog_state added ON added.key='membership_added:'||s.id),
+      ${pageDimensions ? `${pageDimensions.sql},` : ''}
       focus_result_years AS (
-        SELECT fs.group_key,max(CAST(d.value AS INTEGER)) release_year FROM focus_matched_sources fs
-        JOIN source_dimensions d ON d.source_id=fs.id
+        SELECT fs.group_key,max(CAST(d.value AS INTEGER)) release_year FROM ${page && !sortYear ? resultSources : 'focus_matched_sources'} fs
+        JOIN ${pageDimensions ? 'focus_page_source_dimensions' : 'source_dimensions'} d ON d.source_id=fs.id
         WHERE d.dimension='releaseYear' AND d.value<>'unknown' GROUP BY fs.group_key),
-      focus_source_counts AS (SELECT group_key,count(*) source_count FROM focus_matched_sources GROUP BY group_key),
+      focus_source_counts AS (SELECT group_key,count(*) source_count FROM ${resultSources} GROUP BY group_key),
       focus_source_ranked AS (SELECT group_key,id,provider,in_library,
-        row_number() OVER(PARTITION BY group_key ORDER BY in_library DESC,preferred_recording DESC,member_added IS NULL,member_added,id) choice FROM focus_matched_sources),
+        row_number() OVER(PARTITION BY group_key ORDER BY in_library DESC,preferred_recording DESC,member_added IS NULL,member_added,id) choice FROM ${resultSources}),
       focus_results AS MATERIALIZED (SELECT e.group_key,e.id,e.personal_rating,e.preference,e.last_played,e.title,e.artist,
         y.release_year,r.id source_id,r.provider,r.in_library,c.source_count
-        FROM focus_matches e JOIN focus_source_ranked r ON r.group_key=e.group_key AND r.choice=1
+        FROM ${page ? 'focus_page_groups' : 'focus_matches'} e JOIN focus_source_ranked r ON r.group_key=e.group_key AND r.choice=1
         JOIN focus_source_counts c ON c.group_key=e.group_key LEFT JOIN focus_result_years y ON y.group_key=e.group_key),
       focus_play_candidates AS (
-        SELECT s.*,${key('s.recording_id', 'recording')} recording_key FROM focus_matched_sources s WHERE s.in_library=1),
+        SELECT s.*,${key('s.recording_id', 'recording')} recording_key FROM ${resultSources} s WHERE s.in_library=1),
       focus_play_ranked AS (SELECT s.*,row_number() OVER(PARTITION BY recording_key ORDER BY ${anchorSourceId ? 'CASE WHEN s.id=? THEN 0 ELSE 1 END,' : ''}preferred_recording DESC,member_added IS NULL,member_added,id) recording_choice FROM focus_play_candidates s),
       focus_play AS (SELECT s.*,e.title entity_title,e.artist entity_artist,e.personal_rating,e.last_played,e.release_year FROM focus_play_ranked s JOIN focus_results e ON e.group_key=s.group_key WHERE s.recording_choice=1)
     ` }
   }
-  private order(query: MusicFocusQuery, playback = false) {
+  private order(query: MusicFocusQuery, playback = false, reverse = false) {
     const fields = { title: playback ? 'entity_title' : 'title', artist: playback ? 'entity_artist' : 'artist', personalRating: 'personal_rating', lastPlayed: 'last_played', releaseYear: 'release_year' }
-    return [...(query.sort ?? [{ field: 'title' as const, direction: 'asc' as const }]).flatMap(s => [`${fields[s.field]} IS NULL`, `${fields[s.field]} ${s.direction.toUpperCase()}`]), playback
+    const flip = (dir: string) => reverse ? (dir === 'ASC' ? 'DESC' : 'ASC') : dir
+    return [...(query.sort ?? [{ field: 'title' as const, direction: 'asc' as const }]).flatMap(s => [
+      `${fields[s.field]} IS ${reverse ? 'NOT ' : ''}NULL`,
+      `${fields[s.field]} ${flip(s.direction.toUpperCase())}`
+    ]), playback
       ? `group_key,${query.entity === 'release' ? 'coalesce(disc_number,0),coalesce(track_number,0),' : ''}recording_key,id`
-      : 'id'].join(',')
+      : `id ${flip('ASC')}`].join(',')
   }
   private item(row: Row, kind: 'recording' | 'release'): MusicFocusItem {
     return { id: String(row.id), kind, title: String(row.title), artist: String(row.artist), sourceCount: Number(row.source_count),
@@ -255,22 +324,44 @@ export class LibraryDatabaseFocus {
   query(input: MusicFocusPageQuery, context: MusicFocusReadContext = {}): MusicFocusPage {
     this.valid('focus.query', input)
     return this.read(() => {
-      const token = this.token(input.query, input.token, context), cte = this.compile(input.query, token, context), offset = input.offset ?? 0
-      const rows = this.sql.prepare(`${cte.sql}, focus_page AS (
-        SELECT * FROM focus_results ORDER BY ${this.order(input.query)} LIMIT ? OFFSET ?)
-        SELECT p.*,t.total FROM (SELECT count(*) total FROM focus_results) t LEFT JOIN focus_page p ON 1
-        ORDER BY ${this.order(input.query)}`).all(...cte.params, input.limit ?? 50, offset)
+      const token = this.token(input.query, input.token, context),
+        offset = input.offset ?? 0,
+        limit = input.limit ?? 50,
+        filterKey = this.revisionKey(token),
+        pageKey = `${filterKey}:${offset}:${limit}`,
+        cached = this.queryCache.get(pageKey)
+      if (cached) { this.finish(token); return { token, ...cached } }
+      const knownTotal = this.totalCache.get(filterKey),
+        reverse = knownTotal !== undefined && offset > knownTotal / 2 && offset < knownTotal,
+        pageLimit = reverse ? Math.min(limit, Math.max(0, knownTotal - offset)) : limit,
+        pageOffset = reverse ? Math.max(0, knownTotal - offset - limit) : offset,
+        cte = this.compile(input.query, token, context, undefined, undefined, { limit: pageLimit, offset: pageOffset, reverse })
+      // Count the exact matched groups before paging; display-only year aggregation and
+      // source selection operate on every matched source of the selected groups only.
+      const rows = this.sql.prepare(`${cte.sql}
+        SELECT p.*,t.total FROM (SELECT count(*) total FROM focus_result_groups) t LEFT JOIN focus_results p ON 1
+        ORDER BY ${this.order(input.query)}`).all(...cte.params)
       const total = Number(rows[0].total)
       const items = rows.filter(row => row.id !== null).map(r => this.item(r, input.query.entity))
-      this.finish(token); return { token, offset, total, items }
+      const page = { offset, total, items }
+      this.totalCache.set(filterKey, total)
+      while (this.totalCache.size > 32) this.totalCache.delete(this.totalCache.keys().next().value!)
+      this.queryCache.set(pageKey, page)
+      while (this.queryCache.size > 32) this.queryCache.delete(this.queryCache.keys().next().value!)
+      this.finish(token); return { token, ...page }
     })
   }
   facets(input: MusicFocusFacetsQuery, context: MusicFocusReadContext = {}): MusicFocusFacetsPage {
     this.valid('focus.facets', input)
     return this.read(() => {
       const token = this.token(input.query, input.token, context),
-        cte = this.compile(input.query, token, context, undefined, ['genre', 'provider', 'personalRating', 'preference'].includes(input.facet) ? undefined : input.facet as ClassificationDimension),
-        offset = input.offset ?? 0, params = [...cte.params]
+        offset = input.offset ?? 0,
+        limit = input.limit ?? 50,
+        facetKey = `${this.revisionKey(token)}:${input.facet}:${offset}:${limit}`,
+        cached = this.facetCache.get(facetKey)
+      if (cached) { this.finish(token); return { token, ...cached } }
+      const cte = this.compile(input.query, token, context, undefined, ['genre', 'provider', 'personalRating', 'preference'].includes(input.facet) ? undefined : input.facet as ClassificationDimension, undefined, true),
+        params = [...cte.params]
       let select: string
       if (input.facet === 'genre') select = `SELECT gt.ancestor value,g.name label,count(DISTINCT r.group_key) count FROM focus_results r JOIN focus_genres eg ON eg.group_key=r.group_key JOIN focus_genre_tree gt ON gt.id=eg.genre_id JOIN music_genres g ON g.id=gt.ancestor GROUP BY gt.ancestor`
       else if (input.facet === 'provider') select = `SELECT s.provider value,s.provider label,count(DISTINCT s.group_key) count FROM focus_matched_sources s GROUP BY s.provider`
@@ -280,10 +371,13 @@ export class LibraryDatabaseFocus {
       const rows = this.sql.prepare(`${cte.sql}, focus_facet_values AS MATERIALIZED (${select}), focus_facet_page AS (
         SELECT * FROM focus_facet_values ORDER BY count DESC,value LIMIT ? OFFSET ?)
         SELECT p.*,t.total FROM (SELECT count(*) total FROM focus_facet_values) t LEFT JOIN focus_facet_page p ON 1
-        ORDER BY count DESC,value`).all(...params, input.limit ?? 50, offset)
+        ORDER BY count DESC,value`).all(...params, limit, offset)
       const total = Number(rows[0].total)
       const items = rows.filter(r => r.value !== null).map(r => ({ value: String(r.value), label: ['genre', 'provider', 'personalRating', 'preference'].includes(input.facet) ? String(r.label) : classificationFacetLabel(input.facet as ClassificationDimension, String(r.value)), count: Number(r.count) }))
-      this.finish(token); return { token, facet: input.facet, offset, total, items }
+      const page = { facet: input.facet, offset, total, items }
+      this.facetCache.set(facetKey, page)
+      while (this.facetCache.size > 32) this.facetCache.delete(this.facetCache.keys().next().value!)
+      this.finish(token); return { token, ...page }
     })
   }
   playbackPage(input: MusicFocusPlaybackPageQuery, context: MusicFocusReadContext = {}): MusicFocusPlaybackPage {

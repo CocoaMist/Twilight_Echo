@@ -57,7 +57,9 @@ export function classificationDimensionsCtes(
   asOf: number,
   context: ClassificationReadContext = {},
   now = asOf,
-  requestedDimensions: readonly ClassificationDimension[] = CLASSIFICATION_DIMENSIONS
+  requestedDimensions: readonly ClassificationDimension[] = CLASSIFICATION_DIMENSIONS,
+  // Fixed private relation names, not SQL identifiers supplied by a browse request.
+  scope: 'browse' | 'focus-page' = 'browse'
 ): ClassificationSql {
   if (
     !['recording', 'release'].includes(kind) ||
@@ -72,18 +74,44 @@ export function classificationDimensionsCtes(
   // Generate only dimensions consumed by this query. In particular a release-year
   // sort must not materialize every format/management/unknown row in a large library.
   const selected = new Set(requestedDimensions)
-  const known: Array<[ClassificationDimension, string]> = [
-    ['format', `SELECT s.id,'format',upper(trim(json_extract(c.payload,'$.format'))) FROM scoped_sources s
-      JOIN catalog_sources c ON c.id=s.id WHERE json_type(c.payload,'$.format')='text'
-      AND length(trim(json_extract(c.payload,'$.format'))) BETWEEN 1 AND 64`],
-    ['bitDepth', `SELECT s.id,'bitDepth',CAST(CAST(json_extract(c.payload,'$.bitDepth') AS INTEGER) AS TEXT) FROM scoped_sources s
-      JOIN catalog_sources c ON c.id=s.id WHERE json_type(c.payload,'$.bitDepth') IN ('integer','real')
+  const factFields = new Map<'recording' | 'release' | 'album_project', Set<string>>()
+  const requireFacts = (layer: 'recording' | 'release' | 'album_project', ...fields: string[]) => {
+    const current = factFields.get(layer) ?? new Set<string>()
+    fields.forEach(field => current.add(field)); factFields.set(layer, current)
+  }
+  if (selected.has('region')) requireFacts('release', 'country')
+  if (selected.has('releaseYear')) requireFacts('release', 'releaseDate')
+  if (selected.has('projectYear')) requireFacts('album_project', 'firstReleaseDate')
+  if (selected.has('albumType')) requireFacts('album_project', 'primaryType')
+  if (selected.has('management')) requireFacts(kind, 'introduction', 'description')
+  const fields = [...factFields].flatMap(([layer, names]) => [...names].map(field => `('${layer}','${field}')`))
+  const sourceEntities = [...factFields].map(([layer, names]) => `
+    SELECT s.id,${layer === 'album_project' ? 'p.project_id' : `s.${layer}`},'${layer}'
+    FROM (SELECT 1 WHERE EXISTS(SELECT 1 FROM dimension_requested_facts
+      WHERE field IN (${[...names].map(field => `'${field}'`).join(',')}))) needed
+    CROSS JOIN scoped_sources s
+    ${layer === 'album_project' ? 'JOIN catalog_release_projects p ON p.release_id=s.release' : layer === 'release' ? 'WHERE s.release IS NOT NULL' : ''}`)
+  // Technical dimensions have exactly one value per source. Emit unknown in the
+  // same pass instead of re-reading every payload through the fallback anti-join.
+  const technical: Array<[ClassificationDimension, string]> = [
+    ['format', `SELECT s.id source_id,'format' dimension,CASE WHEN json_type(c.payload,'$.format')='text'
+      AND length(trim(json_extract(c.payload,'$.format'))) BETWEEN 1 AND 64
+      THEN upper(trim(json_extract(c.payload,'$.format'))) ELSE 'unknown' END value
+      FROM scoped_sources s JOIN catalog_sources c ON c.id=s.id`],
+    ['bitDepth', `SELECT s.id source_id,'bitDepth' dimension,CASE WHEN json_type(c.payload,'$.bitDepth') IN ('integer','real')
       AND json_extract(c.payload,'$.bitDepth')>0
-      AND json_extract(c.payload,'$.bitDepth')=CAST(json_extract(c.payload,'$.bitDepth') AS INTEGER)`],
-    ['sampleRate', `SELECT s.id,'sampleRate',CAST(CAST(json_extract(c.payload,'$.sampleRate') AS INTEGER) AS TEXT) FROM scoped_sources s
-      JOIN catalog_sources c ON c.id=s.id WHERE json_type(c.payload,'$.sampleRate') IN ('integer','real')
+      AND json_extract(c.payload,'$.bitDepth')=CAST(json_extract(c.payload,'$.bitDepth') AS INTEGER)
+      THEN CAST(CAST(json_extract(c.payload,'$.bitDepth') AS INTEGER) AS TEXT) ELSE 'unknown' END value
+      FROM scoped_sources s JOIN catalog_sources c ON c.id=s.id`],
+    ['sampleRate', `SELECT s.id source_id,'sampleRate' dimension,CASE WHEN json_type(c.payload,'$.sampleRate') IN ('integer','real')
       AND json_extract(c.payload,'$.sampleRate')>0
-      AND json_extract(c.payload,'$.sampleRate')=CAST(json_extract(c.payload,'$.sampleRate') AS INTEGER)`],
+      AND json_extract(c.payload,'$.sampleRate')=CAST(json_extract(c.payload,'$.sampleRate') AS INTEGER)
+      THEN CAST(CAST(json_extract(c.payload,'$.sampleRate') AS INTEGER) AS TEXT) ELSE 'unknown' END value
+      FROM scoped_sources s JOIN catalog_sources c ON c.id=s.id`]
+  ]
+  const technicalNames = new Set(technical.map(([dimension]) => dimension))
+  const otherDimensions = [...selected].filter(dimension => !technicalNames.has(dimension))
+  const known: Array<[ClassificationDimension, string]> = [
     ['region', `SELECT source_id,'region',upper(trim(value)) FROM dimension_facts
       WHERE kind='release' AND field='country' AND upper(trim(value)) GLOB '[A-Z][A-Z]'`],
     ['projectYear', `SELECT source_id,'projectYear',${year('value')} FROM dimension_facts WHERE kind='album_project' AND field='firstReleaseDate'`],
@@ -108,22 +136,29 @@ export function classificationDimensionsCtes(
         OR (s.provider='local' AND EXISTS(SELECT 1 FROM dimension_effective_imports i WHERE i.entity_id=${target}))))
       THEN 'has_introduction' ELSE 'missing_introduction' END FROM scoped_sources s`]
   ]
-  return {
+  const sourceValues = technical.filter(([dimension]) => selected.has(dimension)).map(([, query]) => query)
+  if (otherDimensions.length) sourceValues.push(`
+      SELECT DISTINCT source_id,dimension,value FROM dimension_known_values WHERE value IS NOT NULL
+      UNION ALL SELECT s.id,n.dimension,'unknown' FROM scoped_sources s CROSS JOIN dimension_names n
+        WHERE NOT EXISTS(SELECT 1 FROM dimension_known_values v WHERE v.source_id=s.id
+          AND v.dimension=n.dimension AND v.value IS NOT NULL)`)
+  const result = {
     params: [asOf, now, ...platform.params],
     sql: `dimension_clock(as_of,now) AS (VALUES (?,?)),
     dimension_platform_contexts(provider,context) AS (${platform.sql}),
+    dimension_fact_fields(kind,field) AS (${fields.length ? `VALUES ${fields.join(',')}` : 'SELECT NULL,NULL WHERE 0'}),
+    dimension_requested_facts AS MATERIALIZED (
+      SELECT target_id,field,payload FROM metadata_facts
+      WHERE field IN (SELECT field FROM dimension_fact_fields) AND json_type(payload,'$.value')='text'),
     dimension_source_entities(source_id,entity_id,kind) AS (
-      SELECT id,recording,'recording' FROM scoped_sources
-      UNION ALL SELECT id,release,'release' FROM scoped_sources WHERE release IS NOT NULL
-      UNION ALL SELECT s.id,p.project_id,'album_project' FROM scoped_sources s
-        JOIN catalog_release_projects p ON p.release_id=s.release),
+      ${sourceEntities.join('\n UNION ALL ') || 'SELECT NULL,NULL,NULL WHERE 0'}),
     dimension_facts AS (
       SELECT DISTINCT s.id source_id,m.entity_id,m.kind,f.field,json_extract(f.payload,'$.value') value
       FROM scoped_sources s JOIN dimension_source_entities m ON m.source_id=s.id
       JOIN metadata_identity_links l ON l.entity_id=m.entity_id AND l.state='confirmed'
-      JOIN metadata_facts f ON f.target_id=l.target_id CROSS JOIN dimension_clock c
-      WHERE f.field IN ('country','firstReleaseDate','releaseDate','primaryType','introduction','description')
-        AND json_type(f.payload,'$.value')='text' AND ${usableFact('f', 's', 'c.as_of')}
+      JOIN dimension_fact_fields required ON required.kind=m.kind
+      JOIN dimension_requested_facts f ON f.target_id=l.target_id AND f.field=required.field CROSS JOIN dimension_clock c
+      WHERE ${usableFact('f', 's', 'c.as_of')}
         AND (json_extract(f.payload,'$.usage.expiresAt') IS NULL OR
           json_extract(f.payload,'$.usage.expiresAt')>c.now)),
     dimension_release_years AS (
@@ -146,13 +181,15 @@ export function classificationDimensionsCtes(
       GROUP BY i.entity_id HAVING count(DISTINCT i.description)=1),
     dimension_known_values(source_id,dimension,value) AS (
       ${known.filter(([dimension]) => selected.has(dimension)).map(([, query]) => query).join('\n UNION ALL ') || 'SELECT NULL,NULL,NULL WHERE 0'}),
-    dimension_names(dimension) AS (${requestedDimensions.length ? `VALUES ${[...selected].map(d => `'${d}'`).map(d => `(${d})`).join(',')}` : 'SELECT NULL WHERE 0'}),
+    dimension_names(dimension) AS (${otherDimensions.length ? `VALUES ${otherDimensions.map(d => `'${d}'`).map(d => `(${d})`).join(',')}` : 'SELECT NULL WHERE 0'}),
     source_dimensions AS (
-      SELECT DISTINCT source_id,dimension,value FROM dimension_known_values WHERE value IS NOT NULL
-      UNION ALL SELECT s.id,n.dimension,'unknown' FROM scoped_sources s CROSS JOIN dimension_names n
-        WHERE NOT EXISTS(SELECT 1 FROM dimension_known_values v WHERE v.source_id=s.id
-          AND v.dimension=n.dimension AND v.value IS NOT NULL))`
+      ${sourceValues.join('\n UNION ALL ') || 'SELECT NULL source_id,NULL dimension,NULL value WHERE 0'})`
   }
+  if (scope === 'focus-page') result.sql = result.sql.replace(
+    /\b(scoped_sources|source_dimensions|dimension_[a-z_]+)\b/g,
+    name => name === 'scoped_sources' ? 'focus_page_sources' : `focus_page_${name}`
+  )
+  return result
 }
 
 /** The outer source alias is deliberately fixed; arbitrary SQL identifiers are not inputs. */

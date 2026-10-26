@@ -315,7 +315,7 @@ for (const variant of [
   'mixed_folder',
   'cue_without_totals'
 ] as const) {
-  test(`local ${variant} cannot establish a complete album or trigger full remote lookups`, async (t) => {
+  test(`local ${variant} never claims full-album evidence; usable partial imports prove only the project`, async (t) => {
     const db = new LibraryDatabase(':memory:')
     t.after(() => db.close())
     const tracks = variant === 'partial' ? [track(1)] : [track(1), track(2)]
@@ -338,8 +338,11 @@ for (const variant of [
     const entity = seed(db, tracks),
       { p, calls } = provider()
     const { link } = await run(db, entity('album_project'), p)
-    assert.equal(link.state, 'unresolved')
-    assert.equal(calls.length, 1)
+    const subset = ['partial', 'unknown_total', 'cue_without_totals'].includes(variant)
+    assert.equal(link.state, subset ? 'confirmed' : 'unresolved')
+    assert.equal(link.confirmation?.rule, subset ? 'album_subset' : undefined)
+    assert.equal(calls.length, subset ? 3 : 1)
+    assert.notEqual(db.identificationDetail(entity('release')).link?.state, 'confirmed')
   })
 }
 
@@ -587,7 +590,7 @@ test('v15 migration backs up identities and adds monotonic folder-cohort fences'
   db.sql.exec(LEGACY_IDENTIFICATION_ALBUM_FENCE_SQL + 'PRAGMA user_version=15;')
   db.close()
   db = new LibraryDatabase(path)
-  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 27)
+  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.equal(db.identificationInput(entityId).version, before.version)
   const sourceId = before.sources![0].sourceId
   const oldKey = String(
@@ -1206,7 +1209,7 @@ test('a verified album never binds an unrelated source-scoped artist merely shar
   assert.equal(memberIds(db, 'artist').filter(a => db.identificationDetail(a.id).link?.state === 'confirmed').length, 2)
 })
 
-for (const variant of ['structured', 'combined_display', 'homonyms'] as const) {
+for (const variant of ['structured', 'structured_tags', 'combined_only', 'homonyms'] as const) {
   test(`cooperative artist ${variant} uses full credits without splitting text or pairing tag ID arrays`, async t => {
     const db = new LibraryDatabase(':memory:'); t.after(() => db.close())
     const names = variant === 'homonyms' ? ['Artist', 'Artist'] : ['Artist', 'Guest']
@@ -1215,8 +1218,9 @@ for (const variant of ['structured', 'combined_display', 'homonyms'] as const) {
       item.artist = names.join(' / ')
       item.albumArtist = 'Artist'
       item.identityTags!.albumArtist = { value: 'Artist', origin: 'audio_tag' }
-      item.identityTags!.artists!.value = names
-      if (variant !== 'combined_display') item.artists = names.map(name => ({ name }))
+      // A single combined tag is not the independent audio-tag name array.
+      item.identityTags!.artists!.value = variant === 'combined_only' ? [names.join(' / ')] : names
+      if (variant === 'structured' || variant === 'homonyms') item.artists = names.map(name => ({ name }))
       // These are set observations, not a parallel ordered name→ID mapping.
       item.identityTags!.musicbrainz = mb({ artistIds: [id(9), ARTIST] })
     }
@@ -1225,12 +1229,14 @@ for (const variant of ['structured', 'combined_display', 'homonyms'] as const) {
       return r
     } })
     const { link } = await run(db, entityId, p)
-    assert.equal(link.state, 'confirmed')
-    assert.ok(memberIds(db, 'recording').every(r => db.identificationDetail(r.id).link!.state === 'confirmed'))
+    assert.equal(link.state, variant === 'combined_only' ? 'unresolved' : 'confirmed')
+    assert.ok(memberIds(db, 'recording').every(r =>
+      (db.identificationDetail(r.id).link?.state === 'confirmed') === (variant !== 'combined_only')))
+    const independentNames = variant === 'structured' || variant === 'structured_tags'
     for (const artist of memberIds(db, 'artist')) {
       const detail = db.identificationDetail(artist.id)
-      assert.equal(detail.link?.state === 'confirmed', variant === 'structured')
-      if (variant === 'structured') assert.equal(detail.references[0].value, artist.title === 'Artist' ? ARTIST : id(9))
+      assert.equal(detail.link?.state === 'confirmed', independentNames)
+      if (independentNames) assert.equal(detail.references[0].value, artist.title === 'Artist' ? ARTIST : id(9))
     }
   })
 }

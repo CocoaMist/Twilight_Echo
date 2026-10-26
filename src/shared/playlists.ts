@@ -100,6 +100,7 @@ export interface PlaylistPersistenceNotice {
 export interface DerivedTrackGroup {
   tracks: Track[]
   cover: string | null
+  coverSource?: string | null
   artist?: string
 }
 

@@ -131,7 +131,10 @@ export class MusicBrainzWikiProvider implements MetadataProvider {
       str(data.id).toLowerCase() !== id ||
       !str(data.name) ||
       str(data.name).length > 1024 ||
-      !['Person', 'Group', 'Orchestra', 'Choir', 'Character', 'Other'].includes(str(data.type))
+      // MusicBrainz leaves type null for valid, sparsely documented artists.
+      // The exact artist endpoint/ID establish the entity kind, not this subtype.
+      (data.type != null &&
+        !['Person', 'Group', 'Orchestra', 'Choir', 'Character', 'Other'].includes(data.type))
     )
       throw new MetadataIdentityError('invalid_artist_identity')
     const qids = new Set<string>(
@@ -241,7 +244,8 @@ export class MusicBrainzWikiProvider implements MetadataProvider {
         rvprop: 'ids',
         exintro: '1',
         explaintext: '1',
-        exchars: '12000',
+        // Read the complete lead. exchars is capped at 1200 by MediaWiki,
+        // even when a larger value is supplied; the display handles collapse.
         redirects: '1',
         titles: title,
         variant,

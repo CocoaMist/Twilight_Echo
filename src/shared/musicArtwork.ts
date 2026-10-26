@@ -9,8 +9,10 @@ export interface MetadataArtworkRecord {
   field: 'artwork'
   scope: MusicArtworkScope
   resource: string
-  /** External MBID in the scope namespace, not the shared metadata UUID. */
+  /** External ID in the scope namespace, not the shared metadata UUID. */
   targetId: string
+  /** Absent on historical Commons/CAA records (MusicBrainz MBID). */
+  targetRef?: MusicExternalReference
   sourceReleaseId?: string
   attribution: MetadataAttribution
   usage: MetadataUsage

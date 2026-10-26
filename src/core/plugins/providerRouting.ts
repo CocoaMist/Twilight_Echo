@@ -46,6 +46,8 @@ export function getProviderCallTimeoutMs(method: TwilightMediaProviderMethod): n
       'getPlaybackUrl',
       'getLyrics',
       'searchSongs',
+      'searchRecordingIdentities',
+      'fetchArtistIdentity',
       'searchAlbums',
       'searchPlaylists',
       'searchArtists',
@@ -252,6 +254,8 @@ const PROVIDER_METHOD_CAPABILITIES: Partial<
   getPlaybackUrl: 'playbackUrl',
   getLyrics: 'lyrics',
   searchSongs: 'search',
+  searchRecordingIdentities: 'search',
+  fetchArtistIdentity: 'library',
   searchAlbums: 'search',
   searchPlaylists: 'search',
   searchArtists: 'search',
@@ -321,7 +325,7 @@ export function providerSupportsMethod(
   provider: TwilightMediaProviderRegistration,
   method: TwilightMediaProviderMethod
 ): boolean {
-  if (['fetchAlbumIdentity', 'fetchArtistMetadata', 'fetchAlbumMetadata'].includes(method) && !provider.supportedMethods?.includes(method)) return false
+  if (['searchRecordingIdentities', 'fetchArtistIdentity', 'fetchAlbumIdentity', 'fetchArtistMetadata', 'fetchAlbumMetadata'].includes(method) && !provider.supportedMethods?.includes(method)) return false
   if (provider.supportedMethods && !provider.supportedMethods.includes(method)) return false
   const requiredCapability = PROVIDER_METHOD_CAPABILITIES[method]
   return !requiredCapability || provider.capabilities.includes(requiredCapability)

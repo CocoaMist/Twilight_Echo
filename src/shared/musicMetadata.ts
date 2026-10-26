@@ -27,6 +27,16 @@ export interface PlatformEntityMetadata {
     licenseUrl: string
     usage?: MetadataUsage
   }>
+  /** Private resource URLs; Core projects approved images to session handles. */
+  artwork?: Array<{
+    resource: string
+    url: string
+    revision: string
+    attribution: string
+    license: string
+    licenseUrl: string
+    usage?: MetadataUsage
+  }>
 }
 export type PlatformMetadataResult =
   | { status: 'ok'; metadata: PlatformEntityMetadata }
@@ -76,7 +86,7 @@ export function validPlatformMetadataResult(v: unknown): v is PlatformMetadataRe
   if (!keys(v, ['status', 'metadata']) || !object(v.metadata)) return false
   const m = v.metadata
   return (
-    keys(m, ['schemaVersion', 'provider', 'kind', 'id', 'name', 'texts']) &&
+    keys(m, ['schemaVersion', 'provider', 'kind', 'id', 'name', 'texts', 'artwork']) &&
     m.schemaVersion === 1 &&
     validMetadataProvider(m.provider) &&
     ['artist', 'release'].includes(String(m.kind)) &&
@@ -110,8 +120,41 @@ export function validPlatformMetadataResult(v: unknown): v is PlatformMetadataRe
         text(t.license, 256) &&
         (t.licenseUrl === '' || metadataPageUrl(t.licenseUrl)) &&
         (t.usage === undefined || validMetadataUsage(t.usage))
-    )
+    ) &&
+    (m.artwork === undefined ||
+      (Array.isArray(m.artwork) &&
+        m.artwork.length <= 3 &&
+        m.artwork.every(
+          (a) =>
+            object(a) &&
+            keys(a, [
+              'resource',
+              'url',
+              'revision',
+              'attribution',
+              'license',
+              'licenseUrl',
+              'usage'
+            ]) &&
+            metadataImageUrl(a.resource) &&
+            metadataPageUrl(a.url) &&
+            text(a.revision, 256) &&
+            text(a.attribution, 2048) &&
+            text(a.license, 256) &&
+            (a.licenseUrl === '' || metadataPageUrl(a.licenseUrl)) &&
+            (a.usage === undefined || validMetadataUsage(a.usage))
+        )))
   )
+}
+
+function metadataImageUrl(v: unknown): v is string {
+  if (!text(v, 2048)) return false
+  try {
+    const u = new URL(v)
+    return u.protocol === 'https:' && !u.username && !u.password && !u.port && !u.hash
+  } catch {
+    return false
+  }
 }
 
 /** A provider may narrow deployment permission, never broaden it. */

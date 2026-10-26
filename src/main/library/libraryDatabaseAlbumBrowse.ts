@@ -46,10 +46,63 @@ const rowJson = (alias: string, columns: string[]) =>
  */
 const ALBUM_CTES = `
   album_args(entity_id) AS (VALUES (?)),
+  album_seed_releases(release_id) AS MATERIALIZED (
+    SELECT entity_id FROM album_args
+    UNION
+    SELECT p.release_id FROM catalog_release_projects p JOIN album_args a ON p.project_id=a.entity_id),
+  album_requested_source_ids(id) AS MATERIALIZED (
+    SELECT s.id FROM album_seed_releases r CROSS JOIN catalog_sources s ON s.release_id=r.release_id
+    UNION
+    SELECT s.id FROM album_seed_releases r
+      CROSS JOIN catalog_versions av ON av.scope='albums' AND av.entity_id=r.release_id
+      CROSS JOIN catalog_version_sources als ON als.scope='albums' AND als.version_id=av.id
+      CROSS JOIN catalog_sources s ON s.album_key=als.source_key),
+  album_seed_members AS MATERIALIZED (
+    SELECT s.id,s.provider,s.recording,s.release_id,s.release,s.preferred_release,s.availability
+    FROM album_requested_source_ids ids CROSS JOIN catalog_bindings s ON s.id=ids.id
+    LEFT JOIN tracks t ON s.provider='local' AND t.id=s.track_id
+    WHERE s.release_id IS NOT NULL
+      AND EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id)
+      AND (s.provider<>'local' OR (t.id IS NOT NULL AND NOT EXISTS(
+        SELECT 1 FROM catalog_pending p WHERE p.track_id=s.track_id)))),
+  album_seed_relations AS (
+    SELECT s.*,p.project_id,pp.project_id playback_project_id,
+      rl.target_id release_target,pl.target_id project_target,
+      CASE WHEN rl.target_id IS NOT NULL THEN 'metadata:'||rl.target_id
+        ELSE 'catalog:'||s.release_id END release_group,
+      CASE WHEN pl.target_id IS NOT NULL THEN 'metadata:'||pl.target_id
+        WHEN p.project_id IS NOT NULL THEN 'catalog:'||p.project_id
+        ELSE 'release:'||s.release_id END project_group
+    FROM album_seed_members s CROSS JOIN catalog_entities e ON e.id=s.release_id AND +e.kind='release'
+    LEFT JOIN catalog_release_projects p ON p.release_id=s.release_id
+    LEFT JOIN catalog_release_projects pp ON pp.release_id=s.release
+    LEFT JOIN metadata_identity_links rl ON rl.entity_id=s.release_id
+      AND rl.kind='release' AND rl.state='confirmed' AND rl.target_id IS NOT NULL
+    LEFT JOIN metadata_identity_links pl ON pl.entity_id=p.project_id
+      AND pl.kind='album_project' AND pl.state='confirmed' AND pl.target_id IS NOT NULL),
+  album_requested AS MATERIALIZED (
+    SELECT r.* FROM album_seed_relations r CROSS JOIN album_args a
+    WHERE r.release=a.entity_id OR r.release_id=a.entity_id OR r.project_id=a.entity_id
+      OR r.playback_project_id=a.entity_id),
+  album_anchor AS MATERIALIZED (
+    SELECT r.* FROM album_requested r CROSS JOIN album_args a
+    ORDER BY CASE WHEN r.release_id=a.entity_id THEN 0 ELSE 1 END,
+      r.preferred_release DESC,r.release_id,r.id LIMIT 1),
+  album_requested_projects AS MATERIALIZED (SELECT DISTINCT project_group FROM album_requested),
+  album_project_releases(release_id) AS MATERIALIZED (
+    SELECT DISTINCT release_id FROM album_requested
+    UNION
+    SELECT p.release_id FROM catalog_release_projects p
+      WHERE p.project_id IN (SELECT project_id FROM album_requested WHERE project_id IS NOT NULL)
+    UNION
+    SELECT p.release_id FROM metadata_identity_links pl
+      JOIN catalog_release_projects p ON p.project_id=pl.entity_id
+      WHERE pl.kind='album_project' AND pl.state='confirmed'
+        AND pl.target_id IN (SELECT project_target FROM album_requested WHERE project_target IS NOT NULL)),
   album_members AS MATERIALIZED (
     SELECT s.id,s.provider,s.recording,s.release_id,s.release,s.preferred_release,s.availability
-    FROM catalog_bindings s LEFT JOIN tracks t
-      ON s.provider='local' AND t.id=s.track_id
+    FROM album_project_releases pr CROSS JOIN catalog_bindings s ON s.release_id=pr.release_id
+    LEFT JOIN tracks t ON s.provider='local' AND t.id=s.track_id
     WHERE s.release_id IS NOT NULL
       AND EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id)
       AND (s.provider<>'local' OR (t.id IS NOT NULL AND NOT EXISTS(
@@ -62,23 +115,14 @@ const ALBUM_CTES = `
       CASE WHEN pl.target_id IS NOT NULL THEN 'metadata:'||pl.target_id
         WHEN p.project_id IS NOT NULL THEN 'catalog:'||p.project_id
         ELSE 'release:'||s.release_id END project_group
-    FROM album_members s JOIN catalog_entities e ON e.id=s.release_id AND e.kind='release'
+    FROM album_members s CROSS JOIN catalog_entities e ON e.id=s.release_id AND +e.kind='release'
     LEFT JOIN catalog_release_projects p ON p.release_id=s.release_id
     LEFT JOIN catalog_release_projects pp ON pp.release_id=s.release
     LEFT JOIN metadata_identity_links rl ON rl.entity_id=s.release_id
       AND rl.kind='release' AND rl.state='confirmed' AND rl.target_id IS NOT NULL
     LEFT JOIN metadata_identity_links pl ON pl.entity_id=p.project_id
       AND pl.kind='album_project' AND pl.state='confirmed' AND pl.target_id IS NOT NULL),
-  album_requested AS (
-    SELECT r.* FROM album_relations r CROSS JOIN album_args a
-    WHERE r.release=a.entity_id OR r.release_id=a.entity_id OR r.project_id=a.entity_id
-      OR r.playback_project_id=a.entity_id),
-  album_anchor AS (
-    SELECT r.* FROM album_requested r CROSS JOIN album_args a
-    ORDER BY CASE WHEN r.release_id=a.entity_id THEN 0 ELSE 1 END,
-      r.preferred_release DESC,r.release_id,r.id LIMIT 1),
-  album_requested_projects AS (SELECT DISTINCT project_group FROM album_requested),
-  album_project_sources AS (
+  album_project_sources AS MATERIALIZED (
     SELECT r.* FROM album_relations r JOIN album_requested_projects p USING(project_group)),
   album_release_groups AS (
     SELECT r.release_group id,
@@ -87,7 +131,7 @@ const ALBUM_CTES = `
       max(CASE WHEN r.release_group=a.release_group THEN 1 ELSE 0 END) current,
       count(DISTINCT r.id) source_count,count(DISTINCT r.release) playback_version_count
     FROM album_project_sources r CROSS JOIN album_anchor a GROUP BY r.release_group),
-  album_releases AS (
+  album_releases AS MATERIALIZED (
     SELECT g.*,e.title,e.artist FROM album_release_groups g JOIN catalog_entities e ON e.id=g.entity_id)
 `
 

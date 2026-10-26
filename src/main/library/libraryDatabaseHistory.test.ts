@@ -271,7 +271,7 @@ test('v3 upgrade saves a consistent snapshot, preserves tracks and queues, and i
   )
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 29)
     assert.equal(upgraded.readLibraryQueue(queue.id).total, 2)
     replace(upgraded, [{ id: 'one', lastPlayed: 100 }])
     assert.equal(upgraded.queryTracks().historyRevision, 1)

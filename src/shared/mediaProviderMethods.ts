@@ -2,6 +2,8 @@ export type TwilightMediaProviderMethod =
   | 'getPlaybackUrl'
   | 'getLyrics'
   | 'searchSongs'
+  | 'searchRecordingIdentities'
+  | 'fetchArtistIdentity'
   | 'searchAlbums'
   | 'searchPlaylists'
   | 'searchArtists'
@@ -70,6 +72,8 @@ export const TWILIGHT_MEDIA_PROVIDER_METHODS = [
   'getPlaybackUrl',
   'getLyrics',
   'searchSongs',
+  'searchRecordingIdentities',
+  'fetchArtistIdentity',
   'searchAlbums',
   'searchPlaylists',
   'searchArtists',

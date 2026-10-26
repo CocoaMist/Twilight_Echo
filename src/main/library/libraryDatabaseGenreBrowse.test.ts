@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { CATALOG_SCHEMA_SQL } from './libraryDatabaseCatalog.ts'
 import { GENRE_SCHEMA_SQL, LibraryDatabaseGenres } from './libraryDatabaseGenres.ts'
 import {
   GENRE_PLATFORM_ALBUM_TARGET_SQL,
+  genreBrowseCtes,
   LibraryDatabaseGenreBrowse
 } from './libraryDatabaseGenreBrowse.ts'
 import { validGenreBrowsePayload, validGenreBrowseToken } from '../../shared/musicGenreBrowse.ts'
@@ -314,6 +315,37 @@ test('source precedence matches evidence API, including scoped ignore and import
   )
 })
 
+test('recording effective genres preserve imported unions and explicit clears without materializing all target levels', t => {
+  const { sql, genres, browse, source, drain, override } = fixture(t)
+  for (const id of ['source', 'external', 'imported', 'clear', 'unknown'])
+    source(id, { genre: id === 'unknown' ? 'Unmapped fixture genre' : 'Jazz' })
+  drain()
+  for (const id of ['source', 'external', 'imported', 'clear']) genres.ingest({
+    target: { kind: 'source', id }, key: 'external', provider: 'approved', origin: 'external',
+    provenance: 'approved fixture', raw: { format: 'array', values: ['Rock'] }
+  })
+  genres.map({ revision: genres.revision(), provider: 'local', value: 'Jazz', genreId: null, ignored: true })
+  genres.ingest({ target: { kind: 'source', id: 'source' }, key: 'valid-source', provider: 'approved', origin: 'source',
+    provenance: 'source fixture', raw: { format: 'array', values: ['Blues'] } })
+  sql.exec(`INSERT INTO music_genre_import_overrides VALUES
+    ('source','imported','a','["genre:folk"]'),('source','imported','b','["genre:folk","genre:classical"]'),
+    ('source','clear','a','["genre:folk"]');`)
+  override('source', 'clear', [])
+  const page = browse.browse({ kind: 'recording' })
+  for (const row of page.items) {
+    const id = row.id.slice('rec:'.length)
+    assert.deepEqual(row.genres.items.map(g => g.id).sort(), genres.evidence({ target: { kind: 'source', id } }).selection.genreIds.sort())
+  }
+  assert.equal(page.items.find(row => row.id === 'rec:clear')!.genres.total, 0)
+  assert.equal(page.items.find(row => row.id === 'rec:unknown')!.classification, 'none')
+  const members = browse.members({ entityId: 'rec:clear' })
+  assert.equal(members.items[0].sourceClassification.origin, 'manual')
+  assert.equal(members.items[0].sourceClassification.genres.total, 0)
+  const plan = sql.prepare(`EXPLAIN QUERY PLAN WITH RECURSIVE ${genreBrowseCtes({ kind: 'recording' })}
+    SELECT * FROM selected_entities`).all(null, 0, null, '', 'recording', null)
+  assert.equal(plan.some(row => String(row.detail).includes('MATERIALIZE target_levels')), false)
+})
+
 test('summaries stay bounded while totals and matching include every genre', (t) => {
   const { genres, browse, source, drain, override } = fixture(t)
   source('one')
@@ -480,6 +512,169 @@ test('facets and member pages retain the same source-row filters, genre scope, e
   const unavailable = browse.facets({ kind: 'recording', dimension: 'language' })
   assert.equal(unavailable.available, false)
   assert.deepEqual(unavailable.items, [{ value: 'unknown', label: '未知', count: 2 }])
+})
+
+test('recording plans resolve album bindings only for requested release dimensions', t => {
+  const { sql, browse, source, drain } = fixture(t)
+  source('one', { album: 'Album', genre: 'Jazz', fields: { format: 'FLAC', releaseDate: '2020' } })
+  sql.exec(`INSERT INTO catalog_entities VALUES('manual-release','release','Bound album','Artist','manual');
+    INSERT INTO catalog_versions VALUES('albums','v','manual-release','V',NULL,NULL,NULL);
+    INSERT INTO catalog_version_sources VALUES('albums','album:local:Album','v');
+    INSERT INTO catalog_release_projects VALUES('manual-release','manual-project');
+    INSERT INTO metadata_identity_links VALUES('manual-release','confirmed','target:release'),
+      ('manual-project','confirmed','target:project');
+    INSERT INTO metadata_facts VALUES('target:release','country','{"value":"GB"}'),
+      ('target:release','releaseDate','{"value":"2011"}'),
+      ('target:project','firstReleaseDate','{"value":"1973"}'),
+      ('target:project','primaryType','{"value":"Album"}');`)
+  drain()
+  const prepare = sql.prepare.bind(sql)
+  let captured: { text: string; params: SQLInputValue[] } | undefined
+  sql.prepare = text => {
+    const statement = prepare(text)
+    if (text.includes('selected_entities AS MATERIALIZED')) {
+      const all = statement.all.bind(statement)
+      Object.defineProperty(statement, 'all', { value: (...params: SQLInputValue[]) => {
+        captured = { text, params }
+        return all(...params)
+      } })
+    }
+    return statement
+  }
+  t.after(() => { sql.prepare = prepare })
+  const planDetails = () => prepare(`EXPLAIN QUERY PLAN ${captured!.text}`).all(...captured!.params)
+    .map(row => String(row.detail))
+  browse.facets({ kind: 'recording', genreId: 'genre:jazz', dimension: 'format' })
+  assert.equal(planDetails().some(detail => /SEARCH (als|av) USING INDEX/.test(detail)), false)
+  assert.ok(planDetails().some(detail => detail.includes('SEARCH tv USING INDEX')))
+  for (const [dimension, value] of [
+    ['region', 'GB'], ['releaseYear', '2011'], ['projectYear', '1973'], ['albumType', 'album'],
+    ['management', 'release_confirmed']
+  ] as const) {
+    const page = browse.facets({ kind: 'recording', dimension })
+    assert.ok(page.items.some(item => item.value === value), dimension)
+    assert.ok(planDetails().some(detail => detail.includes('SEARCH av USING INDEX')), dimension)
+    const filtered = browse.facets({ kind: 'recording', dimension: 'format', filters: [{ dimension, values: [value] }] })
+    assert.deepEqual(filtered.items.map(item => item.value), ['FLAC'], dimension)
+    assert.ok(planDetails().some(detail => detail.includes('SEARCH av USING INDEX')), dimension)
+  }
+})
+
+test('facets use every filtered source of manual bindings, not only genre evidence or a result page', t => {
+  const { sql, browse, source, drain, override } = fixture(t)
+  source('jazz', { genre: 'Jazz', fields: { format: ' flac ', bitDepth: 16 } })
+  source('flac-copy', { genre: 'Rock', fields: { format: 'FLAC', bitDepth: 24 } })
+  source('rock', { provider: 'fixture', genre: 'Rock', fields: { format: 'AAC', bitDepth: 24 } })
+  source('unknown', { fields: { format: '', bitDepth: 24 } })
+  source('invalid-format', { fields: { format: 42, bitDepth: 24 } })
+  source('long-format', { fields: { format: 'x'.repeat(65), bitDepth: 24 } })
+  source('cached', { provider: 'fixture', genre: 'Jazz', member: false, fields: { format: 'MP3' } })
+  source('other-jazz', { title: 'Target extra', genre: 'Jazz', fields: { format: 'ALAC', bitDepth: 16 } })
+  source('other-rock', { title: 'Target excluded', genre: 'Rock', fields: { format: 'MP3' } })
+  sql.exec(`INSERT INTO catalog_entities VALUES('manual','recording','Target combined','Artist','manual');
+    INSERT INTO catalog_versions VALUES('tracks','v','manual','V',NULL,NULL,NULL);
+    INSERT INTO catalog_version_sources VALUES('tracks','key:jazz','v'),('tracks','key:flac-copy','v'),
+      ('tracks','key:rock','v'),('tracks','key:unknown','v'),('tracks','key:invalid-format','v'),
+      ('tracks','key:long-format','v'),('tracks','key:cached','v');
+    INSERT INTO catalog_memberships VALUES('second-owner','jazz');`)
+  drain()
+  const query = { kind: 'recording' as const, genreId: 'genre:jazz', search: 'Target', dimension: 'format' as const }
+  const first = browse.facets({ ...query, limit: 1 })
+  assert.equal(first.total, 4)
+  assert.deepEqual(first.items.map(row => [row.value, row.count]), [['AAC', 1]])
+  const rest = browse.facets({ ...query, token: first.token, limit: 3, offset: 1 })
+  assert.equal(rest.total, 4)
+  assert.deepEqual(rest.items.map(row => [row.value, row.count]), [['ALAC', 1], ['FLAC', 1], ['unknown', 1]])
+  const local = browse.facets({ ...query, search: 'Target combined', source: 'local' })
+  assert.deepEqual(local.items.map(row => [row.value, row.count]), [['FLAC', 1], ['unknown', 1]])
+  assert.deepEqual(browse.facets({ ...query, search: 'Target combined', source: 'fixture' }).items, [])
+  assert.deepEqual(browse.facets({ ...query, search: 'Target combined', filters: [
+    { dimension: 'bitDepth', values: ['24'] }
+  ] }).items, [])
+  const filtered = browse.facets({ ...query, genreId: 'genre:rock', search: 'Target combined', filters: [
+    { dimension: 'bitDepth', values: ['24'] }
+  ] })
+  assert.deepEqual(filtered.items.map(row => [row.value, row.count]), [['AAC', 1], ['FLAC', 1], ['unknown', 1]])
+  const reused = browse.facets({ ...query, search: 'Target combined', filters: [
+    { dimension: 'format', values: ['FLAC'] }
+  ] })
+  assert.deepEqual(reused.items.map(row => [row.value, row.count]), [['FLAC', 1]])
+  assert.deepEqual(browse.facets({ ...query, search: 'Target combined', filters: [
+    { dimension: 'format', values: ['unknown'] }
+  ] }).items, [])
+  assert.deepEqual(browse.facets({ ...query, genreId: undefined, search: 'Target combined', filters: [
+    { dimension: 'format', values: ['unknown'] }
+  ] }).items.map(row => [row.value, row.count]), [['unknown', 1]])
+  override('source', 'jazz', [])
+  assert.deepEqual(browse.facets({ ...query, search: 'Target combined' }).items, [])
+})
+
+test('release facets retain direct collection values and explicit clears across bound providers', t => {
+  const { sql, browse, source, drain, override } = fixture(t)
+  source('local', { album: 'Local', genre: 'Jazz', fields: { format: 'FLAC' } })
+  source('unknown', { album: 'Local' })
+  source('cloud', { provider: 'fixture', album: 'Cloud', genre: 'Rock', fields: { albumId: 'cloud-id', format: 'AAC' } })
+  sql.exec(`INSERT INTO catalog_entities VALUES('manual-album','release','Combined','Artist','manual');
+    INSERT INTO catalog_versions VALUES('albums','v','manual-album','V',NULL,NULL,NULL);
+    INSERT INTO catalog_version_sources VALUES('albums','album:local:Local','v'),('albums','album:fixture:Cloud','v');`)
+  drain()
+  const query = { kind: 'release' as const, dimension: 'format' as const },
+    formats = [['AAC', 1], ['FLAC', 1], ['unknown', 1]]
+  assert.deepEqual(browse.facets({ ...query, genreId: 'genre:jazz' }).items.map(row => [row.value, row.count]), formats)
+  override('collection', 'Local', ['genre:classical'])
+  assert.deepEqual(browse.facets({ ...query, genreId: 'genre:classical' }).items.map(row => [row.value, row.count]), formats)
+  assert.deepEqual(browse.facets({ ...query, genreId: 'genre:jazz' }).items, [])
+  override('collection', 'Local', [])
+  assert.deepEqual(browse.facets({ ...query, genreId: 'genre:jazz' }).items, [])
+  assert.deepEqual(browse.facets({ ...query, genreId: 'genre:classical' }).items, [])
+  assert.deepEqual(browse.facets(query).items.map(row => [row.value, row.count]), formats)
+  assert.deepEqual(browse.facets({ ...query, source: 'fixture', genreId: 'genre:rock' }).items.map(row => [row.value, row.count]), [['AAC', 1]])
+  override('collection', 'Local', null)
+  assert.deepEqual(browse.facets({ ...query, genreId: 'genre:jazz' }).items.map(row => [row.value, row.count]), formats)
+})
+
+test('facets expose only currently licensed account facts and retain source-local metadata filters', t => {
+  const { sql, browse, source, drain, setNow } = fixture(t)
+  source('local', { album: 'Album', genre: 'Jazz', fields: { format: 'FLAC' } })
+  source('cloud', { provider: 'fixture', album: 'Album', genre: 'Jazz', fields: { albumId: 'album-id', format: 'AAC' } })
+  drain()
+  sql.exec(`INSERT INTO metadata_identity_links VALUES('rel:Album','confirmed','target:album');
+    INSERT INTO metadata_facts VALUES('target:album','country','{}');`)
+  const expiresAt = 1700000001000,
+    context = { platformContexts: { fixture: 'account-one' } },
+    query = { kind: 'recording' as const, genreId: 'genre:jazz', dimension: 'region' as const }
+  const fact = (usage: { display?: boolean; cache?: boolean; crossSource?: boolean } = {}) => sql.prepare(
+    "UPDATE metadata_facts SET payload=? WHERE target_id='target:album' AND field='country'"
+  ).run(JSON.stringify({ value: 'CN', sourceProvider: 'fixture', providerContext: 'account-one',
+    usage: { display: true, cache: true, crossSource: false, expiresAt, ...usage } }))
+  const values = (page: ReturnType<typeof browse.facets>) => page.items.map(row => [row.value, row.count])
+  fact()
+  assert.deepEqual(values(browse.facets(query)), [['unknown', 2]])
+  assert.deepEqual(values(browse.facets(query, context)), [['CN', 1], ['unknown', 1]])
+  assert.deepEqual(values(browse.facets({ ...query, source: 'local' }, context)), [['unknown', 1]])
+  assert.deepEqual(values(browse.facets({ ...query, source: 'fixture' }, context)), [['CN', 1]])
+  assert.deepEqual(values(browse.facets(query, { platformContexts: { fixture: 'account-two' } })), [['unknown', 2]])
+  const formatQuery = { ...query, dimension: 'format' as const, filters: [
+    { dimension: 'region' as const, values: ['CN'] }
+  ] }
+  assert.deepEqual(values(browse.facets(formatQuery, context)), [['AAC', 1]])
+  fact({ crossSource: true })
+  assert.deepEqual(values(browse.facets(query, context)), [['CN', 2]])
+  assert.deepEqual(values(browse.facets(formatQuery, context)), [['AAC', 1], ['FLAC', 1]])
+  for (const denied of [{ display: false }, { cache: false }]) {
+    fact(denied)
+    assert.deepEqual(values(browse.facets(query, context)), [['unknown', 2]])
+    assert.deepEqual(browse.facets(formatQuery, context).items, [])
+  }
+  fact()
+  const beforeExpiry = browse.facets(query, context)
+  assert.equal(beforeExpiry.token.expiresAt, expiresAt)
+  setNow(expiresAt)
+  assert.throws(() => browse.facets({ ...query, token: beforeExpiry.token }, context), { code: 'STALE_REVISION' })
+  const expired = browse.facets(query, context)
+  assert.deepEqual(values(expired), [['unknown', 2]])
+  assert.deepEqual(browse.facets(formatQuery, context).items, [])
+  assert.deepEqual(values(browse.facets({ ...query, token: { ...expired.token, asOf: 1700000000000 } }, context)), [['unknown', 2]])
 })
 
 test('metadata expiry and account context invalidate every read path and cannot revive expired facts with a forged clock', (t) => {

@@ -5,6 +5,7 @@ import { resolveAlbumReleaseDate } from '../../shared/releaseDate.ts'
 import {
   getCollectionAncestors,
   getCollectionDirectory,
+  libraryArtistNames,
   resolveAlbumArtist
 } from '../../shared/libraryCollections.ts'
 import {
@@ -43,11 +44,11 @@ export function buildDerivedCollections(
     }
     group.tracks.push(track)
     if (!group.cover && track.cover) group.cover = track.cover
+    if (!group.coverSource && track.coverSource) group.coverSource = track.coverSource
   }
 
   for (const track of tracks) {
-    const artistName = track.artist || '未知艺术家'
-    addToGroup(artistMap, artistName, track)
+    for (const artistName of libraryArtistNames(track)) addToGroup(artistMap, artistName, track)
 
     addToGroup(albumMap, getAlbumIdentity(track), track, track.albumArtist || track.artist)
 
@@ -65,7 +66,8 @@ export function buildDerivedCollections(
         name,
         trackCount: group.tracks.length,
         tracks: group.tracks,
-        cover: group.cover
+        cover: group.cover,
+        ...(group.coverSource !== undefined ? { coverSource: group.coverSource } : {})
       }))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh'))
   }
@@ -98,6 +100,7 @@ export function buildDerivedCollections(
     normalized: string
     tracks: Track[]
     cover: string | null
+    coverSource?: string | null
   }
   const folderGroups = new Map<string, FolderGroup>()
   const ensureFolderGroup = (folderPath: string): void => {
@@ -114,6 +117,7 @@ export function buildDerivedCollections(
     if (!group) return
     group.tracks.push(track)
     if (!group.cover && track.cover) group.cover = track.cover
+    if (!group.coverSource && track.coverSource) group.coverSource = track.coverSource
   }
 
   for (const root of configuredFolderPaths) ensureFolderGroup(root)
@@ -127,14 +131,15 @@ export function buildDerivedCollections(
   }
 
   const folders = [...folderGroups.values()]
-    .map(({ folderPath, normalized, tracks: folderTracks, cover }) => {
+    .map(({ folderPath, normalized, tracks: folderTracks, cover, coverSource }) => {
       const name = normalized.split(/[\\/]/).pop() || folderPath
       return {
         name,
         path: folderPath,
         trackCount: folderTracks.length,
         tracks: folderTracks,
-        cover
+        cover,
+        ...(coverSource !== undefined ? { coverSource } : {})
       }
     })
     .filter((f) => f.trackCount > 0)

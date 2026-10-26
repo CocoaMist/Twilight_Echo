@@ -36,6 +36,7 @@ import type {
 } from '../../shared/localLibrary.ts'
 import type { LocalLibraryFileIdentity } from '../../shared/localLibraryScan.ts'
 import { LOCAL_LIBRARY_METADATA_VERSION } from '../../shared/localLibraryScan.ts'
+import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 import {
   LIBRARY_MAX_PAGE_SIZE,
   LIBRARY_PAGE_SIZE,
@@ -72,7 +73,8 @@ import {
   albumOrderIndex,
   normalizeLibraryPath
 } from '../../shared/libraryIdentity.ts'
-import { getCollectionDirectory, isLibraryArtistMember } from '../../shared/libraryCollections.ts'
+import { getCollectionDirectory, isLibraryArtistMember, libraryArtistNames } from '../../shared/libraryCollections.ts'
+import { normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
 import {
   LibraryDatabaseCollections,
   normalizeCollectionSearch
@@ -120,6 +122,7 @@ import {
 } from './libraryDatabasePlaylist.ts'
 import type { LibraryPlaylistLookupRequest } from '../../shared/libraryDatabase.ts'
 import { unifiedLibraryOrder } from './libraryDatabaseSearch.ts'
+import { SymSpellIndex, prepareSearchQuery, getMaxSymSpellTolerance } from '../../shared/searchRelevance.ts'
 import type { LibraryHistorySyncRequest } from '../../shared/libraryDatabase.ts'
 import {
   libraryPageBounds,
@@ -129,6 +132,11 @@ import {
 } from './libraryDatabaseValidation.ts'
 
 type Row = Record<string, string | number | null>
+/** One small row per legacy physical file. No date becomes library content until finishScan. */
+const SCAN_RELEASE_DATE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS scan_release_dates(
+  job_id TEXT NOT NULL,file_key TEXT NOT NULL,epoch INTEGER NOT NULL,release_date TEXT,
+  dependencies TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(job_id,file_key),
+  FOREIGN KEY(job_id,file_key) REFERENCES scan_items(job_id,file_key) ON DELETE CASCADE);`
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const normalizeSearch = (value: string): string =>
   value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
@@ -195,6 +203,7 @@ export class LibraryDatabase {
   private readonly ordered = new Map<string, string[]>()
   private readonly totals = new Map<string, { total: number; totalDuration: number }>()
   private albumAliases: Map<string, string[]> | null = null
+  private symSpellIndex: SymSpellIndex | null = null
   private readonly collections = new LibraryDatabaseCollections()
   private readonly statements = new Map<string, ReturnType<DatabaseSync['prepare']>>()
   readonly filePath: string
@@ -210,6 +219,8 @@ export class LibraryDatabase {
   private readonly genres: LibraryDatabaseGenres
   private readonly genreLegacy: LibraryDatabaseGenreLegacy
   private readonly genreBrowse: LibraryDatabaseGenreBrowse
+  private albumBrowseInstance: LibraryDatabaseAlbumBrowse | null = null
+  private focusInstance: LibraryDatabaseFocus | null = null
 
   constructor(filePath: string) {
     this.filePath = filePath
@@ -276,7 +287,7 @@ export class LibraryDatabase {
     })
     try {
       const version = Number((this.sql.prepare('PRAGMA user_version').get() as Row).user_version)
-      if (version > 28) throw new Error(`Unsupported music library database version: ${version}`)
+      if (version > 29) throw new Error(`Unsupported music library database version: ${version}`)
       let legacyV14InputFence = false
       if (existing) {
         const identity = Number(
@@ -294,7 +305,7 @@ export class LibraryDatabase {
           !tables.has('metadata_identification_inputs') &&
           !tables.has('metadata_identification_input_changed')
         if (
-          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(version) ||
+          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29].includes(version) ||
           identity !== 0x54574c42 ||
           [
             'meta',
@@ -326,6 +337,7 @@ export class LibraryDatabase {
             ...(version >= 26 ? FOCUS_SCHEMA_OBJECTS : []),
             ...(version >= 27 ? EXPLORATION_SCHEMA_OBJECTS : []),
             ...(version >= 28 ? [...PERSONAL_METADATA_TABLES, ...PERSONAL_METADATA_REVISION_OBJECTS] : []),
+            ...(version >= 29 ? ['scan_release_dates'] : []),
             ...(version >= 12 ? ['catalog_state', 'catalog_entities', 'catalog_aliases',
               'catalog_sources', 'catalog_memberships', 'catalog_source_artists', 'catalog_facts',
               'catalog_pending', 'catalog_imports', 'catalog_import_members', 'catalog_versions',
@@ -341,7 +353,7 @@ export class LibraryDatabase {
       if (health.quick_check !== 'ok')
         throw new Error(`Music library database integrity check failed: ${health.quick_check}`)
       this.sql.exec(
-        'PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-8192;'
+        'PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA cache_size=-65536; PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-32768;'
       )
       this.sql.function(
         'library_has_genre',
@@ -385,7 +397,7 @@ export class LibraryDatabase {
             ? 1
             : 0
       )
-      this.sql.function('library_has_artist', { deterministic: true }, (artist, credits, name) => {
+      this.sql.function('library_has_artist', { deterministic: true }, (artist, credits, tags, name) => {
         const values: unknown =
           typeof credits === 'string' && credits.startsWith('[') ? JSON.parse(credits) : undefined
         const artists = Array.isArray(values)
@@ -394,7 +406,18 @@ export class LibraryDatabase {
                 isRecord(value) && typeof value.name === 'string'
             )
           : undefined
-        return isLibraryArtistMember({ artist: text(artist), artists }, text(name)) ? 1 : 0
+        const identityTags = normalizeTrackIdentityTags(typeof tags === 'string' ? JSON.parse(tags) : undefined)
+        return isLibraryArtistMember({ artist: text(artist), artists, identityTags }, text(name)) ? 1 : 0
+      })
+      this.sql.function('library_artist_names', { deterministic: true }, (artist, credits, tags) => {
+        const values: unknown = typeof credits === 'string' && credits.startsWith('[')
+          ? JSON.parse(credits) : undefined
+        const artists = Array.isArray(values)
+          ? values.filter((value): value is { name: string } =>
+              isRecord(value) && typeof value.name === 'string')
+          : undefined
+        const identityTags = normalizeTrackIdentityTags(typeof tags === 'string' ? JSON.parse(tags) : undefined)
+        return JSON.stringify(libraryArtistNames({ artist: text(artist), artists, identityTags }))
       })
       let previousRoots = '',
         roots: string[] = []
@@ -436,6 +459,7 @@ export class LibraryDatabase {
         CREATE INDEX scan_checkpoint_cleanup ON scan_jobs(updated_at) WHERE state='completed' AND checkpoints_reclaimed=0;
         CREATE TABLE IF NOT EXISTS scan_directories(job_id TEXT NOT NULL REFERENCES scan_jobs(id), path TEXT NOT NULL, state TEXT NOT NULL, error TEXT, PRIMARY KEY(job_id,path));
         CREATE TABLE IF NOT EXISTS scan_items(job_id TEXT NOT NULL REFERENCES scan_jobs(id), file_key TEXT NOT NULL, identity TEXT NOT NULL, state TEXT NOT NULL, error TEXT, expected_version INTEGER NOT NULL, epoch INTEGER NOT NULL, PRIMARY KEY(job_id,file_key));
+        ${SCAN_RELEASE_DATE_SCHEMA_SQL}
         CREATE INDEX IF NOT EXISTS scan_pending_files ON scan_items(job_id,epoch,state,file_key);
         CREATE INDEX IF NOT EXISTS scan_pending_directories ON scan_directories(job_id,state,path);
         CREATE TABLE IF NOT EXISTS cue_definitions(cue_key TEXT PRIMARY KEY, identity TEXT NOT NULL, audio_key TEXT NOT NULL, definition TEXT NOT NULL);
@@ -476,10 +500,10 @@ export class LibraryDatabase {
         ${ENTITY_METADATA_PERSONAL_SCHEMA_SQL}
         ${LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL}
         ${PERSONAL_METADATA_REVISION_SCHEMA_SQL}
-        PRAGMA user_version=28;
+        PRAGMA user_version=29;
         COMMIT;
       `)
-      if (existing && version < 28) {
+      if (existing && version < 29) {
         // VACUUM INTO is a consistent SQLite snapshot, including committed WAL
         // pages. A backup failure must prevent the schema change.
         const destination = `${filePath}.v${version}-backup-${randomUUID()}.sqlite`
@@ -572,7 +596,8 @@ export class LibraryDatabase {
             if (version >= 24) this.sql.exec(PREFERENCE_WORK_MIGRATION_SQL)
           }
           if (version < 28) this.sql.exec(`${ENTITY_METADATA_PERSONAL_SCHEMA_SQL}\n${LEGACY_MUSIC_PROVENANCE_SCHEMA_SQL}\n${PERSONAL_METADATA_REVISION_SCHEMA_SQL}`)
-          this.sql.exec('PRAGMA user_version=28; COMMIT;')
+          if (version < 29) this.sql.exec(SCAN_RELEASE_DATE_SCHEMA_SQL)
+          this.sql.exec('PRAGMA user_version=29; COMMIT;')
         } catch (error) {
           this.sql.exec('ROLLBACK')
           throw error
@@ -593,6 +618,10 @@ export class LibraryDatabase {
         CREATE INDEX IF NOT EXISTS files_count ON files(1);
         CREATE INDEX IF NOT EXISTS metadata_fact_expiry ON metadata_facts(json_extract(payload,'$.usage.expiresAt'))
           WHERE json_extract(payload,'$.usage.expiresAt') IS NOT NULL;`)
+      // Re-project saved file credits in bounded catalog maintenance, not a re-scan
+      // or a synchronous whole-library payload migration during database open.
+      this.sql.exec(`INSERT OR IGNORE INTO catalog_state VALUES('file_artist_cursor_v1','0');
+        INSERT OR IGNORE INTO catalog_state SELECT 'file_artist_horizon_v1',CAST(coalesce(max(seq),0) AS TEXT) FROM tracks;`)
       // A previous owner's unacknowledged construction is never playable.
       // Recovery only marks it; bounded background maintenance releases rows.
       this.queues.recoverBuilds()
@@ -698,9 +727,9 @@ export class LibraryDatabase {
   catalogPlaybackSources(...args: Parameters<CatalogUnifiedPlaybackDatabaseApi['catalogPlaybackSources']>) {
     return readCatalogPlaybackSources(this.sql, (id, revision) => this.catalog.resolve(id, revision), ...args)
   }
-  private albumBrowse() { return new LibraryDatabaseAlbumBrowse({ sql: this.sql,
+  private albumBrowse() { return (this.albumBrowseInstance ??= new LibraryDatabaseAlbumBrowse({ sql: this.sql,
     contentRevision: () => this.getContentRevision(),
-    metadataRevision: () => this.getClassificationMetadataRevision() }) }
+    metadataRevision: () => this.getClassificationMetadataRevision() })) }
   albumsBrowse(...args: Parameters<AlbumBrowseDatabaseApi['albumsBrowse']>) { return this.albumBrowse().browse(...args) }
   albumsSources(...args: Parameters<AlbumBrowseDatabaseApi['albumsSources']>) { return this.albumBrowse().sources(...args) }
   albumsContainsSource(...args: Parameters<AlbumBrowseDatabaseApi['albumsContainsSource']>) { return this.albumBrowse().containsSource(...args) }
@@ -755,10 +784,10 @@ export class LibraryDatabase {
   explorationPerformanceDelete(...args: Parameters<MusicExplorationDatabaseApi['explorationPerformanceDelete']>) { return this.exploration().performanceDelete(...args) }
   explorationIngest(...args: Parameters<MusicExplorationDatabaseApi['explorationIngest']>) { return this.exploration().ingest(...args) }
   explorationSyncCredits(...args: Parameters<MusicExplorationDatabaseApi['explorationSyncCredits']>) { return this.exploration().syncCredits(...args) }
-  private focus() { return new LibraryDatabaseFocus({ sql: this.sql,
+  private focus() { return (this.focusInstance ??= new LibraryDatabaseFocus({ sql: this.sql,
     transaction: action => this.transaction(action), contentRevision: () => this.getContentRevision(),
     metadataRevision: () => this.getClassificationMetadataRevision(), albumAliases: () => this.getAlbumAliases(),
-    resolve: (sourceId, revision) => this.catalogResolve(sourceId, revision) }) }
+    resolve: (sourceId, revision) => this.catalogResolve(sourceId, revision) })) }
   focusState() { return this.focus().state() }
   focusQuery(...args: Parameters<MusicFocusDatabaseApi['focusQuery']>) { return this.focus().query(...args) }
   focusFacets(...args: Parameters<MusicFocusDatabaseApi['focusFacets']>) { return this.focus().facets(...args) }
@@ -905,7 +934,7 @@ export class LibraryDatabase {
       // Invalidate even previously claimed, still in-flight results. A reset
       // cannot be undone by a late metadata reply with a recycled file version.
       this.sql.exec(
-        "UPDATE scan_jobs SET state='cancelled',epoch=epoch+1 WHERE state IN ('running','paused','interrupted'); DELETE FROM tracks; DELETE FROM files;"
+        "UPDATE scan_jobs SET state='cancelled',epoch=epoch+1 WHERE state IN ('running','paused','interrupted'); DELETE FROM scan_release_dates; DELETE FROM tracks; DELETE FROM files;"
       )
       this.bump()
       return {
@@ -1147,6 +1176,7 @@ export class LibraryDatabase {
           this.ordered.clear()
           this.totals.clear()
           this.albumAliases = null
+          this.symSpellIndex = null
           this.collections.clear()
         }
         return result
@@ -1408,8 +1438,8 @@ export class LibraryDatabase {
     if (this.albumAliases) return this.albumAliases
     const rows = this.statement(
       `SELECT album_key,album,min(seq) AS first_seq,
-      (SELECT json_extract(t.payload,'$.cover') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) AS cover,
-      (SELECT json_extract(t.payload,'$.coverSource') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) AS cover_source
+      CASE WHEN tracks.album_key LIKE 'dir:%' THEN (SELECT json_extract(t.payload,'$.cover') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) END AS cover,
+      CASE WHEN tracks.album_key LIKE 'dir:%' THEN (SELECT json_extract(t.payload,'$.coverSource') FROM tracks t WHERE t.album_key=tracks.album_key AND COALESCE(json_extract(t.payload,'$.cover'),'')<>'' ORDER BY seq LIMIT 1) END AS cover_source
       FROM tracks GROUP BY album_key ORDER BY first_seq`
     ).all() as Row[]
     const aliases = new Map<string, string[]>(),
@@ -1434,14 +1464,46 @@ export class LibraryDatabase {
     this.albumAliases = aliases
     return aliases
   }
-  private where(query: LibraryQuery, useFts = true): { sql: string; params: SQLInputValue[] } {
-    const conditions: string[] = [],
-      params: SQLInputValue[] = []
-    const add = (sql: string, ...values: SQLInputValue[]) => {
-      conditions.push(sql)
-      params.push(...values)
+  private getSymSpellIndex(): SymSpellIndex {
+    if (this.symSpellIndex) return this.symSpellIndex
+    const symSpell = new SymSpellIndex()
+    for (const row of this.statement('SELECT title,artist,album FROM tracks ORDER BY seq').iterate()) {
+      symSpell.addTrack({
+        title: text(row.title),
+        artist: text(row.artist),
+        album: text(row.album)
+      })
     }
-    const q = normalizeSearch(query.search ?? '')
+    this.symSpellIndex = symSpell
+    return symSpell
+  }
+  private buildSearchPredicate(
+    query: LibraryQuery,
+    searchStr: string,
+    useFts: boolean,
+    add: (sql: string, ...values: SQLInputValue[]) => void
+  ): void {
+    if (query.sort === 'unifiedSearch' && !query.searchLiteral) {
+      const pq = prepareSearchQuery(searchStr)
+      if (!pq.fullNormalized) return
+      for (const token of pq.isMultiToken ? pq.tokens : [pq.fullNormalized]) {
+        if (useFts && [...token].length >= 3)
+          add(
+            query.playlistView
+              ? 'uid IN (SELECT rowid FROM playlist_search WHERE playlist_search MATCH ?)'
+              : 'seq IN (SELECT rowid FROM track_search WHERE track_search MATCH ?)',
+            `${query.searchFileName ? '' : 'search_text:'}"${token}"`
+          )
+        add(
+          query.searchFileName
+            ? '(instr(search_text,?)>0 OR instr(search_file,?)>0)'
+            : 'instr(search_text,?)>0',
+          ...(query.searchFileName ? [token, token] : [token])
+        )
+      }
+      return
+    }
+    const q = normalizeSearch(searchStr)
     if (q) {
       if (!query.searchLiteral && useFts && [...q].length >= 3)
         add(
@@ -1458,11 +1520,64 @@ export class LibraryDatabase {
           ...(query.searchFileName ? [q, q] : [q])
         )
     }
-    if (query.searchLiteral && query.search?.trim())
+    if (query.searchLiteral && searchStr.trim())
       add(
         'library_metadata_contains(title,artist,album,?)=1',
-        query.search.trim().toLocaleLowerCase('zh-CN')
+        searchStr.trim().toLocaleLowerCase('zh-CN')
       )
+  }
+  private resolveUnifiedSearch(query: LibraryQuery): {
+    effectiveSearch: string
+    typoPenaltyFactor: number
+  } {
+    if (
+      query.sort !== 'unifiedSearch' ||
+      query.searchLiteral ||
+      !query.search?.trim() ||
+      query.playlistView
+    ) {
+      return { effectiveSearch: query.search ?? '', typoPenaltyFactor: 1 }
+    }
+    const pq = prepareSearchQuery(query.search)
+    if (!pq.fullNormalized) {
+      return { effectiveSearch: query.search, typoPenaltyFactor: 1 }
+    }
+    if (pq.tokens.some((t) => getMaxSymSpellTolerance(t) > 0)) {
+      const directWhere = this.whereWithSearch(query, query.search, true)
+      const hasDirect = !!this.statement(`SELECT 1 FROM tracks ${directWhere.sql} LIMIT 1`).get(
+        ...directWhere.params
+      )
+      if (!hasDirect) {
+        const suggestion = this.getSymSpellIndex().suggestQuery(query.search)
+        if (suggestion) {
+          return {
+            effectiveSearch: suggestion.correctedQuery,
+            typoPenaltyFactor: suggestion.penaltyFactor
+          }
+        }
+      }
+    }
+    return { effectiveSearch: query.search, typoPenaltyFactor: 1 }
+  }
+  private where(query: LibraryQuery, useFts = true): { sql: string; params: SQLInputValue[] } {
+    const searchStr =
+      query.sort === 'unifiedSearch'
+        ? this.resolveUnifiedSearch(query).effectiveSearch
+        : (query.search ?? '')
+    return this.whereWithSearch(query, searchStr, useFts)
+  }
+  private whereWithSearch(
+    query: LibraryQuery,
+    searchStr: string,
+    useFts = true
+  ): { sql: string; params: SQLInputValue[] } {
+    const conditions: string[] = [],
+      params: SQLInputValue[] = []
+    const add = (sql: string, ...values: SQLInputValue[]) => {
+      conditions.push(sql)
+      params.push(...values)
+    }
+    this.buildSearchPredicate(query, searchStr, useFts, add)
     if (query.folder) {
       const folder = normalizeLibraryPath(query.folder)
       const column =
@@ -1481,7 +1596,7 @@ export class LibraryDatabase {
     }
     if (query.artist)
       add(
-        "library_has_artist(artist,CASE WHEN json_type(payload,'$.artists')='array' THEN json_extract(payload,'$.artists') ELSE NULL END,?)=1",
+        "library_has_artist(artist,CASE WHEN json_type(payload,'$.artists')='array' THEN json_extract(payload,'$.artists') ELSE NULL END,json_extract(payload,'$.identityTags'),?)=1",
         query.artist
       )
     if (query.albumId)
@@ -1532,7 +1647,11 @@ export class LibraryDatabase {
     return stats
   }
   private orderedIds(query: LibraryQuery): string[] {
-    const { sql, params } = this.where(query)
+    const resolvedSearch = query.sort === 'unifiedSearch' ? this.resolveUnifiedSearch(query) : null
+    const { sql, params } =
+      resolvedSearch !== null
+        ? this.whereWithSearch(query, resolvedSearch.effectiveSearch)
+        : this.where(query)
     const direction =
       query.sort === 'recentlyAdded' || (query.sort !== 'playlist' && query.direction === 'desc')
         ? -1
@@ -1547,6 +1666,7 @@ export class LibraryDatabase {
       sort,
       direction,
       sort === 'unifiedSearch' ? (query.preferredSources ?? []) : null,
+      sort === 'unifiedSearch' ? (query.search ?? '') : null,
       sort === 'lastPlayed' ? this.history.revision : null
     ])
     const cached = this.ordered.get(key)
@@ -1564,7 +1684,18 @@ export class LibraryDatabase {
         ).all(JSON.stringify(query.ids), ...params) as Row[]
       ).map((row) => text(row.id))
     else if (sort === 'unifiedSearch')
-      ids = unifiedLibraryOrder(this.sql, sql, params, query.preferredSources ?? [], direction)
+      ids = unifiedLibraryOrder(
+        this.sql,
+        sql,
+        params,
+        query.preferredSources ?? [],
+        direction,
+        {
+          search: resolvedSearch!.effectiveSearch,
+          typoPenaltyFactor: resolvedSearch!.typoPenaltyFactor,
+          searchFileName: Boolean(query.searchFileName)
+        }
+      )
     else if (numeric)
       ids = (
         this.statement(
@@ -1998,11 +2129,10 @@ export class LibraryDatabase {
     const job = this.statement('SELECT state FROM scan_jobs WHERE id=?').get(id) as Row | undefined
     if (!job || job.state === 'completed' || job.state === 'cancelled')
       throw new Error('Scan cannot enter this state')
-    this.statement('UPDATE scan_jobs SET state=?,updated_at=? WHERE id=?').run(
-      state,
-      Date.now(),
-      id
-    )
+    this.transaction(() => {
+      this.statement('UPDATE scan_jobs SET state=?,updated_at=? WHERE id=?').run(state, Date.now(), id)
+      if (state !== 'paused') this.statement('DELETE FROM scan_release_dates WHERE job_id=?').run(id)
+    })
   }
   resumeScan(id: string): LibraryScanJob {
     return this.transaction(() => {
@@ -2027,6 +2157,7 @@ export class LibraryDatabase {
           id
         )
       } else {
+        this.statement('DELETE FROM scan_release_dates WHERE job_id=?').run(id)
         this.statement(
           "UPDATE scan_jobs SET state='running',epoch=epoch+1,committed_files=0,failed_files=0,updated_at=? WHERE id=?"
         ).run(Date.now(), id)
@@ -2175,17 +2306,28 @@ export class LibraryDatabase {
           !removing.has(key) &&
           scopes.some((root) => underRoot(key, root)) &&
           folders.some((root) => underRoot(key, root))
-        const unchanged =
-          file?.status === 'complete' &&
-          Number(file.metadata_version) >= LOCAL_LIBRARY_METADATA_VERSION &&
+        const sameBytes =
+          // Earlier JSON migrations retained trusted v0 identities as pending.
+          // They still have playable records; only their date read is missing.
+          (file?.status === 'complete' || (file?.status === 'pending' && Number(file.metadata_version) < LOCAL_LIBRARY_METADATA_VERSION)) &&
           Number(file.has_tracks) &&
           file.identity &&
           sameLocalLibraryFileIdentity(JSON.parse(text(file.identity)), identity)
+        const unchanged = sameBytes && Number(file.metadata_version) >= LOCAL_LIBRARY_METADATA_VERSION
+        const dateOnly = job.mode !== 'full' && sameBytes && !unchanged
+        const stagedDate = dateOnly ? this.statement(
+          'SELECT epoch,release_date,dependencies FROM scan_release_dates WHERE job_id=? AND file_key=?'
+        ).get(id, key) as Row | undefined : undefined
         // A checkpoint describes committed records, not just bytes on disk. A
         // restore, metadata upgrade or later per-file change can invalidate it.
         const sameCheckpoint =
           unchanged &&
           existing?.state === 'complete' &&
+          Number(existing.expected_version) === Number(file.content_version) &&
+          sameLocalLibraryFileIdentity(JSON.parse(text(existing.identity)), identity)
+        const sameDateCheckpoint =
+          dateOnly && stagedDate?.epoch === job.epoch && existing?.epoch === job.epoch &&
+          existing.state === 'complete' &&
           Number(existing.expected_version) === Number(file.content_version) &&
           sameLocalLibraryFileIdentity(JSON.parse(text(existing.identity)), identity)
         const alreadyWorking =
@@ -2194,7 +2336,7 @@ export class LibraryDatabase {
           sameLocalLibraryFileIdentity(JSON.parse(text(existing.identity)), identity)
         const state = !permitted
           ? 'excluded'
-          : sameCheckpoint || (job.mode !== 'full' && unchanged)
+          : sameCheckpoint || sameDateCheckpoint || (job.mode !== 'full' && unchanged)
             ? 'complete'
             : alreadyWorking
               ? 'working'
@@ -2207,6 +2349,11 @@ export class LibraryDatabase {
           Number(file?.content_version ?? 0),
           Number(job.epoch)
         )
+        if (permitted && dateOnly)
+          this.statement('INSERT INTO scan_release_dates VALUES(?,?,?,?,?)').run(
+            id, key, Number(job.epoch), sameDateCheckpoint ? stagedDate!.release_date : null,
+            sameDateCheckpoint ? stagedDate!.dependencies : '[]'
+          )
         if (permitted || removing.has(key))
           this.statement('UPDATE files SET seen_job=? WHERE file_key=?').run(
             `${id}:${job.epoch}`,
@@ -2235,7 +2382,7 @@ export class LibraryDatabase {
       const rows =
         job.state === 'running'
           ? (this.statement(
-              "SELECT file_key,identity FROM scan_items WHERE job_id=? AND epoch=? AND state='pending' ORDER BY file_key LIMIT ?"
+              "SELECT i.file_key,i.identity,d.file_key AS date_key FROM scan_items i LEFT JOIN scan_release_dates d ON d.job_id=i.job_id AND d.file_key=i.file_key AND d.epoch=i.epoch WHERE i.job_id=? AND i.epoch=? AND i.state='pending' ORDER BY i.file_key LIMIT ?"
             ).all(id, Number(job.epoch), limit) as Row[])
           : []
       for (const row of rows) {
@@ -2247,10 +2394,91 @@ export class LibraryDatabase {
       }
       return {
         identities: rows.map((row) => JSON.parse(text(row.identity))),
+        ...(rows.some((row) => row.date_key !== null)
+          ? { releaseDateFilePaths: rows.filter((row) => row.date_key !== null).map((row) => (JSON.parse(text(row.identity)) as LocalLibraryFileIdentity).filePath) }
+          : {}),
         lastBatch: Number(job.last_batch),
         state: text(job.state) as LibraryScanJob['state']
       }
     })
+  }
+  /** Called only inside finishScan's transaction. Validate the entire staged
+   * stream before publishing any date, using bounded pages on both passes. */
+  private publishScanReleaseDates(
+    id: string, epoch: number, scopes: string[], metadata: LibraryMetadata
+  ): { ready: boolean; changed: boolean } {
+    const excluded = new Set(metadata.exclusions.map((item) => normalizeLibraryFilePath(item.filePath)))
+    const removing = this.removal.blockedPaths()
+    const page = (after: string) => this.statement(
+      `SELECT d.file_key,d.release_date,d.dependencies,i.identity,i.expected_version,
+        f.identity AS file_identity,f.content_version,f.status,f.audio_metadata
+      FROM scan_release_dates d JOIN scan_items i ON i.job_id=d.job_id AND i.file_key=d.file_key AND i.epoch=d.epoch
+      LEFT JOIN files f ON f.file_key=d.file_key
+      WHERE d.job_id=? AND d.epoch=? AND i.state='complete' AND d.file_key>? ORDER BY d.file_key LIMIT 256`
+    ).all(id, epoch, after) as Row[]
+    let after = '', invalid = 0
+    while (true) {
+      const rows = page(after)
+      if (!rows.length) break
+      for (const row of rows) {
+        const key = text(row.file_key), identity = JSON.parse(text(row.identity)) as LocalLibraryFileIdentity
+        after = key
+        const permitted = !excluded.has(key) && !removing.has(key) &&
+          scopes.some((root) => underRoot(key, root)) && metadata.folders.some((root) => underRoot(key, root))
+        if (permitted && (row.status === 'complete' || row.status === 'pending') && row.file_identity &&
+          Number(row.expected_version) === Number(row.content_version) &&
+          sameLocalLibraryFileIdentity(JSON.parse(text(row.file_identity)), identity) &&
+          identityStillMatches(identity) &&
+          (JSON.parse(text(row.dependencies)) as LibraryScanDependency[]).every(identityStillMatches)) continue
+        this.statement('DELETE FROM scan_release_dates WHERE job_id=? AND file_key=?').run(id, key)
+        this.statement('UPDATE scan_items SET state=?,error=?,expected_version=? WHERE job_id=? AND file_key=?').run(
+          permitted ? 'stale' : 'excluded', permitted ? 'File changed before date publication' : 'Scope is no longer authorized',
+          Number(row.content_version ?? 0), id, key
+        )
+        if (permitted) this.statement("UPDATE scan_directories SET state='pending',error=NULL WHERE job_id=? AND path=?").run(
+          id, normalizeLibraryFilePath(dirname(identity.filePath))
+        )
+        invalid++
+      }
+    }
+    if (invalid) {
+      this.statement('UPDATE scan_jobs SET committed_files=committed_files-? WHERE id=?').run(invalid, id)
+      return { ready: false, changed: false }
+    }
+    after = ''
+    let changed = false
+    while (true) {
+      const rows = page(after)
+      if (!rows.length) break
+      for (const row of rows) {
+        const key = text(row.file_key), date = normalizeReleaseDate(row.release_date)
+        after = key
+        const tracks = this.statement('SELECT payload FROM tracks WHERE file_key=? ORDER BY seq').all(key) as Row[]
+        for (const record of tracks) {
+          const track = JSON.parse(text(record.payload)) as LibraryTrackRecord
+          if (track.releaseDate === date && (date !== undefined || !Object.hasOwn(track, 'releaseDate'))) continue
+          delete track.releaseDate
+          if (date) track.releaseDate = date
+          changed = this.putTrack(track) || changed
+        }
+        // CUE re-derivation can reuse the physical metadata cache later. Keep
+        // only its date aligned, without replacing any other cached field.
+        const audioMetadata = row.audio_metadata ? JSON.parse(text(row.audio_metadata)) as LibraryTrackRecord : undefined
+        if (audioMetadata) {
+          delete audioMetadata.releaseDate
+          if (date) audioMetadata.releaseDate = date
+        }
+        const identity = { ...JSON.parse(text(row.file_identity)), metadataVersion: LOCAL_LIBRARY_METADATA_VERSION }
+        this.statement("UPDATE files SET identity=?,metadata_version=?,status='complete',audio_metadata=? WHERE file_key=?").run(
+          JSON.stringify(identity), LOCAL_LIBRARY_METADATA_VERSION, audioMetadata ? JSON.stringify(audioMetadata) : null, key
+        )
+        this.statement('UPDATE scan_items SET identity=?,expected_version=(SELECT content_version FROM files WHERE file_key=?) WHERE job_id=? AND file_key=?').run(
+          JSON.stringify(identity), key, id, key
+        )
+      }
+    }
+    this.statement('DELETE FROM scan_release_dates WHERE job_id=?').run(id)
+    return { ready: true, changed }
   }
   finishScan(id: string): LibraryScanFinishResult {
     return this.transaction(() => {
@@ -2276,8 +2504,8 @@ export class LibraryDatabase {
       )
       if (incompleteDirectories || incompleteFiles)
         throw new Error('Incomplete scan cannot remove missing files')
-      const scopes = JSON.parse(text(job.roots)) as string[],
-        authorized = this.getMetadata().folders
+      const metadata = this.getMetadata(), scopes = JSON.parse(text(job.roots)) as string[],
+        authorized = metadata.folders
       for (const root of scopes) {
         if (
           !authorized.some((folder) => underRoot(normalizeLibraryFilePath(root), folder)) ||
@@ -2285,6 +2513,8 @@ export class LibraryDatabase {
         )
           throw new Error('Scan root is no longer authorized or online')
       }
+      const dates = this.publishScanReleaseDates(id, Number(job.epoch), scopes, metadata)
+      if (!dates.ready) return { completed: false, metadata: this.getMetadata(), removedFileCount: 0 }
       let removedFileCount = 0,
         after = ''
       const removing = this.removal.blockedPaths()
@@ -2305,7 +2535,7 @@ export class LibraryDatabase {
       this.statement(
         "UPDATE scan_jobs SET state='completed',checked_files=(SELECT count(*) FROM scan_items WHERE job_id=? AND epoch=?),updated_at=? WHERE id=?"
       ).run(id, Number(job.epoch), Date.now(), id)
-      if (removedFileCount) this.bump()
+      if (removedFileCount || dates.changed) this.bump()
       return { completed: true, metadata: this.getMetadata(), removedFileCount }
     })
   }
@@ -2456,8 +2686,6 @@ export class LibraryDatabase {
         failedDelta = 0,
         changed = false
       for (const file of batch.files) {
-        if (file.metadataRead && !file.error && !file.tracks.length)
-          throw new Error('Successful metadata must contain a playable logical track')
         const key = normalizeLibraryFilePath(file.identity.filePath)
         const previousItem = this.statement(
           'SELECT state,identity,expected_version,epoch FROM scan_items WHERE job_id=? AND file_key=?'
@@ -2469,6 +2697,13 @@ export class LibraryDatabase {
           !sameLocalLibraryFileIdentity(JSON.parse(text(previousItem.identity)), file.identity)
         )
           throw new Error('Scan result was not claimed from its durable task')
+        const dateOnly = !!this.statement(
+          'SELECT 1 FROM scan_release_dates WHERE job_id=? AND file_key=? AND epoch=?'
+        ).get(batch.jobId, key, Number(job.epoch))
+        if (file.releaseDateOnly && !dateOnly)
+          throw new Error('Date-only result was not claimed as a legacy date read')
+        if (!dateOnly && file.metadataRead && !file.error && !file.tracks.length)
+          throw new Error('Successful metadata must contain a playable logical track')
         const currentVersion = Number(
           (
             this.statement('SELECT content_version FROM files WHERE file_key=?').get(key) as
@@ -2502,6 +2737,21 @@ export class LibraryDatabase {
             ).run(batch.jobId, normalizeLibraryFilePath(dirname(file.identity.filePath)))
           continue
         }
+        const error = file.error || (!file.metadataRead ? 'Metadata could not be read' : '')
+        if (dateOnly) {
+          // Older parse-only callers remain valid, but their replacement Track
+          // payloads never gain write authority over a date-only durable task.
+          const date = normalizeReleaseDate(file.releaseDateOnly ? file.releaseDate : file.tracks[0]?.releaseDate)
+          this.statement('UPDATE scan_release_dates SET release_date=?,dependencies=? WHERE job_id=? AND file_key=?').run(
+            error ? null : date ?? null, JSON.stringify(file.dependencies ?? []), batch.jobId, key
+          )
+          this.statement('UPDATE scan_items SET state=?,error=? WHERE job_id=? AND file_key=?').run(
+            error ? 'failed' : 'complete', error || null, batch.jobId, key
+          )
+          if (error) failedDelta++
+          else committedDelta++
+          continue
+        }
         const previous = this.statement(
           'SELECT id,payload FROM tracks WHERE file_key=? ORDER BY seq'
         ).all(key) as Row[]
@@ -2510,7 +2760,6 @@ export class LibraryDatabase {
         const bySegment = new Map(oldTracks.map((track) => [segmentKey(track), track]))
         // Failed metadata never replaces a previously playable record. Its identity remains
         // retryable even when a filename-only fallback is admitted for a newly discovered file.
-        const error = file.error || (!file.metadataRead ? 'Metadata could not be read' : '')
         const retainedIds: string[] = []
         if (!error || !previous.length) {
           for (const track of file.tracks) {

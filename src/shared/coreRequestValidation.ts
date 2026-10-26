@@ -1,6 +1,7 @@
 import { validCoreDspPayload } from './coreDsp.ts'
 import { EXPERIENCE_MUSIC_OPERATIONS } from './pluginExperience.ts'
 import { validCatalogPayload } from './musicCatalog.ts'
+import { validLibraryHealthPayload } from './libraryHealth.ts'
 import { validGenresPayload } from './musicGenres.ts'
 import { validGenreBrowsePayload } from './musicGenreBrowse.ts'
 import { validAlbumBrowsePayload } from './musicAlbumBrowse.ts'
@@ -575,6 +576,11 @@ export function validCorePayload(name: CoreOperation, payload: unknown): boolean
       )
     case 'library.inbox.refresh':
       return keys(p, ['duplicatesId']) && optional(p.duplicatesId, (v) => text(v, 128))
+    case 'library.health.start':
+    case 'library.health.status':
+    case 'library.health.page':
+    case 'library.health.repair':
+      return validLibraryHealthPayload(name, p)
     case 'library.inbox.mark':
       return (
         keys(p, ['id', 'revision', 'indexes', 'status']) &&

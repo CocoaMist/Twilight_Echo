@@ -31,6 +31,8 @@ export interface CatalogQuery {
   scope?: 'library' | 'all'
   source?: string
   search?: string
+  /** Exact source artist title, after trimming. Does not change collection membership. */
+  artistName?: string
   revision?: number
   offset?: number
   limit?: number
@@ -126,14 +128,19 @@ const validContext = (v: unknown, kind: unknown): boolean => {
   if (v.type === 'collection')
     return (
       keys(v, ['type', 'collection', 'id']) &&
-      (v.collection === 'artists' || v.collection === 'albums') && text(v.id, 32768)
+      (v.collection === 'artists' || v.collection === 'albums') &&
+      text(v.id, 32768)
     )
   return (
-    (v.type === 'track' || v.type === 'native') && keys(v, ['type', 'provider', 'id']) &&
-    typeof v.provider === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(v.provider) &&
+    (v.type === 'track' || v.type === 'native') &&
+    keys(v, ['type', 'provider', 'id']) &&
+    typeof v.provider === 'string' &&
+    /^[a-z0-9][a-z0-9._-]{0,127}$/.test(v.provider) &&
     text(v.id, v.type === 'track' ? 8192 : 128) &&
-    (v.type !== 'native' || (v.provider !== 'local' && typeof kind === 'string' &&
-      ['artist', 'release', 'album_project'].includes(kind)))
+    (v.type !== 'native' ||
+      (v.provider !== 'local' &&
+        typeof kind === 'string' &&
+        ['artist', 'release', 'album_project'].includes(kind)))
   )
 }
 
@@ -147,16 +154,31 @@ export function validCatalogPayload(name: string, value: unknown): boolean {
   switch (name) {
     case 'catalog.query':
       return (
-        keys(value, ['kind', 'scope', 'source', 'search', 'revision', 'offset', 'limit', 'context']) &&
+        keys(value, [
+          'kind',
+          'scope',
+          'source',
+          'search',
+          'artistName',
+          'revision',
+          'offset',
+          'limit',
+          'context'
+        ]) &&
         typeof value.kind === 'string' &&
         ['recording', 'release', 'artist', 'album_project'].includes(value.kind) &&
         optional(value.scope, (v) => v === 'library' || v === 'all') &&
         optional(value.source, (v) => text(v, 128)) &&
         optional(
+          value.artistName,
+          (v) => value.kind === 'artist' && text(v, 32768) && !!String(v).trim()
+        ) &&
+        optional(
           value.search,
           (v) => typeof v === 'string' && v.length <= 512 && !v.includes('\0')
         ) &&
-        optional(value.context, v => validContext(v, value.kind)) && page()
+        optional(value.context, (v) => validContext(v, value.kind)) &&
+        page()
       )
     case 'catalog.sources':
       return (

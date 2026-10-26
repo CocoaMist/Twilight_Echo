@@ -244,6 +244,8 @@ const PROVIDER_METHODS: TwilightMediaProviderMethod[] = [
   'fetchArtistFollowState',
   'fetchAlbumTracks',
   'fetchAlbumIdentity',
+  'searchRecordingIdentities',
+  'fetchArtistIdentity',
   'fetchArtistPlaylists',
   'fetchUserPlaylistsByUid',
   'fetchUserFollows',

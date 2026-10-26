@@ -85,6 +85,8 @@ export async function activate(context) {
     getPlaybackUrl,
     getLyrics,
     searchSongs,
+    searchRecordingIdentities,
+    fetchArtistIdentity,
     searchAlbums,
     searchPlaylists,
     searchArtists,
@@ -151,6 +153,9 @@ export function deactivate() {
   contextRef = null
   ncmApi = null
   resetCaches()
+  metadataRequestTail = Promise.resolve()
+  metadataNextRequestAt = 0
+  metadataBlockedUntil = 0
 }
 
 function appendQueryParam(path, key, value) {
@@ -506,6 +511,28 @@ async function requestAuthedRead(path, { attempts = 2, label = path } = {}) {
 async function requestOptionalAuth(path, requestContext) {
   // Anonymous-capable read: attaches the cookie when logged in, but never requires one.
   return request(path, await getCookie(), requestContext)
+}
+
+// Library fallback data is public: never attach an unrelated account session.
+// This budget is independent from playback/login and remembers upstream cooldowns.
+let metadataRequestTail = Promise.resolve()
+let metadataNextRequestAt = 0
+let metadataBlockedUntil = 0
+async function requestPublicMetadata(path, requestContext) {
+  const turn = metadataRequestTail.catch(() => {}).then(async () => {
+    throwIfRequestAborted(requestContext)
+    if (Date.now() < metadataBlockedUntil) throw new Error('NCM_METADATA_RATE_LIMITED')
+    await waitWithAbort(Math.max(0, metadataNextRequestAt - Date.now()), requestContext?.signal)
+    metadataNextRequestAt = Date.now() + 1000
+    const data = await request(path, '', requestContext)
+    if (Number(data.code) === 429 || /操作频繁|请求频繁|高频/.test(normalizeApiMessage(data, ''))) {
+      metadataBlockedUntil = Date.now() + 60_000
+      throw new Error('NCM_METADATA_RATE_LIMITED')
+    }
+    return data
+  })
+  metadataRequestTail = turn.catch(() => {})
+  return turn
 }
 
 async function requestOptionalAuthRead(path, { attempts = 2, label = path, signal } = {}) {
@@ -2334,7 +2361,7 @@ async function searchPlaylists(keywords, limit = 30, offset = 0) {
 }
 
 async function searchArtists(keywords, limit = 30, offset = 0, requestContext) {
-  const data = await requestAuthed(
+  const data = await requestOptionalAuth(
     `/cloudsearch?keywords=${encodeURIComponent(keywords)}&type=100&limit=${limit}&offset=${offset}`,
     requestContext
   )
@@ -2420,40 +2447,55 @@ async function fetchArtistIntro(artistId, requestContext) {
 async function fetchArtistMetadata(artistId, requestContext) {
   const id = identityId(artistId)
   if (!id) throw new Error('无效的歌手 ID')
-  const detail = await requestOptionalAuth(`/artist/detail?id=${encodeURIComponent(id)}`, requestContext)
+  const detail = await requestPublicMetadata(`/artist/detail?id=${encodeURIComponent(id)}`, requestContext)
   if (Number(detail.code) === 404) return { status: 'not_found' }
   if (detail.code != null && Number(detail.code) !== 200) throw new Error(describeApiError(Number(detail.code), detail))
   const artist = detail.data?.artist ?? detail.artist
   if (!artist || identityId(artist.id) !== id) throw new Error('歌手资料身份不一致')
-  const data = await requestOptionalAuth(`/artist/desc?id=${encodeURIComponent(id)}`, requestContext)
+  const data = await requestPublicMetadata(`/artist/desc?id=${encodeURIComponent(id)}`, requestContext)
   if (data.code != null && Number(data.code) !== 200) throw new Error(describeApiError(Number(data.code), data))
   const body = data.data ?? data
-  const brief = typeof body.briefDesc === 'string' ? body.briefDesc.trim() : ''
+  const brief = [body.briefDesc, artist.briefDesc].find(v => typeof v === 'string' && v.trim())?.trim() ?? ''
   const sections = Array.isArray(body.introduction) ? body.introduction : []
   const parts = [brief, ...sections.flatMap(section => typeof section?.txt === 'string' && section.txt.trim()
     ? [typeof section.ti === 'string' && section.ti.trim() ? `${section.ti.trim()}\n${section.txt.trim()}` : section.txt.trim()] : [])]
-  return nativeTextMetadata('artist', id, artist.name, [...new Set(parts.filter(Boolean))].join('\n\n'))
+  // Only artist-owned portrait fields. Never use a song/album cover as a person.
+  const portrait = [artist.avatar, artist.cover, artist.picUrl].map(nativeMetadataImage).find(Boolean)
+  return nativeTextMetadata('artist', id, artist.name, [...new Set(parts.filter(Boolean))].join('\n\n'), portrait)
 }
 
 async function fetchAlbumMetadata(albumId, requestContext) {
   const id = identityId(albumId)
   if (!id) throw new Error('无效的专辑 ID')
-  const data = await requestOptionalAuth(`/album?id=${encodeURIComponent(id)}`, requestContext)
+  const data = await requestPublicMetadata(`/album?id=${encodeURIComponent(id)}`, requestContext)
   if (Number(data.code) === 404) return { status: 'not_found' }
   if (data.code != null && Number(data.code) !== 200) throw new Error(describeApiError(Number(data.code), data))
   const album = data.album ?? data.data?.album
   if (!album || identityId(album.id) !== id) throw new Error('专辑资料身份不一致')
   const value = [album.description, album.briefDesc].find(v => typeof v === 'string' && v.trim()) ?? ''
-  return nativeTextMetadata('release', id, album.name, value.trim())
+  return nativeTextMetadata('release', id, album.name, value.trim(), nativeMetadataImage(album.picUrl))
 }
 
-function nativeTextMetadata(kind, id, name, value) {
-  if (!value) return { status: 'not_provided' }
+function nativeMetadataImage(value) {
+  if (typeof value !== 'string') return null
+  try {
+    const url = new URL(value)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port ||
+      !/^p[1-9]\d*\.music\.126\.net$/.test(url.hostname) || url.search || url.hash ||
+      !/^\/[A-Za-z0-9_=-]+\/[1-9]\d*\.(?:jpg|jpeg|png|webp)$/.test(url.pathname)) return null
+    url.protocol = 'https:'
+    return url.href
+  } catch { return null }
+}
+
+function nativeTextMetadata(kind, id, name, value, resource) {
+  if (!value && !resource) return { status: 'not_provided' }
+  const source = { url: `https://music.163.com/#/${kind === 'artist' ? 'artist' : 'album'}?id=${encodeURIComponent(id)}`,
+    revision: '', attribution: '网易云音乐', license: '', licenseUrl: '' }
   return { status: 'ok', metadata: {
     schemaVersion: 1, provider: 'ncm', kind, id, name: identityText(name),
-    texts: [{ field: 'introduction', value: value.slice(0, 20000), language: 'und',
-      url: `https://music.163.com/#/${kind === 'artist' ? 'artist' : 'album'}?id=${encodeURIComponent(id)}`,
-      revision: '', attribution: '网易云音乐', license: '', licenseUrl: '' }]
+    texts: value ? [{ field: 'introduction', value: value.slice(0, 20000), language: 'und', ...source }] : [],
+    ...(resource ? { artwork: [{ resource, ...source }] } : {})
   }}
 }
 
@@ -2489,6 +2531,44 @@ async function fetchAlbumTracks(albumId, requestContext) {
 
 // Identity data retains original precision and actual ordinals. Display Track[]
 // intentionally remains unchanged; its rounded duration/order cannot prove identity.
+async function searchRecordingIdentities(query, limit = 10, offset = 0, requestContext) {
+  const data = await requestPublicMetadata(`/cloudsearch?keywords=${encodeURIComponent(query)}&type=1&limit=${Math.min(10, limit)}&offset=${offset}`, requestContext)
+  if (data.code != null && Number(data.code) !== 200) throw new Error(describeApiError(Number(data.code), data))
+  const result = data.result ?? data.data?.result
+  if (!result || !Array.isArray(result.songs) && result.songCount !== 0) throw new Error('无效的歌曲身份搜索')
+  const songs = result.songs ?? []
+  return {
+    total: Number.isSafeInteger(result.songCount) && result.songCount >= songs.length ? result.songCount : null,
+    items: songs.slice(0, 10).map(song => {
+      const album = song.al ?? song.album, milliseconds = song.dt ?? song.duration
+      return { id: identityId(song.id), title: identityText(song.name),
+        artists: identityArtists(song.ar ?? song.artists).map(a => {
+          const raw = (song.ar ?? song.artists).find(raw => identityId(raw.id) === a.id && identityText(raw.name) === a.name)
+          const aliases = a.id ? artistIdentityAliases(raw) : []
+          return { id: a.id ?? null, name: a.name, ...(aliases.length ? { aliases } : {}) }
+        }),
+        durationSeconds: typeof milliseconds === 'number' && Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds / 1000 : null,
+        album: identityId(album?.id) && album?.name ? { id: identityId(album.id), title: identityText(album.name) } : null }
+    })
+  }
+}
+
+function artistIdentityAliases(artist) {
+  return [...new Set([...(Array.isArray(artist?.alias) ? artist.alias : []),
+    ...(Array.isArray(artist?.alia) ? artist.alia : []), ...(Array.isArray(artist?.transNames) ? artist.transNames : []),
+    ...(Array.isArray(artist?.tns) ? artist.tns : [])].filter(value => typeof value === 'string').map(identityText).filter(Boolean))].slice(0, 32)
+}
+
+async function fetchArtistIdentity(artistId, requestContext) {
+  const id = identityId(artistId)
+  if (!id) throw new Error('无效的歌手 ID')
+  const data = await requestPublicMetadata(`/artist/detail?id=${encodeURIComponent(id)}`, requestContext)
+  if (data.code != null && Number(data.code) !== 200) throw new Error(describeApiError(Number(data.code), data))
+  const artist = data.data?.artist ?? data.artist
+  if (!artist || identityId(artist.id) !== id || !identityText(artist.name)) throw new Error('歌手资料身份不一致')
+  return { id, name: identityText(artist.name), aliases: artistIdentityAliases(artist) }
+}
+
 async function fetchAlbumIdentity(albumId, requestContext) {
   const data = await requestOptionalAuth(
     `/album?id=${encodeURIComponent(String(albumId))}`, requestContext

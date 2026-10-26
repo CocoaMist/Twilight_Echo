@@ -6,6 +6,8 @@ import type {
 } from '../../shared/musicIdentificationSchedule.ts'
 import type { LibraryDatabaseEntityMetadata } from './libraryDatabaseEntityMetadata.ts'
 import { validMetadataLanguage, type EntityMetadataJob } from '../../shared/entityMetadata.ts'
+import { isPublicMetadataSource, metadataProviderReference } from '../../shared/metadataProviders.ts'
+import { ncmFileReferences } from '../../shared/ncmFileIdentity.ts'
 
 const mark = (entity: string) => `INSERT INTO metadata_identification_schedule(entity_id,origin)
   SELECT ${entity},'new' WHERE true ON CONFLICT(entity_id) DO UPDATE SET dirty=1;`
@@ -96,7 +98,7 @@ export class LibraryDatabaseIdentificationSchedule {
         !Array.isArray(request.enrichment.providers) || request.enrichment.providers.length > 17 ||
         new Set(request.enrichment.providers.map(p => p.id)).size !== request.enrichment.providers.length ||
         !request.enrichment.providers.every(p =>
-          (['musicbrainz-details', 'public-artwork'].includes(p.id) || /^platform\.[a-z0-9][a-z0-9._-]{0,118}$/.test(p.id)) &&
+          (['musicbrainz-details', 'public-artwork'].includes(p.id) || isPublicMetadataSource(p.id) || /^platform\.[a-z0-9][a-z0-9._-]{0,118}$/.test(p.id)) &&
           typeof p.context === 'string' && p.context.length <= 32768 &&
           Array.isArray(p.kinds) && p.kinds.length <= 4 &&
           p.kinds.every(k => ['artist', 'recording', 'release', 'album_project'].includes(k)))
@@ -170,16 +172,20 @@ export class LibraryDatabaseIdentificationSchedule {
         const input = live ? this.metadata.identification.input(entityId) : null
         const stamp = input ? JSON.stringify([input.version, input.linkRevision]) : ''
         const identity = this.metadata.identification.detail(entityId)
-        const providers =
+        let providers =
           permitted &&
           !['confirmed', 'detached'].includes(identity.link?.state ?? '')
             ? request.providers.filter((p) => p.kinds.includes(input!.kind))
             : []
+        // A consistent file-native identity already names the service record.
+        // Resolve that first instead of scheduling speculative searches everywhere.
+        // Do not suppress alternatives when the selected adapter is unavailable or
+        // the file observations disagree about the person/recording/release.
+        if (input && providers.some(p => p.id === 'platform.ncm') && ncmFileReferences(input).size === 1)
+          providers = providers.filter(p => p.id === 'platform.ncm')
         const enrichment = permitted && identity.link?.state === 'confirmed'
           ? (request.enrichment?.providers ?? []).filter(p => p.kinds.includes(input!.kind)).flatMap(p => {
-              const native = p.id.startsWith('platform.') ? p.id.slice(9) : 'musicbrainz'
-              const ref = identity.references.find(r => r.provider === native && r.kind === input!.kind &&
-                r.idType === (native === 'musicbrainz' ? 'mbid' : 'native'))
+              const ref = metadataProviderReference(p.id, input!.kind, identity.references)
               return ref ? [{ ...p, externalId: ref.value }] : []
             }) : []
         const wanted = (job: EntityMetadataJob) => job.type === 'identify'

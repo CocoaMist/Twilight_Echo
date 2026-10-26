@@ -19,6 +19,14 @@ const qqMetadata = (url: URL, init: RequestInit) => url.hostname === 'u.y.qq.com
   url.pathname === '/cgi-bin/musicu.fcg' && !url.search && !url.hash && init.method === 'POST' &&
   typeof init.body === 'string' && init.body.length <= 32768
 
+function publicMusicEndpoint(url: URL) {
+  if (url.hash) return false
+  if (url.hostname === 'vocadb.net') return /^\/api\/(?:artists|albums)(?:\/[1-9]\d*)?$/.test(url.pathname)
+  if (url.hostname === 'api.discogs.com') return /^\/(?:database\/search|(?:artists|masters|releases)\/[1-9]\d*)$/.test(url.pathname)
+  return url.hostname === 'www.theaudiodb.com' &&
+    /^\/api\/v1\/json\/[A-Za-z0-9_-]{1,128}\/(?:search|searchalbum|artist|artist-mb|album|album-mb)\.php$/.test(url.pathname)
+}
+
 /** CAA's JSON index is hosted on IA. Only this exact index redirect chain is
  * accepted; arbitrary archive files and image downloads are not metadata exits. */
 async function fetchMetadata(fetcher: typeof fetch, url: URL, init: RequestInit): Promise<Response> {
@@ -97,7 +105,7 @@ export class MetadataHttp {
     const qq = qqMetadata(url, init)
     if (
       url.protocol !== 'https:' ||
-      (!HOSTS.has(url.hostname) && !caaIndex(url) && !qq) ||
+      (!HOSTS.has(url.hostname) && !caaIndex(url) && !qq && !publicMusicEndpoint(url)) ||
       url.port ||
       url.username ||
       url.password ||
@@ -119,7 +127,10 @@ export class MetadataHttp {
           while (host.next > this.now())
             await metadataDelay(Math.min(2147483647, host.next - this.now()), current)
           current.throwIfAborted()
-          host.next = this.now() + this.interval
+          // Free tiers: TAB 30/min, Discogs unauthenticated 25/min. VocaDB
+          // discourages bulk crawling; every lookup uses this same host queue.
+          const minimum = ({ 'www.theaudiodb.com': 2100, 'api.discogs.com': 2500, 'vocadb.net': 1500 })[url.hostname] ?? 0
+          host.next = this.now() + (this.interval === 0 ? 0 : Math.max(this.interval, minimum))
           const response = await fetchMetadata(this.fetcher, url, { ...init, signal: current })
           if ([429, 503].includes(response.status))
             host.next = Math.max(

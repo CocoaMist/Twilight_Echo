@@ -48,10 +48,13 @@ export const GENRE_PLATFORM_ALBUM_TARGET_SQL = `json_type(s.payload,'$.albumId')
     8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)))>0`
 
 /** Shared relational meaning for pages, counts, member details and classification facets. */
-export function genreBrowseCtes(extension: { ctes?: string; sourceFilter?: string; physical?: boolean; scope?: 'library' | 'catalog'; kind?: 'recording' | 'release'; collectionDetails?: boolean } = {}): string {
+export function genreBrowseCtes(extension: { ctes?: string; sourceFilter?: string; physical?: boolean; scope?: 'library' | 'catalog'; kind?: 'recording' | 'release'; collectionDetails?: boolean; deferSourceDetails?: boolean; recordingOnly?: boolean; deferClassification?: boolean; hasGenreFilter?: boolean; hasEntityFilter?: boolean } = {}): string {
+  // Recording queries without release-level dimensions need no album bindings or
+  // playback preference details. Keep the default graph for other consumers.
+  const recordingOnly = extension.recordingOnly && extension.kind === 'recording' && !extension.physical
   const source = extension.physical
-    ? `(SELECT cs.*,cs.recording_id recording,cs.release_id release,b.preferred_recording,b.preferred_release
-        FROM catalog_sources cs JOIN catalog_bindings b ON b.id=cs.id)`
+    ? `(SELECT cs.*,cs.recording_id recording,cs.release_id release,
+        ${extension.deferSourceDetails ? '0 preferred_recording,0 preferred_release FROM catalog_sources cs' : 'b.preferred_recording,b.preferred_release FROM catalog_sources cs JOIN catalog_bindings b ON b.id=cs.id'})`
     : 'catalog_bindings'
   const entitySources = extension.kind
     ? `(SELECT ${extension.physical ? `${extension.kind}_id` : extension.kind} entity_id,id source_id
@@ -71,8 +74,8 @@ export function genreBrowseCtes(extension: { ctes?: string; sourceFilter?: strin
     UNION SELECT g.id FROM music_genres g JOIN genre_tree p ON g.parent_id=p.id
       WHERE (SELECT descendants FROM query_args)=1),
   scoped_sources AS MATERIALIZED (
-    SELECT s.id,s.provider,s.track_id,s.recording,s.release,
-      s.availability,s.preferred_recording,
+    SELECT s.id,s.provider,s.track_id,s.recording,${recordingOnly ? 'NULL' : 's.release'} release,
+      s.availability,${recordingOnly ? '0' : 's.preferred_recording'} preferred_recording,
       ${extension.kind === 'recording' && !extension.collectionDetails ? 'NULL' : `CASE WHEN s.provider='local' THEN genre_browse_collection(t.album_key)
       WHEN ${GENRE_PLATFORM_ALBUM_TARGET_SQL}
       THEN nullif(s.album_key,'') ELSE NULL END`} collection_id
@@ -85,71 +88,81 @@ export function genreBrowseCtes(extension: { ctes?: string; sourceFilter?: strin
     ${extension.kind === 'recording' && !extension.collectionDetails ? '' : "UNION SELECT 'collection',collection_id FROM scoped_sources WHERE collection_id IS NOT NULL"}),
   manual_targets AS MATERIALIZED (
     SELECT o.target_kind,o.target_id,o.genre_ids FROM music_genre_overrides o
-      JOIN genre_targets t USING(target_kind,target_id)
     UNION ALL SELECT o.target_kind,o.target_id,o.genre_ids FROM music_genre_import_overrides o
-      JOIN genre_targets t USING(target_kind,target_id)
       WHERE NOT EXISTS(SELECT 1 FROM music_genre_overrides m
         WHERE m.target_kind=o.target_kind AND m.target_id=o.target_id)),
   bridge_groups AS (
     SELECT provider,normalized,min(genre_id) genre_id,min(ignored) ignored,
       count(DISTINCT coalesce(genre_id,'')||':'||ignored) variants
     FROM music_genre_alias_bridges GROUP BY provider,normalized),
-  evidence_resolved AS (
-    SELECT e.target_kind,e.target_id,e.origin,
-      CASE WHEN a.provider IS NOT NULL THEN a.genre_id
-        WHEN b.provider IS NOT NULL THEN CASE WHEN b.variants=1 THEN b.genre_id ELSE NULL END
-        ELSE g.genre_id END genre_id
-    FROM music_genre_evidence e JOIN genre_targets t USING(target_kind,target_id),json_each(e.values_json) v
-    LEFT JOIN music_genre_aliases a ON a.provider=e.provider AND a.normalized=json_extract(v.value,'$.normalized')
-    LEFT JOIN bridge_groups b ON b.provider=e.provider AND b.normalized=json_extract(v.value,'$.normalized')
-    LEFT JOIN music_genre_aliases g ON g.provider='*' AND g.normalized=json_extract(v.value,'$.normalized')),
-  evidence_genres AS MATERIALIZED (
-    SELECT DISTINCT e.target_kind,e.target_id,e.origin,e.genre_id
-    FROM evidence_resolved e JOIN music_genres g ON g.id=e.genre_id),
-  evidence_levels AS (
-    SELECT target_kind,target_id,max(CASE origin WHEN 'source' THEN 2 WHEN 'external' THEN 1 ELSE 0 END) level
-    FROM evidence_genres GROUP BY target_kind,target_id),
-  target_levels AS MATERIALIZED (
-    SELECT t.*,CASE WHEN m.target_id IS NOT NULL THEN 'manual'
-      WHEN e.level=2 THEN 'source' WHEN e.level=1 THEN 'external' ELSE 'none' END origin
-    FROM genre_targets t LEFT JOIN manual_targets m USING(target_kind,target_id)
-      LEFT JOIN evidence_levels e USING(target_kind,target_id)),
+  evidence_patterns AS MATERIALIZED (
+    SELECT DISTINCT provider,values_json FROM music_genre_evidence),
+  evidence_pattern_genres AS MATERIALIZED (
+    SELECT DISTINCT p.provider,p.values_json,g.id genre_id
+    FROM evidence_patterns p,json_each(p.values_json) v
+    LEFT JOIN music_genre_aliases a ON a.provider=p.provider AND a.normalized=json_extract(v.value,'$.normalized')
+    LEFT JOIN bridge_groups b ON b.provider=p.provider AND b.normalized=json_extract(v.value,'$.normalized')
+    LEFT JOIN music_genre_aliases ga ON ga.provider='*' AND ga.normalized=json_extract(v.value,'$.normalized')
+    JOIN music_genres g ON g.id=CASE WHEN a.provider IS NOT NULL THEN a.genre_id
+      WHEN b.provider IS NOT NULL THEN CASE WHEN b.variants=1 THEN b.genre_id ELSE NULL END
+      ELSE ga.genre_id END),
+  target_levels AS (
+    SELECT t.target_kind,t.target_id,CASE
+      WHEN EXISTS(SELECT 1 FROM manual_targets m WHERE m.target_kind=t.target_kind AND m.target_id=t.target_id) THEN 'manual'
+      WHEN EXISTS(SELECT 1 FROM music_genre_evidence e CROSS JOIN evidence_pattern_genres p ON p.provider=e.provider AND p.values_json=e.values_json
+        WHERE e.target_kind=t.target_kind AND e.target_id=t.target_id AND e.origin='source') THEN 'source'
+      WHEN EXISTS(SELECT 1 FROM music_genre_evidence e CROSS JOIN evidence_pattern_genres p ON p.provider=e.provider AND p.values_json=e.values_json
+        WHERE e.target_kind=t.target_kind AND e.target_id=t.target_id AND e.origin='external') THEN 'external'
+      ELSE 'none' END origin
+    FROM genre_targets t),
   target_genres AS (
-    SELECT DISTINCT m.target_kind,m.target_id,CAST(v.value AS TEXT) genre_id
+    SELECT m.target_kind,m.target_id,CAST(v.value AS TEXT) genre_id
     FROM manual_targets m,json_each(m.genre_ids) v JOIN music_genres g ON g.id=v.value
-    UNION SELECT e.target_kind,e.target_id,e.genre_id FROM evidence_genres e
-      JOIN target_levels l USING(target_kind,target_id) WHERE e.origin=l.origin),
+    UNION ALL SELECT e.target_kind,e.target_id,p.genre_id
+    FROM music_genre_evidence e
+    CROSS JOIN evidence_pattern_genres p ON p.provider=e.provider AND p.values_json=e.values_json
+    WHERE NOT EXISTS(SELECT 1 FROM manual_targets m
+      WHERE m.target_kind=e.target_kind AND m.target_id=e.target_id)
+      AND (e.origin='source' OR (e.origin='external' AND NOT EXISTS(
+        SELECT 1 FROM music_genre_evidence s
+        CROSS JOIN evidence_pattern_genres sp ON sp.provider=s.provider AND sp.values_json=s.values_json
+        WHERE s.target_kind=e.target_kind AND s.target_id=e.target_id AND s.origin='source')))),
   entity_source_bindings AS MATERIALIZED (SELECT * FROM ${entitySources}),
   entity_sources AS MATERIALIZED (
     SELECT ${extension.kind ? '' : 'DISTINCT'} ${entityId} entity_id,s.id source_id,s.provider,s.collection_id,
-      s.recording,s.release,s.availability
-    FROM scoped_sources s ${extension.kind ? '' : 'CROSS JOIN entity_source_bindings b ON b.source_id=s.id'}
-      CROSS JOIN catalog_entities e ON e.id=${entityId} CROSS JOIN query_args q
-    WHERE e.kind=q.kind AND (q.provider IS NULL OR s.provider=q.provider)
-      AND (q.entity_id IS NULL OR e.id=q.entity_id)
+      s.availability
+    FROM scoped_sources s ${extension.kind ? '' : `CROSS JOIN entity_source_bindings b ON b.source_id=s.id
+      CROSS JOIN catalog_entities e ON e.id=${entityId}`} CROSS JOIN query_args q
+    WHERE ${extension.kind ? `${extension.kind === 'release' ? `${entityId} IS NOT NULL AND ` : ''}q.kind='${extension.kind}'` : 'e.kind=q.kind'}
+      AND (q.provider IS NULL OR s.provider=q.provider)
+      AND (q.entity_id IS NULL OR ${entityId}=q.entity_id)
       ${extension.sourceFilter ? `AND (${extension.sourceFilter})` : ''}),
   entity_direct AS (
-    SELECT DISTINCT s.entity_id FROM entity_sources s JOIN target_levels l
+    ${extension.kind === 'recording' ? 'SELECT NULL entity_id WHERE 0' : `SELECT DISTINCT s.entity_id FROM entity_sources s JOIN target_levels l
       ON l.target_kind='collection' AND l.target_id=s.collection_id
-    WHERE (SELECT kind FROM query_args)='release' AND l.origin<>'none'),
-  entity_genres AS MATERIALIZED (
-    SELECT DISTINCT s.entity_id,g.genre_id FROM entity_sources s JOIN target_genres g
+    WHERE (SELECT kind FROM query_args)='release' AND l.origin<>'none'`}),
+  entity_genres AS ${extension.kind === 'recording' ? '' : 'MATERIALIZED '}(
+    SELECT s.entity_id,g.genre_id FROM entity_sources s CROSS JOIN target_genres g
       ON g.target_kind='source' AND g.target_id=s.source_id
     WHERE (SELECT kind FROM query_args)='recording'
       OR NOT EXISTS(SELECT 1 FROM entity_direct d WHERE d.entity_id=s.entity_id)
-    UNION SELECT s.entity_id,g.genre_id FROM entity_sources s JOIN target_genres g
+    ${extension.kind === 'recording' ? '' : `UNION SELECT s.entity_id,g.genre_id FROM entity_sources s CROSS JOIN target_genres g
       ON g.target_kind='collection' AND g.target_id=s.collection_id
-      WHERE (SELECT kind FROM query_args)='release'),
+      WHERE (SELECT kind FROM query_args)='release'`}),
   entity_counts AS MATERIALIZED (SELECT entity_id,count(${extension.kind ? '*' : 'DISTINCT source_id'}) source_count FROM entity_sources GROUP BY entity_id),
   selected_entities AS MATERIALIZED (
-    SELECT e.id,e.kind,e.title,e.artist,e.identity,s.source_count,
+    SELECT e.id,e.kind,e.title,e.artist,e.identity,s.source_count${extension.deferClassification ? '' : `,
       CASE WHEN e.kind='recording' AND e.id IN (SELECT entity_id FROM entity_genres) THEN 'direct'
         WHEN e.kind='release' AND e.id IN (SELECT entity_id FROM entity_direct) THEN 'direct'
-        WHEN e.id IN (SELECT entity_id FROM entity_genres) THEN 'from-tracks' ELSE 'none' END classification
-    FROM entity_counts s CROSS JOIN catalog_entities e ON e.id=s.entity_id CROSS JOIN query_args q
-    WHERE (q.search='' OR instr(lower(e.title),q.search)>0 OR instr(lower(e.artist),q.search)>0)
-      AND (q.genre_id IS NULL OR e.id IN (SELECT g.entity_id FROM entity_genres g JOIN genre_tree t ON t.id=g.genre_id))),
-  matched_members AS (SELECT s.* FROM entity_sources s JOIN selected_entities e ON e.id=s.entity_id)
+        WHEN e.id IN (SELECT entity_id FROM entity_genres) THEN 'from-tracks' ELSE 'none' END classification`}
+    FROM (
+      SELECT * FROM entity_counts s
+      ${extension.hasGenreFilter === false ? '' : 'WHERE (SELECT genre_id FROM query_args) IS NULL OR s.entity_id IN (SELECT g.entity_id FROM genre_tree t CROSS JOIN entity_genres g ON g.genre_id=t.id)'}
+    ) s CROSS JOIN catalog_entities e ON e.id=s.entity_id CROSS JOIN query_args q
+    WHERE (q.search='' OR instr(lower(e.title),q.search)>0 OR instr(lower(e.artist),q.search)>0)),
+  matched_members AS (
+    SELECT s.* FROM entity_sources s
+    ${extension.hasEntityFilter === false ? (extension.hasGenreFilter ? 'WHERE s.entity_id IN (SELECT g.entity_id FROM genre_tree t CROSS JOIN entity_genres g ON g.genre_id=t.id)' : '') : 'JOIN selected_entities e ON e.id=s.entity_id'})
   `
 }
 
@@ -161,6 +174,10 @@ const stale = () =>
 export class LibraryDatabaseGenreBrowse {
   private readonly owner: GenreBrowseOwner
   private collections = new Map<string, string>()
+  private collectionsRevision = -1
+  private readonly totalCache = new Map<string, number>()
+  private readonly browseCache = new Map<string, { items: GenreBrowseItem[]; total: number; providers: string[] }>()
+  private readonly facetCache = new Map<string, Omit<GenreFacetsPage, 'token'>>()
   private readClock = 0
   constructor(owner: GenreBrowseOwner) {
     this.owner = owner
@@ -219,8 +236,13 @@ export class LibraryDatabaseGenreBrowse {
         ))
     )
       throw stale()
-    this.collections = genreBrowseCollectionMap(this.owner.albumAliases())
     return token
+  }
+  private ensureCollections(contentRevision: number): void {
+    if (this.collectionsRevision !== contentRevision) {
+      this.collections = genreBrowseCollectionMap(this.owner.albumAliases())
+      this.collectionsRevision = contentRevision
+    }
   }
   private params(
     query: Omit<GenreBrowseQuery, 'kind'>,
@@ -244,13 +266,29 @@ export class LibraryDatabaseGenreBrowse {
     entityId?: string,
     facet?: ClassificationDimension
   ): { sql: string; params: SQLInputValue[] } {
-    const dimensions = classificationDimensionsCtes(kind, token.asOf, context, this.readClock,
-      [...new Set([...(query.filters ?? []).map(filter => filter.dimension), ...(facet ? [facet] : [])])])
+    if (kind !== 'recording' || entityId !== undefined) this.ensureCollections(token.contentRevision)
+    const requestedDimensions = [...new Set([...(query.filters ?? []).map(filter => filter.dimension), ...(facet ? [facet] : [])])]
+    const dimensions = classificationDimensionsCtes(kind, token.asOf, context, this.readClock, requestedDimensions)
     const filters = compileClassificationFilters(query.filters)
+    const recordingOnly = kind === 'recording' && !requestedDimensions.some(dimension =>
+      ['region', 'releaseYear', 'projectYear', 'albumType', 'management'].includes(dimension))
     return {
-      sql: genreBrowseCtes({ ctes: dimensions.sql, sourceFilter: filters.sql, kind, collectionDetails: entityId !== undefined }),
+      sql: genreBrowseCtes({
+        ctes: dimensions.sql,
+        sourceFilter: filters.sql,
+        kind,
+        collectionDetails: entityId !== undefined,
+        recordingOnly,
+        deferClassification: true,
+        hasGenreFilter: Boolean(query.genreId),
+        hasEntityFilter: Boolean(query.search?.trim())
+      }),
       params: [...this.params(query, kind, entityId), ...dimensions.params, ...filters.params]
     }
+  }
+  private revisionKey(token: GenreBrowseToken): string {
+    const changes = Number((this.sql.prepare('SELECT total_changes() c').get() as Row)?.c ?? 0)
+    return `${changes}:${token.genresRevision}:${token.catalogRevision}:${token.contentRevision}:${token.metadataRevision}:${token.contextKey}:${token.expiresAt ?? ''}:${token.expiresAt !== null ? `${token.asOf}:${this.readClock}` : ''}`
   }
   private entities(
     query: GenreBrowseQuery,
@@ -258,17 +296,55 @@ export class LibraryDatabaseGenreBrowse {
     context: GenreBrowseReadContext,
     entityId?: string
   ): { items: GenreBrowseItem[]; total: number; providers: string[] } {
+    const limit = query.limit ?? 50,
+      offset = query.offset ?? 0,
+      filterKey = JSON.stringify([
+        this.revisionKey(token),
+        query.kind,
+        query.genreId ?? null,
+        query.includeDescendants ? 1 : 0,
+        query.source ?? null,
+        query.search?.trim().toLowerCase() ?? '',
+        query.filters ?? [],
+        entityId ?? null
+      ]),
+      pageKey = `${filterKey}:${offset}:${limit}`,
+      cached = this.browseCache.get(pageKey)
+    if (cached) return cached
     const plan = this.plan(query, query.kind, token, context, entityId),
-      params = plan.params
+      params = plan.params,
+      knownTotal = this.totalCache.get(filterKey),
+      reverse = knownTotal !== undefined && offset > knownTotal / 2 && offset < knownTotal,
+      pageLimit = reverse ? Math.min(limit, Math.max(0, knownTotal - offset)) : limit,
+      pageOffset = reverse ? Math.max(0, knownTotal - offset - limit) : offset
     const rows = this.sql
       .prepare(
         `WITH RECURSIVE ${plan.sql}
-      , selected_page AS MATERIALIZED (
-        SELECT * FROM selected_entities ORDER BY title COLLATE NOCASE,id LIMIT ? OFFSET ?),
+      , selected_page_raw AS MATERIALIZED (
+        SELECT * FROM selected_entities ORDER BY title COLLATE NOCASE ${reverse ? 'DESC' : 'ASC'},id ${reverse ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?),
+      page_entity_sources AS MATERIALIZED (
+        SELECT s.* FROM entity_sources s CROSS JOIN selected_page_raw p ON p.id=s.entity_id),
+      page_entity_direct AS MATERIALIZED (
+        ${query.kind === 'recording' ? 'SELECT NULL entity_id WHERE 0' : `SELECT DISTINCT s.entity_id FROM page_entity_sources s JOIN target_levels l
+          ON l.target_kind='collection' AND l.target_id=s.collection_id
+        WHERE (SELECT kind FROM query_args)='release' AND l.origin<>'none'`}),
+      page_entity_genres AS MATERIALIZED (
+        SELECT DISTINCT s.entity_id,g.genre_id FROM page_entity_sources s CROSS JOIN target_genres g
+          ON g.target_kind='source' AND g.target_id=s.source_id
+        WHERE (SELECT kind FROM query_args)='recording'
+          OR NOT EXISTS(SELECT 1 FROM page_entity_direct d WHERE d.entity_id=s.entity_id)
+        ${query.kind === 'recording' ? '' : `UNION SELECT s.entity_id,g.genre_id FROM page_entity_sources s CROSS JOIN target_genres g
+          ON g.target_kind='collection' AND g.target_id=s.collection_id
+          WHERE (SELECT kind FROM query_args)='release'`}),
+      selected_page AS MATERIALIZED (
+        SELECT p.*,CASE WHEN p.kind='recording' AND p.id IN (SELECT entity_id FROM page_entity_genres) THEN 'direct'
+          WHEN p.kind='release' AND p.id IN (SELECT entity_id FROM page_entity_direct) THEN 'direct'
+          WHEN p.id IN (SELECT entity_id FROM page_entity_genres) THEN 'from-tracks' ELSE 'none' END classification
+        FROM selected_page_raw p),
       page_genre_rows AS (
         SELECT g.entity_id,n.id,n.name,n.name_en,count(*) OVER(PARTITION BY g.entity_id) genre_total,
           row_number() OVER(PARTITION BY g.entity_id ORDER BY n.name_en,n.id) ordinal
-        FROM entity_genres g JOIN selected_page p ON p.id=g.entity_id JOIN music_genres n ON n.id=g.genre_id),
+        FROM page_entity_genres g JOIN selected_page p ON p.id=g.entity_id JOIN music_genres n ON n.id=g.genre_id),
       page_genres AS (
         SELECT entity_id,max(genre_total) genre_total,
           json_group_array(json_object('id',id,'name',name,'nameEn',name_en)) genres
@@ -279,13 +355,18 @@ export class LibraryDatabaseGenreBrowse {
       ) t LEFT JOIN selected_page p ON 1 LEFT JOIN page_genres g ON g.entity_id=p.id
       ORDER BY p.title COLLATE NOCASE,p.id`
       )
-      .all(...params, query.limit ?? 50, query.offset ?? 0) as Row[]
+      .all(...params, pageLimit, pageOffset) as Row[]
     const total = Number(rows[0].total), page = rows.filter(row => row.id !== null)
     const providers = JSON.parse(String(rows[0].providers)) as string[]
-    return { total, providers, items: page.map((row) => this.entity(row, {
+    const result = { total, providers, items: page.map((row) => this.entity(row, {
       items: row.genres == null ? [] : JSON.parse(String(row.genres)) as GenreBrowseSummary['items'],
       total: Number(row.genre_total ?? 0), truncated: Number(row.genre_total ?? 0) > 32
     })) }
+    this.totalCache.set(filterKey, total)
+    while (this.totalCache.size > 32) this.totalCache.delete(this.totalCache.keys().next().value!)
+    this.browseCache.set(pageKey, result)
+    while (this.browseCache.size > 32) this.browseCache.delete(this.browseCache.keys().next().value!)
+    return result
   }
   private entity(row: Row, genres: GenreBrowseSummary): GenreBrowseItem {
     return {
@@ -382,7 +463,7 @@ export class LibraryDatabaseGenreBrowse {
         ranked AS (SELECT g.target_kind||':'||g.target_id target_id,n.id,n.name,n.name_en,
           count(*) OVER(PARTITION BY g.target_kind,g.target_id) total,
           row_number() OVER(PARTITION BY g.target_kind,g.target_id ORDER BY n.name_en,n.id) ordinal
-          FROM target_genres g JOIN page_targets p USING(target_kind,target_id) JOIN music_genres n ON n.id=g.genre_id)
+          FROM (SELECT DISTINCT g.target_kind,g.target_id,g.genre_id FROM target_genres g JOIN page_targets p USING(target_kind,target_id)) g JOIN music_genres n ON n.id=g.genre_id)
         SELECT * FROM ranked WHERE ordinal<=32 ORDER BY target_id,ordinal`,
         targetArgs
       )
@@ -427,7 +508,22 @@ export class LibraryDatabaseGenreBrowse {
     if (!validGenreBrowsePayload('genres.facets', query)) throw new Error('无效的分类分面参数')
     return this.read(() => {
       const token = this.token(query.token, context),
-        plan = this.plan(query, query.kind, token, context, undefined, query.dimension)
+        facetKey = JSON.stringify([
+          this.revisionKey(token),
+          query.kind,
+          query.dimension,
+          query.genreId ?? null,
+          query.includeDescendants ? 1 : 0,
+          query.source ?? null,
+          query.search?.trim().toLowerCase() ?? '',
+          query.filters ?? [],
+          query.facetSearch ?? '',
+          query.offset ?? 0,
+          query.limit ?? 50
+        ]),
+        cached = this.facetCache.get(facetKey)
+      if (cached) return { ...cached, token }
+      const plan = this.plan(query, query.kind, token, context, undefined, query.dimension)
       const facet = classificationFacetSql(query),
         params = [...plan.params, ...facet.params]
       const rows = this.sql
@@ -438,8 +534,7 @@ export class LibraryDatabaseGenreBrowse {
           ORDER BY value='unknown',value COLLATE NOCASE`
         )
         .all(...params, query.limit ?? 50, query.offset ?? 0)
-      return {
-        token,
+      const page = {
         dimension: query.dimension,
         ...classificationDimensionAvailability(query.dimension),
         offset: query.offset ?? 0,
@@ -450,6 +545,9 @@ export class LibraryDatabaseGenreBrowse {
           count: Number(row.count)
         }))
       }
+      this.facetCache.set(facetKey, page)
+      while (this.facetCache.size > 32) this.facetCache.delete(this.facetCache.keys().next().value!)
+      return { token, ...page }
     })
   }
 }

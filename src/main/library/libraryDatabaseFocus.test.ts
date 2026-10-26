@@ -3,6 +3,7 @@ import test from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { SQLInputValue } from 'node:sqlite'
 import { LibraryDatabase } from './libraryDatabase.ts'
 import { LibraryDatabaseFocus } from './libraryDatabaseFocus.ts'
 import { validMusicFocusPayload, validMusicFocusQuery, validMusicFocusToken, validMusicFocusPlaybackPageQuery, musicFocusQueryKey, type MusicFocusQuery, type MusicFocusNode } from '../../shared/musicFocus.ts'
@@ -210,6 +211,85 @@ test('Focus year filters use actual dates, and query/list/playback share stable 
   assert.equal(first.total, 2); assert.equal(second.total, 2); assert.equal(first.items[0].title, 'Song b'); assert.equal(second.items[0].title, 'Song a')
   const play = db.focusPlaybackPage({ query: q, token: first.token }); assert.equal(play.total, 2); assert.deepEqual(play.items.map(v => v.track.id), ['b', 'a'])
   assert.equal(db.focusQuery({ query: query({ year: { target: 'release', exists: false } }) }).total, 1)
+})
+
+test('Focus pages project years and preferred sources only after exact group paging, retaining every matched source', t => {
+  const { db, source } = fixture(t, [track('a', { title: 'A', releaseDate: '2000' }),
+    track('b', { title: 'B', releaseDate: '2010' }), track('c', { title: 'C' })])
+  stream(db, [track('ncm:42', { source: 'ncm', title: 'A', albumId: 'remote', releaseDate: '2020', filePath: '' })])
+  confirm(db, [String(source('a').recording_id), String(source('ncm:42').recording_id)], 'recording')
+  for (const [id, at] of [['a', '20'], ['ncm:42', '10']])
+    db.sql.prepare("UPDATE catalog_state SET value=? WHERE key='membership_added:'||?").run(at, String(source(id).id))
+  const prepare = db.sql.prepare.bind(db.sql)
+  let statement = ''
+  db.sql.prepare = (sql: string) => {
+    if (sql.includes('SELECT p.*,t.total FROM (SELECT count(*) total FROM focus_result_groups)')) statement = sql
+    return prepare(sql)
+  }
+  const first = db.focusQuery({ query: query(), limit: 1 })
+  assert.equal(first.total, 3)
+  assert.deepEqual(first.items.map(v => [v.title, v.sourceCount, v.provider, v.releaseYear]), [['A', 2, 'ncm', 2020]])
+  assert.match(statement, /focus_page_groups AS MATERIALIZED/)
+  assert.match(statement, /FROM focus_page_sources s\s+JOIN catalog_sources c/)
+  assert.match(statement, /choice FROM focus_page_sources/)
+  const next = db.focusQuery({ query: query(), token: first.token, offset: 1, limit: 1 })
+  assert.equal(next.total, 3)
+  assert.deepEqual(next.items.map(v => [v.title, v.sourceCount, v.releaseYear]), [['B', 1, 2010]])
+  assert.deepEqual(db.focusQuery({ query: query(), offset: 3, limit: 1 }).items, [])
+  const local = db.focusQuery({ query: query({ source: { provider: 'local' } }), limit: 1 })
+  assert.deepEqual(local.items.map(v => [v.sourceCount, v.provider, v.releaseYear]), [[1, 'local', 2000]])
+  const recent = db.focusQuery({ query: query({ year: { target: 'release', gte: 2015 } }) })
+  assert.deepEqual(recent.items.map(v => [v.sourceCount, v.provider, v.releaseYear]), [[1, 'ncm', 2020]])
+  assert.equal(db.focusFacets({ query: query(), facet: 'provider' }).items.find(v => v.value === 'local')!.count, 3)
+  const years = db.focusQuery({ query: query(undefined, { sort: [{ field: 'releaseYear', direction: 'desc' }] }), limit: 1, offset: 1 })
+  assert.deepEqual(years.items.map(v => [v.title, v.releaseYear]), [['B', 2010]])
+  assert.equal(years.total, 3)
+})
+
+test('display-only page years share fact authorization, native fallback and expiry with full year sorting', t => {
+  const { db, source } = fixture(t, [track('a', { title: 'A', releaseDate: '1999' })])
+  stream(db, [track('foo:42', { source: 'foo', title: 'A', albumId: 'other', releaseDate: '2000', filePath: '' })])
+  confirm(db, [String(source('a').recording_id), String(source('foo:42').recording_id)], 'recording')
+  confirm(db, [String(source('a').release_id), String(source('foo:42').release_id)], 'release', 'release-identity')
+  const payload = { value: '2022', sourceProvider: 'foo', providerContext: 'account-one', usage: { display: true, cache: true, crossSource: false } }
+  db.sql.prepare("INSERT INTO metadata_facts VALUES('release-identity','foo','releaseDate','und',?)").run(JSON.stringify(payload))
+  const context = { platformContexts: { foo: 'account-one' } }
+  const read = (q = query(), ctx = {}) => db.focusQuery({ query: q, limit: 1 }, ctx).items[0].releaseYear
+  assert.equal(read(), 2000)
+  assert.equal(read(query(), context), 2022)
+  assert.equal(read(query({ source: { provider: 'local' } }), context), 1999)
+  const sorted = query(undefined, { sort: [{ field: 'releaseYear', direction: 'desc' }] })
+  assert.equal(read(sorted, context), 2022)
+  db.sql.prepare("UPDATE metadata_facts SET payload=? WHERE target_id='release-identity'").run(JSON.stringify({ ...payload, usage: { ...payload.usage, expiresAt: 1 } }))
+  assert.equal(read(query(), context), 2000)
+  assert.equal(read(sorted, context), 2000)
+})
+
+test('Focus source matching stays narrow and provider facets do not resolve unused version preferences or member dates', t => {
+  const { db, source } = fixture(t, [track('a'), track('b')])
+  stream(db, [track('ncm:42', { source: 'ncm', albumId: 'remote', filePath: '' })])
+  confirm(db, [String(source('a').recording_id), String(source('ncm:42').recording_id)], 'recording')
+  const prepare = db.sql.prepare.bind(db.sql)
+  let captured: { sql: string; params: SQLInputValue[] } | undefined
+  db.sql.prepare = sql => {
+    const statement = prepare(sql)
+    if (sql.includes('focus_matched_sources AS MATERIALIZED')) {
+      const all = statement.all.bind(statement)
+      Object.defineProperty(statement, 'all', {
+        value: (...params: SQLInputValue[]) => { captured = { sql, params }; return all(...params) }
+      })
+    }
+    return statement
+  }
+  const page = db.focusQuery({ query: query(), limit: 1 })
+  const beforePageEnrichment = captured!.sql.slice(0, captured!.sql.indexOf('focus_page_sources AS MATERIALIZED'))
+  assert.doesNotMatch(beforePageEnrichment, /catalog_bindings|membership_added:/)
+  assert.match(beforePageEnrichment, /SELECT s.id,s.group_key,s.provider FROM focus_sources/)
+  assert.equal(page.total, 2)
+  const facets = db.focusFacets({ query: query(), token: page.token, facet: 'provider' })
+  assert.deepEqual(facets.items.map(v => [v.value, v.count]).sort(), [['local', 2], ['ncm', 1]])
+  const plan = prepare(`EXPLAIN QUERY PLAN ${captured!.sql}`).all(...captured!.params).map(row => String(row.detail))
+  assert.equal(plan.some(detail => /SEARCH (?:added|ts|tv)\b|MATERIALIZE focus_result_sources/.test(detail)), false)
 })
 
 test('Focus release playback respects disc and track sequence within the sorted release', t => {

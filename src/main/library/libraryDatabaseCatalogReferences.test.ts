@@ -126,8 +126,10 @@ test('collections expose independent same-name and collaboration entities, with 
     track('duet', { artist: 'Alice / Bob', artists: [{ name: 'Alice' }, { name: 'Bob' }] })
   ])
   drain(db)
-  const duet = db.queryCollections('artists').items[0]
-  assert.deepEqual(duet.catalog!.items.map((i) => i.title).sort(), ['Alice', 'Bob'])
+  const duet = db.queryCollections('artists')
+  assert.deepEqual(duet.items.map((i) => i.name), ['Alice', 'Bob'])
+  for (const item of duet.items)
+    assert.deepEqual(item.catalog!.items.map((i) => i.title), [item.name])
   assert.deepEqual(
     db
       .catalogQuery({ kind: 'artist', context: { ...context, id: 'Alice' } })
@@ -151,6 +153,36 @@ test('large track credits have a bounded preview with accurate totals and exact 
       .total,
     30
   )
+})
+
+test('artistName filters before paging without changing legacy collaborator references', t => {
+  const db = memory(t)
+  seed(db, [
+    ...Array.from({ length: 9 }, (_, i) => track(`alice-${i}`, { artist: 'Alice / Bob', artists: [{ name: 'Alice' }, { name: 'Bob' }] })),
+    track('other', { artist: 'Alice Cooper' }),
+    track('slash', { artist: 'AC/DC', artists: [{ name: 'AC/DC' }] }),
+    track('literal-slash', { artist: 'Band / Guest', artists: [{ name: 'Band / Guest' }] })
+  ])
+  drain(db)
+  const context = { type: 'collection' as const, collection: 'artists' as const, id: 'Alice' }
+  assert.equal(db.catalogQuery({ kind: 'artist', context }).total, 18)
+  const first = db.catalogQuery({ kind: 'artist', context, artistName: ' Alice ', limit: 6 })
+  assert.equal(first.total, 9)
+  assert.ok(first.items.every(item => item.title === 'Alice'))
+  const second = db.catalogQuery({ kind: 'artist', context, artistName: 'Alice', offset: 6, limit: 6, revision: first.revision })
+  assert.equal(second.items.length, 3)
+  assert.equal(new Set([...first.items, ...second.items].map(item => item.id)).size, 9)
+  for (const name of ['AC/DC', 'Band / Guest']) {
+    const page = db.catalogQuery({ kind: 'artist', artistName: name, context: { ...context, id: name } })
+    assert.equal(page.total, 1)
+    assert.equal(page.items[0].title, name)
+  }
+  assert.equal(db.catalogQuery({ kind: 'artist', artistName: 'AC', context: { ...context, id: 'AC/DC' } }).total, 0)
+  assert.equal(validCatalogPayload('catalog.query', { kind: 'artist', artistName: 'Alice' }), true)
+  for (const kind of ['recording', 'release', 'album_project'])
+    assert.equal(validCatalogPayload('catalog.query', { kind, artistName: 'Alice' }), false)
+  for (const artistName of ['', '  ', 1, 'bad\0name'])
+    assert.equal(validCatalogPayload('catalog.query', { kind: 'artist', artistName }), false)
 })
 
 test('playlist views keep repeated local and platform occurrences aligned, leaving unpublished entries null', (t) => {

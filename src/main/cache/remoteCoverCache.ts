@@ -9,6 +9,8 @@ export type RemoteCoverResizer = (
 ) => { bytes: Uint8Array; mime: string } | null
 
 export interface RemoteCoverCacheOptions {
+  /** Saved metadata artwork follows its licence, not the transient cover TTL. */
+  maxAgeMs?: number
   /**
    * Downscale a fetched cover before it is written. Returning null keeps the
    * original bytes (already small enough, undecodable, or an animated type).
@@ -52,7 +54,8 @@ export function createRemoteCoverCache(
       if (!path) return miss('disabled')
       try {
         const info = await stat(path)
-        if (Date.now() - info.mtimeMs > 7 * 24 * 60 * 60 * 1000) return miss('expired')
+        if (Date.now() - info.mtimeMs > (options.maxAgeMs ?? 7 * 24 * 60 * 60 * 1000))
+          return miss('expired')
         if (info.size > 25 * 1024 * 1024 + 256) return miss('oversized')
         const bytes = await readFile(path)
         const separator = bytes.indexOf(10)

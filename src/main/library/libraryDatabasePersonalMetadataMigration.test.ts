@@ -16,7 +16,7 @@ test('v27 metadata upgrade keeps old text/identities untouched and snapshots the
   old.sql.exec(LEGACY_PERSONAL_METADATA_SCHEMA_SQL + 'PRAGMA user_version=27;')
   old.close()
   const upgraded = new LibraryDatabase(path)
-  assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(upgraded.getMetadata(), metadata)
   const detail = upgraded.metadataDetail('artist', 'en')
   assert.equal(detail.revision, 4); assert.equal(detail.introduction?.value, 'Original text')

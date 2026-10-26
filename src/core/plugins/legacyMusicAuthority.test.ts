@@ -317,7 +317,7 @@ test('v18 migration uses a consistent backup without damaging old facts', async 
   old.sql.exec(`${LEGACY_MUSIC_METADATA_SQL} PRAGMA user_version=18;`)
   old.close()
   const upgraded = new LibraryDatabase(path)
-  assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   upgraded.close()
   const backup = (await readdir(root)).find((name) => name.includes('.v18-backup-'))!
   const snapshot = new DatabaseSync(join(root, backup), { readOnly: true })

@@ -5,6 +5,7 @@ import type {
   IdentificationInput,
   IdentificationProposal,
   IdentificationRecall,
+  IdentificationArtistRecording,
   IdentificationEvidence
 } from '../../shared/musicIdentification.ts'
 import {
@@ -13,9 +14,16 @@ import {
 import { metadataPolicyView } from './entityMetadataProvider.ts'
 import { MetadataHttpError, publicMetadataHttp, retryAfter } from './metadataHttp.ts'
 import { verifyMusicBrainzAlbums } from './musicIdentificationAlbum.ts'
+import { verifyMusicBrainzAlbumSubset } from './musicIdentificationAlbumSubset.ts'
+import { localAlbumLayout } from '../../shared/musicAlbumValidation.ts'
 import { verifyPlatformAlbums } from './musicIdentificationPlatformAlbum.ts'
 import { IdentificationResponseCache } from './identificationResponseCache.ts'
 import { validPlatformAlbumIdentity } from '../../shared/musicPlatformAlbum.ts'
+import { artistRecordingSources, verifyArtistRecordings } from '../../shared/musicArtistRecordingVerification.ts'
+import { ncmFileReferences } from '../../shared/ncmFileIdentity.ts'
+import { platformRecordingSources, platformRecordingReferences, validPlatformRecordingPage,
+  platformRecordingShapeMatches, matchedPlatformRecordings, validPlatformArtistIdentity,
+  MAX_RECORDING_IDENTITY_RESULTS, type PlatformRecordingPage } from '../../shared/musicPlatformRecording.ts'
 
 export interface IdentificationProvider {
   readonly id: string
@@ -94,7 +102,7 @@ const luceneLiteral = (v: string) => `"${v.replace(/([+\-&|!(){}[\]^"~*?:\\/])/g
 /** Layered, bounded recall. Only verified structured proofs can authorize adoption. */
 export class MusicBrainzIdentificationProvider implements IdentificationProvider {
   readonly id = 'musicbrainz'
-  readonly matcherVersion = 'mb-verify-v3-duration-2s'
+  readonly matcherVersion = 'mb-verify-v4-local-corroboration'
   private readonly policy: () => EntityMetadataPolicy
   private readonly fetcher: typeof publicMetadataHttp.fetch
   private readonly now: () => number
@@ -125,41 +133,67 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
     const reason = this.blockedReason()
     if (reason) throw new MetadataHttpError(reason, 403)
     const context = this.context()
-    const response = await this.responses.read({
-      provider: this.id, context, method: 'GET', parameters: [url.href, 'application/json']
-    }, signal, async sharedSignal => {
-      const response = await this.fetcher(url, {
-        signal: sharedSignal,
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': `TwilightEcho/1.3.1 (${this.policy().contact})`
+    const response = await this.responses.read(
+      {
+        provider: this.id,
+        context,
+        method: 'GET',
+        parameters: [url.href, 'application/json']
+      },
+      signal,
+      async (sharedSignal) => {
+        const response = await this.fetcher(url, {
+          signal: sharedSignal,
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': `TwilightEcho/1.3.1 (${this.policy().contact})`
+          }
+        })
+        if (response.status === 404)
+          return {
+            value: null,
+            retention:
+              url.searchParams.has('query') || url.searchParams.has('release-group')
+                ? false
+                : 'negative'
+          }
+        if (!response.ok)
+          throw new MetadataHttpError(
+            `metadata_http_${response.status}`,
+            response.status,
+            retryAfter(response.headers.get('retry-after'), this.now())
+          )
+        const data = obj(await response.json())
+        if (data.error) throw new MetadataHttpError('musicbrainz_api_error', 400)
+        const list = url.pathname.endsWith('/artist')
+          ? 'artists'
+          : url.pathname.endsWith('/recording')
+            ? 'recordings'
+            : url.pathname.endsWith('/release-group')
+              ? 'release-groups'
+              : 'releases'
+        const rows = data[list]
+        const count = data[url.searchParams.has('query') ? 'count' : 'release-count']
+        const valid =
+          url.searchParams.has('query') || url.searchParams.has('release-group')
+            ? Array.isArray(rows) &&
+              Number.isSafeInteger(count) &&
+              Number(count) >= rows.length &&
+              rows.every((row) => validMusicBrainzArtistId(str(obj(row).id)))
+            : validMusicBrainzArtistId(str(data.id))
+        return {
+          value: data,
+          retention: !valid
+            ? false
+            : Array.isArray(rows) && !rows.length && count === 0
+              ? 'negative'
+              : 'positive'
         }
-      })
-      if (response.status === 404) return {
-        value: null,
-        retention: url.searchParams.has('query') || url.searchParams.has('release-group') ? false : 'negative'
       }
-      if (!response.ok)
-        throw new MetadataHttpError(`metadata_http_${response.status}`, response.status,
-          retryAfter(response.headers.get('retry-after'), this.now()))
-      const data = obj(await response.json())
-      if (data.error) throw new MetadataHttpError('musicbrainz_api_error', 400)
-      const list = url.pathname.endsWith('/artist') ? 'artists'
-        : url.pathname.endsWith('/recording') ? 'recordings'
-          : url.pathname.endsWith('/release-group') ? 'release-groups' : 'releases'
-      const rows = data[list]
-      const count = data[url.searchParams.has('query') ? 'count' : 'release-count']
-      const valid = url.searchParams.has('query') || url.searchParams.has('release-group')
-        ? Array.isArray(rows) && Number.isSafeInteger(count) && Number(count) >= rows.length &&
-          rows.every(row => validMusicBrainzArtistId(str(obj(row).id)))
-        : validMusicBrainzArtistId(str(data.id))
-      return {
-        value: data,
-        retention: !valid ? false : Array.isArray(rows) && !rows.length && count === 0 ? 'negative' : 'positive'
-      }
-    })
+    )
     signal.throwIfAborted()
-    if (context !== this.context()) throw new MetadataHttpError('provider_configuration_changed', 403)
+    if (context !== this.context())
+      throw new MetadataHttpError('provider_configuration_changed', 403)
     return response
   }
   private ids(input: IdentificationInput) {
@@ -206,11 +240,16 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
     )
     e.incomplete ||= incomplete
     const rawCredit = array(data['artist-credit'])
-    if (str(kind === 'artist' ? data.name : data.title, 2049).length > 2048 ||
-      (kind !== 'artist' && (!rawCredit.length || rawCredit.length > 64 || rawCredit.some(c => {
-        const name = str(obj(c).name || obj(obj(c).artist).name, 2049)
-        return !name || name.length > 2048
-      })))) {
+    if (
+      str(kind === 'artist' ? data.name : data.title, 2049).length > 2048 ||
+      (kind !== 'artist' &&
+        (!rawCredit.length ||
+          rawCredit.length > 64 ||
+          rawCredit.some((c) => {
+            const name = str(obj(c).name || obj(obj(c).artist).name, 2049)
+            return !name || name.length > 2048
+          })))
+    ) {
       e.incomplete = true
       e.missing.push('complete_remote_metadata')
     }
@@ -224,7 +263,7 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
       e.matches.push('artist_alias')
     }
     if (kind === 'artist' && origin === 'explicit_id') {
-      const names = [name, ...array(data.aliases).map(a => str(obj(a).name))].map(norm)
+      const names = [name, ...array(data.aliases).map((a) => str(obj(a).name))].map(norm)
       for (const s of input.sources ?? []) {
         if (explicitMusicBrainzIds({ ...input, sources: [s] }).get(id) !== true) continue
         const rawName = s.tags.artists?.value[0] ?? s.tags.artist?.value
@@ -241,30 +280,53 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
       for (const s of input.sources ?? []) {
         if (s.tags.title) compare(e, 'raw_title', s.tags.title.value, name)
         const names = s.tags.artists?.value ?? (s.tags.artist ? [s.tags.artist.value] : [])
-        if (names.length && (names.length !== credit.length || names.some((n, i) => norm(n) !== norm(credit[i] ?? ''))))
+        if (
+          names.length &&
+          (names.length !== credit.length ||
+            names.some((n, i) => norm(n) !== norm(credit[i] ?? '')))
+        )
           e.conflicts.push('raw_artist_credits')
-        const isrcs = array(data.isrcs).map(v => str(v).toUpperCase())
-        if (s.tags.isrcs?.length && isrcs.length &&
-          !s.tags.isrcs.every(v => isrcs.includes(v.toUpperCase()))) e.conflicts.push('isrc')
+        const isrcs = array(data.isrcs).map((v) => str(v).toUpperCase())
+        if (
+          s.tags.isrcs?.length &&
+          isrcs.length &&
+          !s.tags.isrcs.every((v) => isrcs.includes(v.toUpperCase()))
+        )
+          e.conflicts.push('isrc')
       }
     }
     if (kind === 'release') {
       for (const s of input.sources ?? []) {
         const projectId = str(obj(data['release-group']).id).toLowerCase()
-        if (s.tags.musicbrainz?.releaseGroupId && projectId &&
-          s.tags.musicbrainz.releaseGroupId.toLowerCase() !== projectId) e.conflicts.push('release_group_mbid')
+        if (
+          s.tags.musicbrainz?.releaseGroupId &&
+          projectId &&
+          s.tags.musicbrainz.releaseGroupId.toLowerCase() !== projectId
+        )
+          e.conflicts.push('release_group_mbid')
         const barcode = str(data.barcode)
         if (s.tags.barcode && barcode && s.tags.barcode !== barcode) e.conflicts.push('barcode')
-        const catalogs = array(data['label-info']).map(l => str(obj(l)['catalog-number'])).filter(Boolean)
-        if (s.tags.catalogNumbers?.length && catalogs.length &&
-          !s.tags.catalogNumbers.every(n => catalogs.some(c => norm(c) === norm(n)))) e.conflicts.push('catalog_number')
+        const catalogs = array(data['label-info'])
+          .map((l) => str(obj(l)['catalog-number']))
+          .filter(Boolean)
+        if (
+          s.tags.catalogNumbers?.length &&
+          catalogs.length &&
+          !s.tags.catalogNumbers.every((n) => catalogs.some((c) => norm(c) === norm(n)))
+        )
+          e.conflicts.push('catalog_number')
       }
     }
     if (kind === 'release' || kind === 'album_project') {
       for (const s of input.sources ?? []) {
         if (s.tags.album) compare(e, 'raw_album_title', s.tags.album.value, name)
-        const names = s.tags.albumArtists?.value ?? (s.tags.albumArtist ? [s.tags.albumArtist.value] : [])
-        if (names.length && (names.length !== credit.length || names.some((n, i) => norm(n) !== norm(credit[i] ?? ''))))
+        const names =
+          s.tags.albumArtists?.value ?? (s.tags.albumArtist ? [s.tags.albumArtist.value] : [])
+        if (
+          names.length &&
+          (names.length !== credit.length ||
+            names.some((n, i) => norm(n) !== norm(credit[i] ?? '')))
+        )
           e.conflicts.push('raw_album_artists')
       }
     }
@@ -281,10 +343,18 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
       if (kind === 'album_project') e.missing.push('complete_track_validation')
     }
     const reference = { provider: 'musicbrainz', kind, idType: 'mbid', value: id }
-    if (origin === 'explicit_id' && explicitIds.size === 1 && explicitIds.get(id) &&
-      !e.incomplete && !e.conflicts.length) e.verification = {
-      method: 'typed_id', reference, sourceIds: identityProofSources(input, reference)
-    }
+    if (
+      origin === 'explicit_id' &&
+      explicitIds.size === 1 &&
+      explicitIds.get(id) &&
+      !e.incomplete &&
+      !e.conflicts.length
+    )
+      e.verification = {
+        method: 'typed_id',
+        reference,
+        sourceIds: identityProofSources(input, reference)
+      }
     return {
       provider: this.id,
       name,
@@ -304,6 +374,85 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
       matcherVersion: this.matcherVersion
     }
   }
+  private async verifyArtist(
+    input: IdentificationInput,
+    proposals: IdentificationProposal[],
+    signal: AbortSignal
+  ) {
+    const sources = artistRecordingSources(input)
+    const samples: Array<{ sourceId: string; recordings: IdentificationArtistRecording[] }> = []
+    const receipts: Array<{ url: string; retrievedAt: number }> = []
+    if (
+      !sources.length ||
+      !proposals.some((p) => !p.evidence.conflicts.length && !p.evidence.incomplete)
+    )
+      return false
+    for (const source of sources) {
+      const url = new URL('https://musicbrainz.org/ws/2/recording')
+      const artistName = source.artists[source.artistIndexes[0]].name
+      const album = source.tags.album
+      const albumQuery =
+        album && ['audio_tag', 'cue', 'manual'].includes(album.origin) && usable(album.value)
+          ? ` AND release:${luceneLiteral(album.value)}`
+          : ''
+      url.search = new URLSearchParams({
+        query: `recording:${luceneLiteral(source.tags.title!.value)} AND artist:${luceneLiteral(artistName)}${albumQuery}`,
+        fmt: 'json',
+        limit: String(LIMIT),
+        offset: '0'
+      }).toString()
+      const { value: data, retrievedAt } = await this.json(url, signal)
+      receipts.push({ url: url.href, retrievedAt })
+      const rows = data?.recordings
+      if (!Array.isArray(rows) || data?.count !== rows.length || rows.length > LIMIT) return true
+      const recordings = rows.map((raw) => {
+        const row = obj(raw)
+        return {
+          id: str(row.id).toLowerCase(),
+          title: str(row.title),
+          duration: typeof row.length === 'number' ? row.length / 1000 : 0,
+          artists: array(row['artist-credit']).map((rawCredit) => {
+            const credit = obj(rawCredit),
+              artist = obj(credit.artist)
+            return { id: str(artist.id).toLowerCase(), name: str(credit.name) || str(artist.name) }
+          }),
+          albums: array(row.releases)
+            .map((release) => str(obj(release).title))
+            .filter(Boolean)
+        }
+      })
+      samples.push({ sourceId: source.sourceId, recordings })
+    }
+    for (const p of proposals) {
+      const proof = {
+        method: 'artist_recordings' as const,
+        reference: p.references[0],
+        sourceIds: sources.map((s) => s.sourceId),
+        samples,
+        toleranceSeconds: 2 as const
+      }
+      if (
+        p.evidence.conflicts.length ||
+        p.evidence.incomplete ||
+        !verifyArtistRecordings(input, proof)
+      )
+        continue
+      p.evidence.origin = 'cross_reference'
+      p.evidence.verification = proof
+      p.evidence.matches.push(
+        'recording_titles',
+        'raw_duration_2s',
+        'all_track_artists',
+        sources.length === 1 ? 'recording_album' : 'distinct_recordings'
+      )
+      p.evidence.missing = p.evidence.missing.filter((m) => m !== 'verified_identity')
+      p.evidence.provenance = JSON.stringify({
+        recall: JSON.parse(p.evidence.provenance),
+        artistRecordings: receipts
+      })
+    }
+    return false
+  }
   async recall(input: IdentificationInput, signal: AbortSignal): Promise<IdentificationRecall> {
     const ids = this.ids(input),
       proposals: IdentificationProposal[] = [],
@@ -321,7 +470,8 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
         }
         const url = new URL(`https://musicbrainz.org/ws/2/${MB_KIND[input.kind]}/${id}`)
         url.search = new URLSearchParams({ fmt: 'json', inc: INC[input.kind] }).toString()
-        const response = await this.json(url, signal), data = response.value
+        const response = await this.json(url, signal),
+          data = response.value
         if (!data) {
           reasons.push('explicit_id_not_found')
           continue
@@ -346,7 +496,8 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
         limit: String(LIMIT),
         offset: '0'
       }).toString()
-      const response = await this.json(url, signal), data = response.value
+      const response = await this.json(url, signal),
+        data = response.value
       const rows = data?.[MB_LIST[input.kind]]
       if (!Array.isArray(rows))
         throw new MetadataHttpError('invalid_musicbrainz_search_response', 400)
@@ -355,7 +506,15 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
         Number(data?.count) !== rows.length ||
         rows.length > LIMIT
       for (const row of rows.slice(0, LIMIT)) {
-        const proposal = this.proposal(input, row, 'search', url, incomplete, ids, response.retrievedAt)
+        const proposal = this.proposal(
+          input,
+          row,
+          'search',
+          url,
+          incomplete,
+          ids,
+          response.retrievedAt
+        )
         if (proposal) proposals.push(proposal)
         else {
           reasons.push('invalid_search_item')
@@ -363,13 +522,33 @@ export class MusicBrainzIdentificationProvider implements IdentificationProvider
         }
       }
     } else reasons.push('insufficient_metadata')
-    if (!ids.size && ['album_project', 'release'].includes(input.kind) && proposals.length) {
-      const validation = await verifyMusicBrainzAlbums(input, proposals,
-        (url, sig) => this.json(url, sig), signal)
-      incomplete ||= validation.incomplete
-      reasons.push(...validation.reasons)
+    if (!ids.size && input.kind === 'artist' && proposals.length && !incomplete) {
+      if (await this.verifyArtist(input, proposals, signal)) {
+        incomplete = true
+        reasons.push('incomplete_artist_recordings')
+      }
     }
-    incomplete ||= proposals.some(p => p.evidence.incomplete)
+    if (!ids.size && ['album_project', 'release'].includes(input.kind) && proposals.length) {
+      const layout = localAlbumLayout(input)
+      if (input.kind === 'album_project' && layout.missing.length && !layout.conflicts.length) {
+        await verifyMusicBrainzAlbumSubset(
+          input,
+          proposals,
+          (url, sig) => this.json(url, sig),
+          signal
+        )
+      } else {
+        const validation = await verifyMusicBrainzAlbums(
+          input,
+          proposals,
+          (url, sig) => this.json(url, sig),
+          signal
+        )
+        incomplete ||= validation.incomplete
+        reasons.push(...validation.reasons)
+      }
+    }
+    incomplete ||= proposals.some((p) => p.evidence.incomplete)
     signal.throwIfAborted()
     if (incomplete) for (const p of proposals) p.evidence.incomplete = true
     return { proposals, incomplete, reasons: [...new Set(reasons)] }
@@ -390,6 +569,8 @@ export interface PlatformIdentificationOptions {
   responses?: IdentificationResponseCache
   /** Optional, independent of fetchAlbumTracks and absent on older plugins. */
   albumIdentity?(id: string, albumId: string, signal: AbortSignal): Promise<unknown>
+  recordingSearch?(id: string, query: string, signal: AbortSignal, offset?: number): Promise<unknown>
+  artistIdentity?(id: string, artistId: string, signal: AbortSignal): Promise<unknown>
   search(
     id: string,
     method: SearchMethod,
@@ -402,13 +583,14 @@ export interface PlatformIdentificationOptions {
 /** Native IDs prove only their namespace. A platform album is not an MB release-group or pressing. */
 export class PlatformIdentificationProvider implements IdentificationProvider {
   readonly id: string
-  readonly matcherVersion = 'platform-verify-v4-duration-2s'
+  readonly matcherVersion: string
   private readonly providerId: string
   private readonly options: PlatformIdentificationOptions
   private readonly responses: IdentificationResponseCache
   constructor(providerId: string, options: PlatformIdentificationOptions) {
     this.providerId = providerId
     this.id = `platform.${providerId}`
+    this.matcherVersion = providerId === 'ncm' ? 'platform-verify-v8-artist-credits' : 'platform-verify-v7-public-recordings'
     this.options = options
     this.responses = options.responses ?? new IdentificationResponseCache()
   }
@@ -420,6 +602,7 @@ export class PlatformIdentificationProvider implements IdentificationProvider {
     const methods = this.platform()?.supportedMethods ?? []
     return (
       methods.includes(searchMethod(kind)) ||
+      methods.includes('searchRecordingIdentities') ||
       (kind === 'artist' && methods.includes('fetchArtistIntro')) ||
       (kind === 'release' && (methods.includes('fetchAlbumTracks') || methods.includes('fetchAlbumIdentity')))
     )
@@ -513,10 +696,64 @@ export class PlatformIdentificationProvider implements IdentificationProvider {
       evidence: e
     }
   }
+  private async recordingPage(query: string, context: string, signal: AbortSignal): Promise<PlatformRecordingPage> {
+    const page: PlatformRecordingPage = { items: [], total: null }
+    for (let offset = 0; offset < MAX_RECORDING_IDENTITY_RESULTS; offset += 10) {
+      const response = await this.responses.read({ provider: this.id, context, method: 'searchRecordingIdentities', parameters: [query, 10, offset] }, signal, async sharedSignal => {
+        const value = await this.options.recordingSearch!(this.providerId, query, sharedSignal, offset)
+        return { value, retention: validPlatformRecordingPage(value) ? value.total === 0 ? 'negative' : 'positive' : false }
+      })
+      signal.throwIfAborted()
+      if (context !== this.context()) throw new MetadataHttpError('provider_configuration_changed', 403)
+      const value = response.value
+      if (!validPlatformRecordingPage(value) || value.items.length > 10) throw new MetadataHttpError('invalid_provider_recording_identity', 400)
+      if (offset && page.total !== value.total) { page.total = null; break }
+      page.total = value.total
+      page.items.push(...value.items)
+      if (page.total === null || page.total > MAX_RECORDING_IDENTITY_RESULTS || page.items.length >= page.total || value.items.length < 10) break
+    }
+    // A changing index, duplicate row or bounded/truncated search cannot prove uniqueness.
+    return validPlatformRecordingPage(page) ? page : { items: [], total: null }
+  }
+  private async recordingAliases(input: IdentificationInput, sourceId: string, page: PlatformRecordingPage,
+    context: string, signal: AbortSignal, lookups: Set<string>) {
+    if (!this.options.artistIdentity || !this.platform()!.supportedMethods.includes('fetchArtistIdentity') ||
+      page.total === null || page.total > page.items.length) return
+    for (const row of page.items) {
+      if (!platformRecordingShapeMatches(input, sourceId, row) ||
+        matchedPlatformRecordings(input, sourceId, { items: [row], total: 1 }).length) continue
+      for (const artist of row.artists) {
+        if (!artist.id) continue
+        lookups.add(artist.id)
+        if (lookups.size > 16) { page.total = null; return }
+        const response = await this.responses.read({ provider: this.id, context, method: 'fetchArtistIdentity', parameters: [artist.id] }, signal, async sharedSignal => {
+          const value = await this.options.artistIdentity!(this.providerId, artist.id!, sharedSignal)
+          return { value, retention: validPlatformArtistIdentity(value) ? 'positive' : false }
+        })
+        signal.throwIfAborted()
+        if (context !== this.context()) throw new MetadataHttpError('provider_configuration_changed', 403)
+        const identity = response.value
+        if (!validPlatformArtistIdentity(identity) || identity.id !== artist.id)
+          throw new MetadataHttpError('invalid_provider_artist_identity', 400)
+        artist.aliases = [...new Set([...(artist.aliases ?? []), identity.name, ...identity.aliases])].filter(name => name !== artist.name).slice(0, 32)
+      }
+    }
+  }
   async recall(input: IdentificationInput, signal: AbortSignal): Promise<IdentificationRecall> {
     signal.throwIfAborted()
     const reason = this.blockedReason(input.kind)
     if (reason) throw new MetadataHttpError(reason, 403)
+    const fileIds = this.providerId === 'ncm' ? ncmFileReferences(input) : new Map<string, string[]>()
+    if (fileIds.size) return {
+      proposals: [...fileIds].map(([value, sourceIds]) => {
+        const reference = { provider: 'ncm', kind: input.kind, idType: 'native', value }
+        const e = evidence(input, 'explicit_id', JSON.stringify({ provider: 'ncm', origin: 'audio_file_tag', value }))
+        e.matches.push('file_native_id', 'raw_title', 'raw_duration_2s', 'artist_credit')
+        if (fileIds.size !== 1) e.conflicts.push('multiple_native_ids')
+        else e.verification = { method: 'file_native', reference, sourceIds }
+        return this.proposal(input, value, input.name, input.artist, e)
+      }), incomplete: false, reasons: []
+    }
     const native = this.native(input)
     if (native.length)
       return {
@@ -524,6 +761,26 @@ export class PlatformIdentificationProvider implements IdentificationProvider {
         incomplete: native.some((p) => p.evidence.incomplete),
         reasons: []
       }
+    if (this.providerId === 'ncm' && this.options.recordingSearch && this.platform()!.supportedMethods.includes('searchRecordingIdentities')) {
+      const context = this.context(), samples: Array<{ sourceId: string; page: PlatformRecordingPage }> = [], lookups = new Set<string>()
+      for (const source of platformRecordingSources(input)) {
+        const query = [source.tags.title!.value, source.tags.artists?.value.join(' ') ?? source.tags.artist!.value].join(' ')
+        let page = await this.recordingPage(query, context, signal)
+        if (page.total !== null && page.total > MAX_RECORDING_IDENTITY_RESULTS &&
+          source.tags.album && ['audio_tag', 'cue', 'manual'].includes(source.tags.album.origin))
+          page = await this.recordingPage(`${query} ${source.tags.album.value.replace(/\s+-\s+(single|ep)$/i, '')}`, context, signal)
+        await this.recordingAliases(input, source.sourceId, page, context, signal, lookups)
+        samples.push({ sourceId: source.sourceId, page })
+      }
+      const ids = platformRecordingReferences(input, samples)
+      if (ids.length) return { proposals: ids.map(value => {
+        const e = evidence(input, 'search', JSON.stringify({ provider: 'ncm', method: 'searchRecordingIdentities', samples: samples.map(s => s.sourceId) }))
+        e.matches.push('raw_title', 'raw_duration_2s', 'all_track_artists', 'recording_album')
+        if (ids.length !== 1) e.conflicts.push('multiple_native_ids')
+        else e.verification = { method: 'platform_recordings', reference: { provider: 'ncm', kind: input.kind, idType: 'native', value }, sourceIds: samples.map(s => s.sourceId), samples }
+        return this.proposal(input, value, input.name, input.artist, e)
+      }), incomplete: false, reasons: [] }
+    }
     if (!usable(input.name))
       return {
         proposals: [],

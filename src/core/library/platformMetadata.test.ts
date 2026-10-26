@@ -22,7 +22,7 @@ import {
   providerSupportsMethod,
   isTwilightMediaProviderMethod
 } from '../plugins/providerRouting.ts'
-import { PlatformMetadataProvider, platformMetadataApprovals } from './platformMetadataProvider.ts'
+import { PlatformMetadataProvider, platformMetadataApprovals, ncmLocalFallbackApprovals } from './platformMetadataProvider.ts'
 import { CoreEntityMetadataService } from './entityMetadataService.ts'
 import { MusicBrainzWikiProvider } from './entityMetadataProvider.ts'
 
@@ -56,12 +56,13 @@ function response(
     }
   }
 }
-function fixture() {
+function fixture(images = false) {
   const state = {
     configuration: 'account-a',
     enabled: true,
     methods: ['fetchArtistMetadata', 'fetchAlbumMetadata'],
     usage: structuredClone(usage) as MetadataUsage | null,
+    artworkUsage: structuredClone(usage) as MetadataUsage | null,
     raw: response() as unknown,
     calls: [] as unknown[][]
   }
@@ -75,6 +76,7 @@ function fixture() {
       }
     ],
     usage: () => state.usage,
+    ...(images ? { artworkUsage: () => state.artworkUsage } : {}),
     now: () => 2000,
     call: async (...args) => {
       state.calls.push(args)
@@ -176,11 +178,12 @@ async function until(check: () => boolean | Promise<boolean>) {
   }
   throw new Error('Native metadata condition timed out')
 }
-function service(db: LibraryDatabase, provider: PlatformMetadataProvider) {
+function service(db: LibraryDatabase, provider: PlatformMetadataProvider, artwork?: import('./entityMetadataService.ts').EntityMetadataOptions['artwork']) {
   return new CoreEntityMetadataService({
     database: asyncDb(db),
     provider: new MusicBrainzWikiProvider(() => policy),
     enrichmentProviders: () => [provider],
+    artwork,
     policy: () => policy,
     now: () => 2000,
     changed() {},
@@ -402,7 +405,7 @@ test('restricted text uses the actual platform source, not a caller-selected con
   assert.equal((await core.detail(online, 'zh-Hans')).introduction, null)
 })
 
-test('language comes before provider and local same-language defaults to Wikipedia while platform favors its own text', (t) => {
+test('local NCM is fallback across languages; platform pages and explicit preferences retain their own source priority', (t) => {
   const db = new LibraryDatabase(':memory:')
   t.after(() => db.close())
   const { local, online } = seed(db),
@@ -452,11 +455,76 @@ test('language comes before provider and local same-language defaults to Wikiped
     2001
   )
   const opts = { platformContexts: { ncm: provider.context() }, now: 2001 }
-  assert.equal(db.metadataDetail(local, 'zh-Hans', opts).introduction?.value, '平台简体')
-  assert.equal(db.metadataDetail(local, 'zh-Hans', opts).introduction?.language, 'zh-CN')
+  assert.equal(db.metadataDetail(local, 'zh-Hans', opts).introduction?.value, '繁体百科')
+  assert.equal(db.metadataDetail(local, 'zh-Hans', opts).introduction?.language, 'zh-Hant')
   assert.equal(db.metadataDetail(local, 'zh-Hant', opts).introduction?.value, '繁体百科')
   assert.equal(db.metadataDetail(online, 'zh-Hant', opts).introduction?.value, '平台繁体')
   assert.equal(db.metadataDetail(local, 'en', opts).introduction?.value, 'English')
+  db.metadataSourcePreference({ entityId: local, revision: db.metadataDetail(local, 'zh-Hans', opts).revision,
+    language: 'zh-Hans', provider: 'platform.ncm' }, 2002)
+  assert.equal(db.metadataDetail(local, 'zh-Hans', opts).introduction?.value, '平台简体')
+})
+
+test('native portraits use independent approvals, durable queue and private Core grants; clears and account revocation still win', async t => {
+  const db = new LibraryDatabase(':memory:')
+  const { local } = seed(db), { state, provider } = fixture(true)
+  const raw = response() as Extract<PlatformMetadataResult, { status: 'ok' }>
+  raw.metadata.artwork = [{ ...raw.metadata.texts[0], resource: 'https://p4.music.126.net/avatar/42.jpg' }].map(({field: _field, value: _value, language: _language, ...a}) => a)
+  state.raw = raw
+  const projected: string[] = []
+  const core = service(db, provider, async image => { projected.push(image.resource); return 'twilight-media://image/native-portrait' })
+  t.after(async () => { await core.shutdown(); db.close() })
+  state.artworkUsage = null
+  assert.equal(provider.supportsArtwork('artist'), false)
+  assert.equal((await provider.enrich({ kind: 'artist', externalId: '42', language: 'en' }, controller().signal)).artwork, undefined)
+  state.artworkUsage = { ...usage, expiresAt: 1999 }
+  assert.equal(provider.supportsArtwork('artist'), false)
+  state.artworkUsage = { ...usage }
+  state.usage = null // Image-only deployments must not inherit or require text rights.
+  const job = await core.enrich({ entityId: local, provider: 'platform.ncm', language: 'en', batchId: 'portrait' })
+  core.activate()
+  await until(() => db.metadataJobs({ jobId: job.id }).items[0].state === 'completed')
+  let detail = await core.detail(local, 'en')
+  assert.equal(detail.introduction, null)
+  assert.equal(detail.artwork?.[0].handle, 'twilight-media://image/native-portrait')
+  assert.equal(detail.artwork?.[0].usage.export, false)
+  assert.equal(detail.artwork?.[0].attribution.provider, 'platform.ncm')
+  assert.equal(detail.artwork?.[0].targetRef.provider, 'ncm')
+  assert.ok(!JSON.stringify(detail).includes('p4.music.126.net'))
+  assert.deepEqual(projected, ['https://p4.music.126.net/avatar/42.jpg'])
+  await core.artworkOverride({ entityId: local, revision: detail.revision, language: 'en', mode: 'clear' })
+  detail = await core.detail(local, 'en')
+  assert.equal(detail.artworkOverride?.mode, 'clear')
+  assert.equal(detail.artwork, undefined)
+  await core.artworkOverride({ entityId: local, revision: detail.revision, language: 'en', mode: 'reset' })
+  assert.equal((await core.detail(local, 'en')).artwork?.length, 1)
+  state.configuration = 'account-b'
+  assert.equal((await core.detail(local, 'en')).artwork, undefined)
+  state.artworkUsage = null
+  assert.equal(provider.blockedReason('artist'), 'platform_metadata_cache_not_approved')
+})
+
+test('platform artwork DTO remains optional and rejects credentials, malformed usage and unbounded lists', () => {
+  const raw = response() as Extract<PlatformMetadataResult, { status: 'ok' }>
+  const source = raw.metadata.texts[0]
+  const art = { resource: 'https://p4.music.126.net/avatar/42.jpg', url: source.url,
+    revision: '', attribution: '网易云音乐', license: '', licenseUrl: '' }
+  assert.equal(validPlatformMetadataResult(raw), true)
+  raw.metadata.texts = []
+  raw.metadata.artwork = [art]
+  assert.equal(validPlatformMetadataResult(raw), true)
+  for (const resource of ['file:///x', 'http://cdn.test/x.jpg', 'https://user:secret@cdn.test/x.jpg']) {
+    raw.metadata.artwork = [{ ...art, resource }]
+    assert.equal(validPlatformMetadataResult(raw), false)
+  }
+  raw.metadata.artwork = Array(4).fill(art)
+  assert.equal(validPlatformMetadataResult(raw), false)
+  raw.metadata.artwork = [{ ...art, usage: { ...usage, expiresAt: -1 } }]
+  assert.equal(validPlatformMetadataResult(raw), false)
+  assert.equal(ncmLocalFallbackApprovals(false, {}).ncm, undefined)
+  assert.deepEqual(ncmLocalFallbackApprovals(true, {}).ncm, usage)
+  assert.equal(ncmLocalFallbackApprovals(true, { ncm: { ...usage, cache: false, export: true } }).ncm.cache, false)
+  assert.equal(ncmLocalFallbackApprovals(true, { ncm: { ...usage, export: true } }).ncm.export, false)
 })
 
 test('permissions are per text, capped by reviewed deployment approval and expire without displaying old content', async () => {

@@ -81,6 +81,16 @@ test('album identity requires an explicit handler without replacing album tracks
   assert.match(host, /'fetchAlbumIdentity'/)
 })
 
+test('artist identity is an explicitly advertised library read with a metadata timeout', () => {
+  const provider = { id: 'ncm', name: 'NCM', capabilities: ['library' as const], supportedMethods: ['fetchArtistIdentity' as const] }
+  assert.equal(isTwilightMediaProviderMethod('fetchArtistIdentity'), true)
+  assert.equal(providerSupportsMethod(provider, 'fetchArtistIdentity'), true)
+  assert.equal(providerSupportsMethod({ ...provider, supportedMethods: undefined }, 'fetchArtistIdentity'), false)
+  assert.equal(providerSupportsMethod({ ...provider, capabilities: [] }, 'fetchArtistIdentity'), false)
+  assert.equal(getProviderCallTimeoutMs('fetchArtistIdentity'), getProviderCallTimeoutMs('fetchArtistMetadata'))
+  assert.match(readFileSync(new URL('./host.ts', import.meta.url), 'utf8'), /'fetchArtistIdentity'/)
+})
+
 test('playlist paging requires an advertised handler and playlist capability through host routing', () => {
   const provider: TestRunningProvider['providers'][number] = {
     id: 'bili',

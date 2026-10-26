@@ -22,6 +22,7 @@ const { spawn, spawnSync } = require('node:child_process')
 const { homedir } = require('node:os')
 const { dirname, join } = require('node:path')
 const { mkdirSync, readFileSync } = require('node:fs')
+const { parseEnv } = require('node:util')
 
 const command = process.argv[2]
 if (command !== 'dev' && command !== 'preview') {
@@ -76,6 +77,48 @@ function isWindowsElevated() {
 const restrictedWindowsSession = process.platform === 'win32' && !!process.env.DSH_SESSION_ID
 const elevatedWindowsSession = process.platform === 'win32' && isWindowsElevated()
 const childEnv = { ...process.env }
+// Private, development-only metadata policy. Do not load arbitrary environment
+// variables (especially VITE_*), change preview/release defaults or override an
+// explicit shell policy. The Core consumes the separate setup request once.
+if (command === 'dev') {
+  try {
+    const local = parseEnv(readFileSync(join(__dirname, '..', '.env.metadata.local'), 'utf8'))
+    const keys = [
+      'TWILIGHT_METADATA_ENABLED',
+      'TWILIGHT_METADATA_PUBLIC_SERVICE_APPROVED',
+      'TWILIGHT_METADATA_WIKIPEDIA_TEXT',
+      'TWILIGHT_METADATA_COMMONS_IMAGES',
+      'TWILIGHT_METADATA_CONTACT',
+      'TWILIGHT_METADATA_VOCADB',
+      'TWILIGHT_METADATA_THEAUDIODB',
+      'TWILIGHT_METADATA_THEAUDIODB_KEY',
+      'TWILIGHT_METADATA_DISCOGS',
+      'TWILIGHT_METADATA_DISCOGS_TOKEN',
+      'TWILIGHT_METADATA_PUBLIC_ARTWORK_USAGE',
+      'TWILIGHT_METADATA_PLATFORM_USAGE',
+      'TWILIGHT_METADATA_PLATFORM_ARTWORK_USAGE',
+      'TWILIGHT_METADATA_NCM_LOCAL_FALLBACK'
+    ]
+    for (const key of keys.filter(key => !/(?:CONTACT|KEY|TOKEN|USAGE)$/.test(key))) {
+      if (local[key] !== undefined && !['0', '1'].includes(local[key])) {
+        throw new Error('Invalid metadata switch')
+      }
+    }
+    for (const key of keys) {
+      if (childEnv[key] === undefined && local[key] !== undefined) childEnv[key] = local[key]
+    }
+    childEnv.TWILIGHT_DEV_METADATA_SETUP_FILE = join(
+      __dirname,
+      '..',
+      '.local',
+      'music-metadata-setup.json'
+    )
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn('[dev.metadata] Unable to load .env.metadata.local; check its metadata switches.')
+    }
+  }
+}
 const localTemp = join(__dirname, '..', 'tmp', 'electron-vite-temp')
 if (process.platform === 'win32' && command === 'dev') {
   mkdirSync(localTemp, { recursive: true })

@@ -27,7 +27,7 @@ test('v26 exploration upgrade preserves personal history, Focus, tags and a rest
   old.sql.exec(LEGACY_EXPLORATION_SCHEMA_SQL + 'PRAGMA user_version=26;')
   old.close()
   const current = new LibraryDatabase(file)
-  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(current.getMetadata(), metadata)
   assert.deepEqual(current.preferencesDetail(id), personal)
   assert.deepEqual(current.preferencesHistory({ entityId: id }), history)

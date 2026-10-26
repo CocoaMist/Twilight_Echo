@@ -27,7 +27,7 @@ test('v25 Focus migration snapshots WAL and preserves tags, personal states and 
   old.sql.exec(LEGACY_FOCUS_SCHEMA_SQL + 'PRAGMA user_version=25;')
   old.close()
   const current = new LibraryDatabase(file)
-  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(current.tagsList({}), tags)
   assert.deepEqual(current.getMetadata(), metadata)
   assert.deepEqual(current.ratingsDetail(entityId), rating)

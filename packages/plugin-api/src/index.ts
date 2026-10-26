@@ -343,6 +343,16 @@ export interface PlatformEntityMetadata {
     licenseUrl: string
     usage?: MetadataUsage
   }>
+  /** Private resource URLs; Core projects approved images to session handles. */
+  artwork?: Array<{
+    resource: string
+    url: string
+    revision: string
+    attribution: string
+    license: string
+    licenseUrl: string
+    usage?: MetadataUsage
+  }>
 }
 export type PlatformMetadataResult =
   | { status: 'ok'; metadata: PlatformEntityMetadata }
@@ -370,6 +380,16 @@ export interface PlatformAlbumIdentity {
     isrcs: string[]
   }>
 }
+
+export interface PlatformRecordingIdentity {
+  id: string
+  title: string
+  artists: Array<{ id: string | null; name: string; aliases?: string[] }>
+  durationSeconds: number | null
+  album: { id: string; title: string } | null
+}
+export interface PlatformRecordingPage { items: PlatformRecordingIdentity[]; total: number | null }
+export interface PlatformArtistIdentity { id: string; name: string; aliases: string[] }
 
 /** Public music charts, including the provider's compact song previews. */
 export interface ToplistSummary extends PlaylistSummary {
@@ -713,6 +733,17 @@ export interface TwilightMediaProviderRegistration {
   ): Promise<Track[]>
   /** Optional identity capability (max 64 tracks/credits). Larger or partial sets
    * must set complete=false. Missing names/credits stay empty; ordinals stay null. */
+  searchRecordingIdentities?(
+    query: string,
+    limit: number,
+    offset: number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformRecordingPage>
+  /** Names and aliases must belong to this exact provider artist ID. */
+  fetchArtistIdentity?(
+    artistId: string | number,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlatformArtistIdentity>
   fetchAlbumIdentity?(
     albumId: string | number,
     context?: TwilightProviderRequestContext

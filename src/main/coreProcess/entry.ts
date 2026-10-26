@@ -103,6 +103,7 @@ import type { LibraryQuery } from '../../shared/libraryDatabase.ts'
 import type { CorePlaylistEdit } from '../../shared/corePlaylists.ts'
 import type { TrackData } from '../../shared/track.ts'
 import { CoreSettingsRepository } from '../../core/persistence/settingsRepository.ts'
+import { applyDevelopmentMetadataSetup } from './developmentMetadataSetup.ts'
 import { CoreAudioOutputService } from '../../core/audio/outputService.ts'
 import { CoreDspService } from '../../core/audio/dspService.ts'
 import { DspAssetLibrary } from '../../core/audio/dspAssetLibrary.ts'
@@ -114,6 +115,7 @@ import {
 } from '../../core/audio/settings.ts'
 import { CoreApplication } from '../../core/application.ts'
 import { CoreInboxService } from '../../core/library/inboxService.ts'
+import { CoreLibraryHealthService } from '../../core/library/libraryHealthService.ts'
 import { CoreAnalysisService } from '../../core/audio/analysisService.ts'
 import { CoreLibraryLoudnessService } from '../../core/audio/libraryLoudnessService.ts'
 import { CorePlaybackSession, type CoreSessionRepository } from '../../core/playback/session.ts'
@@ -139,10 +141,13 @@ import { CoreScanService } from '../../core/library/scanService.ts'
 import { CoreLibraryBackground } from '../../core/library/background.ts'
 import { CoreMetadataService } from '../../core/library/metadataService.ts'
 import { MusicBrainzWikiProvider, MusicBrainzDetailsProvider } from '../../core/library/entityMetadataProvider.ts'
+import { PublicMusicSource, publicArtworkApprovals } from '../../core/library/publicMusicSources.ts'
+import { publicMetadataSources } from '../../shared/metadataProviders.ts'
 import { MusicBrainzIdentificationProvider, PlatformIdentificationProvider } from '../../core/library/musicIdentificationProvider.ts'
 import { resolveLocale } from '../../shared/i18n/locale.ts'
 import { IdentificationResponseCache } from '../../core/library/identificationResponseCache.ts'
-import { PlatformMetadataProvider, platformMetadataApprovals } from '../../core/library/platformMetadataProvider.ts'
+import { PlatformMetadataProvider, platformMetadataApprovals, ncmLocalFallbackApprovals } from '../../core/library/platformMetadataProvider.ts'
+import { ncmMetadataIdentity } from '../../core/library/ncmMetadataIdentity.ts'
 import { PublicArtworkProvider, artworkUsageApproval } from '../../core/library/publicArtworkProvider.ts'
 import { CoreStatisticsService } from '../../core/listening/service.ts'
 import { CoreStatisticsRepository } from '../../core/listening/repository.ts'
@@ -1538,7 +1543,11 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     configuration: JSON.stringify([identificationInventoryRevision, plugins?.providerIdentityContext(provider.id)])
   }))
   const identificationResponses = new IdentificationResponseCache()
-  const platformTextUsage = platformMetadataApprovals(process.env.TWILIGHT_METADATA_PLATFORM_USAGE)
+  const ncmLocalFallback = process.env.TWILIGHT_METADATA_NCM_LOCAL_FALLBACK === '1'
+  const platformTextUsage = ncmLocalFallbackApprovals(ncmLocalFallback,
+    platformMetadataApprovals(process.env.TWILIGHT_METADATA_PLATFORM_USAGE))
+  const platformArtworkUsage = ncmLocalFallbackApprovals(ncmLocalFallback,
+    platformMetadataApprovals(process.env.TWILIGHT_METADATA_PLATFORM_ARTWORK_USAGE, 'TWILIGHT_METADATA_PLATFORM_ARTWORK_USAGE'))
   const publicArtworkPolicy = { ...entityMetadataPolicy,
     commonsImages: process.env.TWILIGHT_METADATA_COMMONS_IMAGES === '1',
     caaUsage: artworkUsageApproval(process.env.TWILIGHT_METADATA_CAA_USAGE) }
@@ -1547,6 +1556,18 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     metadata.entities?.refreshIdentification(false, `platform.${id}`)
   })
   const musicbrainzIdentification = new MusicBrainzIdentificationProvider(() => entityMetadataPolicy)
+  const publicMusicPolicy = {
+    enabled: entityMetadataPolicy.enabled,
+    contact: entityMetadataPolicy.contact,
+    musicbrainzApproved: entityMetadataPolicy.publicServiceApproved,
+    vocadb: process.env.TWILIGHT_METADATA_VOCADB !== '0',
+    theaudiodb: process.env.TWILIGHT_METADATA_THEAUDIODB !== '0',
+    audioDbKey: process.env.TWILIGHT_METADATA_THEAUDIODB_KEY ?? (process.env.NODE_ENV === 'development' ? '123' : ''),
+    discogs: process.env.TWILIGHT_METADATA_DISCOGS !== '0',
+    discogsToken: process.env.TWILIGHT_METADATA_DISCOGS_TOKEN ?? '',
+    artwork: publicArtworkApprovals(process.env.TWILIGHT_METADATA_PUBLIC_ARTWORK_USAGE)
+  }
+  const publicMusicProviders = publicMetadataSources.map(id => new PublicMusicSource(id, () => publicMusicPolicy))
   const legacyMusic = plugins ? createLegacyMusicLookupProvider({ plugins,
     // Only an explicit deployment prohibition changes the existing manual
     // capability; omitted automatic-enrichment opt-ins do not disable it.
@@ -1561,22 +1582,35 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
       legacy: () => legacyMusic!,
       provider: new MusicBrainzWikiProvider(() => entityMetadataPolicy),
       artwork: async image => (await platform!.call('artwork.present', { cover: image.resource, coverSource: null,
+        retainMetadata: image.usage.display && image.usage.cache && image.usage.expiresAt === undefined,
         ...(image.usage.expiresAt === undefined ? {} : { imageExpiresAt: image.usage.expiresAt }) })).cover,
-      enrichmentProviders: () => [new MusicBrainzDetailsProvider(() => entityMetadataPolicy), new PublicArtworkProvider(() => publicArtworkPolicy), ...identificationPlatforms().map(provider => new PlatformMetadataProvider(provider.id, {
+      enrichmentProviders: () => [new MusicBrainzDetailsProvider(() => entityMetadataPolicy), new PublicArtworkProvider(() => publicArtworkPolicy), ...publicMusicProviders, ...identificationPlatforms().map(provider => new PlatformMetadataProvider(provider.id, {
         inventory: identificationPlatforms,
-        configuration: () => plugins!.providerMetadataContext(provider.id),
+        configuration: () => provider.id === 'ncm'
+          ? JSON.stringify(['public-metadata-v2', plugins!.providerMetadataContext(provider.id)])
+          : plugins!.providerMetadataContext(provider.id),
         usage: id => platformTextUsage[id] ?? null,
+        ...(platformArtworkUsage[provider.id] ? {
+          artworkUsage: (id: string) => platformArtworkUsage[id] ?? null
+        } : {}),
         call: (id, method, externalId, signal) => plugins!.callProvider(id, method, [externalId], { signal }),
-        ...(provider.id === 'ncm' ? { sourcePage: (_: string, id: string) => `https://music.163.com/#/artist?id=${encodeURIComponent(id)}` } : {})
+        ...(provider.id === 'ncm' ? {
+          identity: ncmMetadataIdentity(() => entityMetadataPolicy),
+          sourcePage: (_: string, id: string) => `https://music.163.com/#/artist?id=${encodeURIComponent(id)}`
+        } : {})
       }))],
-      identificationProviders: () => [musicbrainzIdentification, ...identificationPlatforms().map(provider =>
+      identificationProviders: () => [musicbrainzIdentification, ...publicMusicProviders.map(provider => provider.identification()), ...identificationPlatforms().map(provider =>
         new PlatformIdentificationProvider(provider.id, {
           responses: identificationResponses,
           inventory: identificationPlatforms,
           search: (id, method, query, limit, offset, signal) =>
             plugins!.callProvider(id, method, [query, limit, offset], { signal }),
           albumIdentity: (id, albumId, signal) =>
-            plugins!.callProvider(id, 'fetchAlbumIdentity', [albumId], { signal })
+            plugins!.callProvider(id, 'fetchAlbumIdentity', [albumId], { signal }),
+          recordingSearch: (id, query, signal, offset = 0) =>
+            plugins!.callProvider(id, 'searchRecordingIdentities', [query, 10, offset], { signal }),
+          artistIdentity: (id, artistId, signal) =>
+            plugins!.callProvider(id, 'fetchArtistIdentity', [artistId], { signal })
         }))],
       policy: () => entityMetadataPolicy,
       automation: () => settings.read().musicIdentification,
@@ -1610,6 +1644,17 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
     failed: (error) => console.error('[core.metadata]', error),
     libraryChanged: () => imports?.rematch()
   })
+  // Run only after the services captured by settings.changed are constructed,
+  // and before application.initialize activates scanning and metadata tasks.
+  const metadataSetupFile = process.env.TWILIGHT_DEV_METADATA_SETUP_FILE
+  if (metadataSetupFile) {
+    if (entityMetadataPolicy.enabled && entityMetadataPolicy.publicServiceApproved) {
+      const result = applyDevelopmentMetadataSetup(metadataSetupFile, config.root, settings)
+      if (result.status === 'applied') console.info('[dev.metadata] New-import metadata enabled; history remains off.')
+      else if (result.status !== 'missing' && result.status !== 'not-requested')
+        console.warn('[dev.metadata] One-time setup needs attention:', result)
+    } else console.warn('[dev.metadata] One-time setup deferred: deployment metadata policy is disabled.')
+  }
   const duplicates = new CoreDuplicatesService({
     readCandidates: (after, limit, revision) =>
       database!.readDuplicateCandidates(after, limit, revision),
@@ -1796,6 +1841,12 @@ async function initialize(config: CoreProcessConfiguration): Promise<void> {
       newId: randomUUID
     }),
     duplicates,
+    libraryHealth: metadata.entities ? new CoreLibraryHealthService({
+      database, metadata: metadata.entities, now: Date.now, newId: randomUUID,
+      language: () => settings.read().musicIdentification.language ??
+        (resolveLocale(settings.read().language, Intl.DateTimeFormat().resolvedOptions().locale) === 'en-US' ? 'en' : 'zh-Hans'),
+      changed: () => application?.changed()
+    }) : undefined,
     inbox: new CoreInboxService({
       database,
       duplicates: (id) => duplicates.evidence(id),

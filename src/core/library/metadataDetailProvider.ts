@@ -7,6 +7,8 @@ import type { MetadataArtworkRecord } from '../../shared/musicArtwork.ts'
 export interface MetadataDetailProvider {
   readonly id: string
   supports(kind: CatalogKind): boolean
+  /** Whether this deployment can obtain permitted images, subject to per-record rights. */
+  supportsArtwork?(kind: CatalogKind): boolean
   blockedReason(kind: CatalogKind): string | null
   context(): string
   enrich(

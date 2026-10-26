@@ -44,6 +44,13 @@ const plain = (v: unknown) =>
 
 function commonsLicense(meta: Json): { license: string; licenseUrl: string } | null {
   const raw = str(meta.LicenseUrl?.value).replace(/^\/\//, 'https://')
+  // Commons' PD templates often omit LicenseUrl. Require the machine-readable
+  // PD declaration as well as matching copyright, terms and restriction fields.
+  if (!raw && str(meta.License?.value) === 'pd' &&
+    str(meta.LicenseShortName?.value) === 'Public domain' &&
+    str(meta.UsageTerms?.value) === 'Public domain' &&
+    str(meta.Copyrighted?.value) === 'False' && !str(meta.Restrictions?.value))
+    return { license: 'Public domain', licenseUrl: 'https://commons.wikimedia.org/wiki/Commons:Licensing#Material_in_the_public_domain' }
   const match =
     /^https:\/\/creativecommons\.org\/(licenses\/(by|by-sa)\/(1\.0|2\.0|2\.5|3\.0|4\.0)|publicdomain\/(zero|mark)\/1\.0)\/?$/i.exec(
       raw
@@ -117,7 +124,7 @@ export class PublicArtworkProvider implements MetadataDetailProvider {
   context() {
     const p = this.policy()
     return JSON.stringify([
-      'public-artwork-v1',
+      'public-artwork-v2-commons-pd',
       p.enabled,
       p.publicServiceApproved,
       p.contact,

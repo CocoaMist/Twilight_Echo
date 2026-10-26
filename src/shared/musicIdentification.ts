@@ -44,8 +44,32 @@ export interface IdentificationAlbumRelease {
   discTrackCounts: number[]
   tracks: IdentificationAlbumTrack[]
 }
+export interface IdentificationArtistRecording {
+  id: string
+  title: string
+  duration: number
+  artists: Array<{ id: string; name: string }>
+  albums: string[]
+}
 export type IdentificationVerification =
-  | { method: 'typed_id' | 'provider_native'; reference: MusicExternalReference; sourceIds: string[] }
+  | { method: 'typed_id' | 'provider_native' | 'file_native'; reference: MusicExternalReference; sourceIds: string[] }
+  | { method: 'platform_recordings'; reference: MusicExternalReference; sourceIds: string[];
+      samples: Array<{ sourceId: string; page: import('./musicPlatformRecording.ts').PlatformRecordingPage }> }
+  | {
+      method: 'artist_recordings'
+      reference: MusicExternalReference
+      sourceIds: string[]
+      samples: Array<{ sourceId: string; recordings: IdentificationArtistRecording[] }>
+      toleranceSeconds: 2
+    }
+  | {
+      /** A partial import proves the project only, never its pressing or child IDs. */
+      method: 'album_subset'
+      reference: MusicExternalReference
+      sourceIds: string[]
+      release: IdentificationAlbumRelease
+      toleranceSeconds: 2
+    }
   | {
       method: 'platform_album_tracks'
       reference: MusicExternalReference
@@ -130,6 +154,7 @@ export interface IdentificationCandidatesQuery {
 export interface IdentificationInboxQuery {
   kind?: CatalogKind
   state?: IdentificationCandidate['state']
+  unresolvedOnly?: boolean
   offset?: number
   limit?: number
 }
@@ -146,6 +171,8 @@ export interface IdentificationReview {
 }
 export interface IdentificationDecision extends IdentificationReview {
   decision: 'confirm' | 'reject'
+  /** Manual NCM fallback attachment; preserves the currently confirmed target. */
+  attachToCurrent?: true
   ratingResolution?: MusicRatingResolution
   preferenceResolution?: MusicPreferenceResolution
 }
@@ -157,6 +184,7 @@ export interface IdentificationPreview {
   stale: boolean
   conflicts: string[]
   canConfirm: boolean
+  canAttachToCurrent?: boolean
   ratingImpact?: MusicRatingImpact
   preferenceImpact?: MusicPreferenceImpact
 }
@@ -326,9 +354,10 @@ export function validIdentificationPayload(name: string, raw: unknown): boolean 
         text(raw.inputVersion, 16384) && (raw.ratingResolution === undefined || validMusicRatingResolution(raw.ratingResolution)) &&
         (raw.preferenceResolution === undefined || validMusicPreferenceResolution(raw.preferenceResolution))
     case 'identification.inbox':
-      return keys('kind', 'state', 'offset', 'limit') &&
+      return keys('kind', 'state', 'unresolvedOnly', 'offset', 'limit') &&
         (raw.kind === undefined || validIdentificationKind(raw.kind)) &&
         (raw.state === undefined || ['candidate', 'confirmed', 'rejected'].includes(String(raw.state))) &&
+        (raw.unresolvedOnly === undefined || typeof raw.unresolvedOnly === 'boolean') &&
         (raw.offset === undefined || uint(raw.offset)) &&
         (raw.limit === undefined || (uint(raw.limit) && Number(raw.limit) >= 1 && Number(raw.limit) <= 100))
     case 'identification.candidates':
@@ -345,9 +374,11 @@ export function validIdentificationPayload(name: string, raw: unknown): boolean 
       return keys('candidateId', 'revision', 'linkRevision') && review()
     case 'identification.decide':
       return (
-        keys('candidateId', 'revision', 'linkRevision', 'decision', 'ratingResolution', 'preferenceResolution') &&
+        keys('candidateId', 'revision', 'linkRevision', 'decision', 'attachToCurrent', 'ratingResolution', 'preferenceResolution') &&
         review() &&
         ['confirm', 'reject'].includes(String(raw.decision)) &&
+        (raw.attachToCurrent === undefined || (raw.attachToCurrent === true && raw.decision === 'confirm' &&
+          raw.ratingResolution === undefined && raw.preferenceResolution === undefined)) &&
         (raw.ratingResolution === undefined || validMusicRatingResolution(raw.ratingResolution)) &&
         (raw.preferenceResolution === undefined || validMusicPreferenceResolution(raw.preferenceResolution))
       )

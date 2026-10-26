@@ -19,6 +19,7 @@ import {
   type MetadataProvider
 } from './entityMetadataProvider.ts'
 import { MetadataHttpError } from './metadataHttp.ts'
+import { isPublicMetadataSource, metadataIdentityProvider, metadataProviderReference } from '../../shared/metadataProviders.ts'
 import type { IdentificationCandidatesQuery, IdentificationReview, IdentificationDecision, IdentificationStart } from '../../shared/musicIdentification.ts'
 import type { IdentificationProvider } from './musicIdentificationProvider.ts'
 import type { MusicIdentificationSettings, IdentificationScheduleRequest } from '../../shared/musicIdentificationSchedule.ts'
@@ -137,32 +138,48 @@ export class CoreEntityMetadataService {
   }
   platformContexts(): Record<string, string> {
     return Object.fromEntries((this.options.enrichmentProviders?.() ?? [])
-        .filter(p => p.id.startsWith('platform.') && (!p.blockedReason('artist') || !p.blockedReason('release')))
-        .map(p => [p.id.slice(9), p.context()]))
+        .filter(p => p.id.startsWith('platform.')
+          ? !p.blockedReason('artist') || !p.blockedReason('release')
+          : isPublicMetadataSource(p.id) &&
+          ['artist', 'release', 'album_project'].some(kind => p.supports(kind as 'artist') && !p.blockedReason(kind as 'artist')) && this.options.policy().enabled)
+        .map(p => [metadataIdentityProvider(p.id)!, p.context()]))
   }
-  detail(entityId: string, language: EntityMetadataLanguage, sourceProvider?: string) {
+  private artworkContexts() {
+    return Object.fromEntries((this.options.enrichmentProviders?.() ?? []).filter(p =>
+      p.id === 'public-artwork' || (isPublicMetadataSource(p.id) ||
+        (p.id.startsWith('platform.') && (['artist', 'release'] as const).some(kind => p.supportsArtwork?.(kind)))) && this.options.policy().enabled &&
+      (['artist', 'release', 'album_project'] as const).some(kind => p.supports(kind) && !p.blockedReason(kind)))
+      .map(p => [p.id, p.context()]))
+  }
+  detail(entityId: string, language: EntityMetadataLanguage, sourceProvider?: string, includeAutomaticArtwork = false) {
     return this.request(async () => {
       const platformContexts = this.platformContexts()
+      const artworkContexts = this.artworkContexts()
       const detail = await this.options.database.metadataDetail(entityId, language, { sourceProvider, platformContexts, now: this.options.now() })
       const assertContext = () => {
         if (JSON.stringify(platformContexts) !== JSON.stringify(this.platformContexts()) ||
+          JSON.stringify(artworkContexts) !== JSON.stringify(this.artworkContexts()) ||
           detail.facts.some(f => f.usage?.expiresAt !== undefined && f.usage.expiresAt <= this.options.now()))
           throw Object.assign(new Error('资料授权或有效期已变化，请重新读取'), { code: 'STALE_REVISION' })
       }
       assertContext()
       // User bitmaps and an explicit clear do not depend on public-service deployment or identity.
-      if (detail.artworkOverride) return detail
-      const provider = this.options.enrichmentProviders?.().find(p => p.id === 'public-artwork')
-      if (!provider || !this.options.artwork) return detail
+      // Collection views may share automatic art without sharing this source's
+      // personal choice. Ordinary callers keep the original override-only read.
+      if (detail.artworkOverride && !includeAutomaticArtwork) return detail
+      if (!Object.keys(artworkContexts).length || !this.options.artwork) return detail
       if (!detail.targetId) return detail
-      const images = await this.options.database.metadataArtwork(entityId, { artworkContext: provider.context(),
+      const images = await this.options.database.metadataArtwork(entityId, { artworkContexts,
         artworkTargetId: detail.targetId, artworkRevision: detail.revision, now: this.options.now() })
       const artwork: MusicArtwork[] = []
       for (const image of images) {
-        if (provider.blockedReason(image.scope)) continue
+        const providerId = image.attribution.provider.startsWith('platform.') ? image.attribution.provider :
+          image.targetRef && isPublicMetadataSource(image.targetRef.provider) ? image.targetRef.provider : 'public-artwork'
+        const provider = this.options.enrichmentProviders?.().find(p => p.id === providerId)
+        if (!provider || provider.blockedReason(image.scope)) continue
         const handle = await this.options.artwork(image)
         if (handle) {
-          artwork.push({ scope: image.scope, targetRef: { provider: 'musicbrainz', kind: image.scope, idType: 'mbid', value: image.targetId }, attribution: image.attribution, usage: image.usage,
+          artwork.push({ scope: image.scope, targetRef: image.targetRef ?? { provider: 'musicbrainz', kind: image.scope, idType: 'mbid', value: image.targetId }, attribution: image.attribution, usage: image.usage,
             ...(image.sourceReleaseId ? { sourceReleaseId: image.sourceReleaseId } : {}), handle })
         }
       }
@@ -256,6 +273,41 @@ export class CoreEntityMetadataService {
   identity(entityId: string) {
     return this.request(() => this.options.database.identificationDetail(entityId))
   }
+  /** Internal health read: inspect permitted stored artwork without downloading bitmaps. */
+  inspectHealth(entityId: string, language: EntityMetadataLanguage) {
+    return this.request(async () => {
+      const database = this.options.database, policy = this.policy()
+      const identity = await database.identificationDetail(entityId)
+      const detail = await database.metadataDetail(entityId, language, {
+        platformContexts: this.platformContexts(), now: this.options.now()
+      })
+      const candidates = await database.identificationCandidates({ entityId, state: 'candidate', limit: 100 })
+      if ((identity.link?.targetId ?? null) !== detail.targetId)
+        throw Object.assign(new Error('音乐身份已变化，请重新体检'), { code: 'STALE_REVISION' })
+      const potentialProviders = (this.options.enrichmentProviders?.() ?? []).filter(p => p.supports(identity.kind))
+      const providers = potentialProviders.filter(p => metadataProviderReference(p.id, identity.kind, identity.references))
+      const identifiers = (this.options.identificationProviders?.() ?? []).filter(p => p.supports(identity.kind))
+      const jobs: import('../../shared/entityMetadata.ts').EntityMetadataJob[] = []
+      for (let offset = 0; ; offset += 100) {
+        const page = await database.metadataJobs({ entityId, offset, limit: 100 })
+        jobs.push(...page.items.filter(job => job.type === 'identify'
+          ? identifiers.some(p => p.id === job.provider && p.matcherVersion === job.identification?.matcherVersion)
+          : job.type === 'enrich' && job.language === language && providers.some(p =>
+            p.id === job.provider && p.context() === job.providerContext &&
+              metadataProviderReference(p.id, identity.kind, identity.references)?.value === job.externalId)))
+        if (offset + page.items.length >= page.total) break
+      }
+      const images = policy.enabled ? await database.metadataArtwork(entityId, { artworkContexts: this.artworkContexts(),
+          artworkTargetId: detail.targetId, artworkRevision: detail.revision, now: this.options.now() }) : []
+      return { identity, detail, jobs, hasArtwork: images.length > 0,
+        needsReview: candidates.items.some(c => !c.suppressed && c.linkRevision === (identity.link?.revision ?? 0)),
+        potentialEnrichment: potentialProviders.map(p => ({ id: p.id, reason: !policy.enabled ? 'metadata_disabled' : p.blockedReason(identity.kind),
+          ...(p.supportsArtwork?.(identity.kind) ? { artwork: true as const } : {}) })),
+        identification: identifiers.map(p => ({ id: p.id, reason: !policy.enabled ? 'metadata_disabled' : p.blockedReason(identity.kind) })),
+        enrichment: providers.map(p => ({ id: p.id, reason: !policy.enabled ? 'metadata_disabled' : p.blockedReason(identity.kind),
+          ...(p.supportsArtwork?.(identity.kind) ? { artwork: true as const } : {}) })) }
+    })
+  }
   identificationStatus() {
     return this.request(() => this.options.database.identificationScheduleStatus())
   }
@@ -291,10 +343,11 @@ export class CoreEntityMetadataService {
       }
     }
   }
-  startIdentification(request: IdentificationStart) {
+  startIdentification(request: IdentificationStart, providerIds?: readonly string[]) {
     return this.request(async () => {
       const input = await this.options.database.identificationInput(request.entityId)
-      const providers = (this.options.identificationProviders?.() ?? []).filter(p => p.supports(input.kind))
+      const providers = (this.options.identificationProviders?.() ?? []).filter(p => p.supports(input.kind) &&
+        (!providerIds || providerIds.includes(p.id)))
       if (!providers.length) throw new Error('当前实体没有可用的识别适配器')
       let jobs
       try {
@@ -563,14 +616,17 @@ export class CoreEntityMetadataService {
           this.active = null
           continue
         }
-        const http = error instanceof MetadataHttpError ? error : null
+        const message = error instanceof Error ? error.message : ''
+        const http = error instanceof MetadataHttpError ? error :
+          this.active?.provider === 'platform.ncm' && message.includes('NCM_METADATA_RATE_LIMITED')
+            ? new MetadataHttpError('platform_metadata_rate_limited', 429, now() + 60_000) : null
         const transient = !http || [429, 503, 502, 504, 408].includes(http.status)
         result =
           error instanceof MetadataIdentityError && work.job.type !== 'identify'
             ? { state: 'needs_review', candidate: null, reason: error.message }
             : http && [401, 403].includes(http.status)
               ? { state: 'blocked', reason: http.message }
-              : transient && work.job.attempts < 5
+              : transient && (work.job.attempts < 5 || http?.status === 429)
                 ? {
                     state: 'retry_wait',
                     reason: http?.message ?? 'metadata_connection_or_response_error',

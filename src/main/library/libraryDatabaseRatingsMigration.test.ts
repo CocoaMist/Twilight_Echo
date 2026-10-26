@@ -21,7 +21,7 @@ test('v22 rating upgrade keeps library data and creates one consistent pre-upgra
   old.sql.exec(LEGACY_RATING_SCHEMA_SQL + 'PRAGMA user_version=22;')
   old.close()
   const current = new LibraryDatabase(file)
-  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(current.catalogStatus(), catalog)
   assert.deepEqual(current.getMetadata(), metadata)
   assert.deepEqual(current.getTracksByIds(['one']), before)

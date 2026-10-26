@@ -205,7 +205,7 @@ test('schema mismatches, malformed authorities and invalid bounds fail without m
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())
   db.exec('PRAGMA user_version=27')
-  assert.throws(() => reconcileMusicLibrary(db), /schema 28/)
+  assert.throws(() => reconcileMusicLibrary(db), /schemas 28 and 29/)
   assert.equal(db.isTransaction, false)
   assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 27)
   assert.throws(() => reconcileMusicLibrary(db, { exampleLimit: 101 }), /exampleLimit/)
@@ -216,6 +216,17 @@ test('schema mismatches, malformed authorities and invalid bounds fail without m
   assert.throws(() => reconcileMusicLibrary(f.db.sql), /own read snapshot/)
   assert.equal(f.db.sql.isTransaction, true)
   f.db.sql.exec('ROLLBACK')
+})
+
+test('read-only reconciliation accepts both v28 and v29 without upgrading the selected database', t => {
+  const f = fixture(t)
+  for (const schema of [28, 29]) {
+    f.db.sql.exec(`PRAGMA user_version=${schema}`)
+    const before = f.db.sql.prepare('SELECT total_changes() n').get()!.n
+    assert.equal(reconcileMusicLibrary(f.db.sql).schema, schema)
+    assert.equal(f.db.sql.prepare('PRAGMA user_version').get()!.user_version, schema)
+    assert.equal(f.db.sql.prepare('SELECT total_changes() n').get()!.n, before)
+  }
 })
 
 test('production Core state is consumed read-only with its real revision; pending migration and snapshot authority remain distinct', t => {

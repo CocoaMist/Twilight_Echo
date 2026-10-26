@@ -28,7 +28,7 @@ test('v24 tags upgrade retains ratings, preference receipts and playlist occurre
   old.close()
 
   const current = new LibraryDatabase(file)
-  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(current.getMetadata(), metadata)
   assert.deepEqual(current.catalogStatus(), catalog)
   assert.deepEqual(current.getTracksByIds([track.id]), tracks)

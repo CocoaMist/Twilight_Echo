@@ -1,6 +1,7 @@
 import type { IdentificationDatabaseApi, IdentificationInput, IdentificationRecall, IdentificationMemberSnapshot, IdentificationMemberResult } from './musicIdentification.ts'
 import type { IdentificationScheduleDatabaseApi } from './musicIdentificationSchedule.ts'
 import { validMetadataProvider } from './musicMetadata.ts'
+import { isPublicMetadataSource } from './metadataProviders.ts'
 import type { MetadataUsage } from './musicMetadata.ts'
 import type { MusicCreditSet, MusicCreditsQuery, MusicCreditsPage } from './musicCredits.ts'
 import type { MetadataArtworkRecord, MusicArtwork } from './musicArtwork.ts'
@@ -218,6 +219,7 @@ export interface EntityMetadataReadOptions {
   sourceProvider?: string
   platformContexts?: Record<string, string>
   artworkContext?: string
+  artworkContexts?: Record<string, string>
   artworkTargetId?: string | null
   artworkRevision?: number
   now?: number
@@ -237,8 +239,9 @@ export function validEntityMetadataPayload(name: string, raw: unknown): boolean 
     case 'metadata.entity.policy':
       return keys()
     case 'metadata.entity.detail':
-      return keys('entityId', 'language', 'sourceProvider') && text(v.entityId) && validMetadataLanguage(v.language) &&
-        (v.sourceProvider === undefined || validMetadataProvider(v.sourceProvider))
+      return keys('entityId', 'language', 'sourceProvider', 'includeAutomaticArtwork') && text(v.entityId) && validMetadataLanguage(v.language) &&
+        (v.sourceProvider === undefined || validMetadataProvider(v.sourceProvider)) &&
+        (v.includeAutomaticArtwork === undefined || typeof v.includeAutomaticArtwork === 'boolean')
     case 'metadata.entity.resolve':
     case 'metadata.entity.enrich':
       return (
@@ -246,7 +249,7 @@ export function validEntityMetadataPayload(name: string, raw: unknown): boolean 
         text(v.entityId) &&
         text(v.batchId) &&
         validMetadataLanguage(v.language) &&
-        (v.provider === undefined || v.provider === 'musicbrainz-details' || v.provider === 'public-artwork' || (typeof v.provider === 'string' && /^platform\./.test(v.provider) && validMetadataProvider(v.provider.slice(9)))) &&
+        (v.provider === undefined || v.provider === 'musicbrainz-details' || v.provider === 'public-artwork' || (typeof v.provider === 'string' && (isPublicMetadataSource(v.provider) || (/^platform\./.test(v.provider) && validMetadataProvider(v.provider.slice(9)))))) &&
         (!name.endsWith('resolve') || validMusicBrainzArtistId(v.mbid))
       )
     case 'metadata.entity.decide':

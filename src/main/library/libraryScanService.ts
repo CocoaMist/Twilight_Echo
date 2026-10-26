@@ -29,7 +29,8 @@ import type { RepairScanCall } from '../../shared/localLibraryScan.ts'
 import type { LibraryTrackRecord } from '../../shared/libraryDatabase.ts'
 import { ScanCoverWrites } from './scanCoverWrites.ts'
 import { collectTrackIdentityTags } from './trackIdentityTags.ts'
-import { legacyTrackIdentityTags, normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
+import { fileArtistCredits, legacyTrackIdentityTags, normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
+import { libraryArtistCredits } from '../../shared/libraryCollections.ts'
 
 type ScanControl = {
   paused: boolean
@@ -217,6 +218,14 @@ async function handleDatabaseScan(
         }
       },
       forceParse,
+      parseReleaseDate: async (identity) => ({
+        ...(await withTimeout(
+          readFileReleaseDate(identity.filePath),
+          PARSE_TIMEOUT_MS,
+          'file release-date parsing'
+        )),
+        dependencies: await cueIndex.getDependencies(identity.filePath)
+      }),
       parse: async (identity, audioMetadata) => {
         const parsed = await withTimeout(
           parseTrack(identity, coverCacheDir, cueIndex, audioMetadata),
@@ -732,6 +741,24 @@ async function parseAudioMetadata(filePath: string, skipCovers = false): Promise
   }
 }
 
+/** Reads native dates with cover extraction disabled, without rebuilding logical Track payloads. */
+async function readFileReleaseDate(filePath: string): Promise<{
+  metadataRead: boolean; releaseDate?: string; error?: string
+}> {
+  if (filePath.toLowerCase().endsWith('.iso'))
+    return { metadataRead: false, error: 'Native ISO metadata reader is required' }
+  const waveMetadata = await readWaveMetadata(filePath).catch(() => null)
+  try {
+    const metadata = await parseAudioMetadata(filePath, true)
+    return { metadataRead: true, releaseDate: readLocalReleaseDate({
+      ...metadata.common, year: waveMetadata?.year ?? metadata.common.year
+    }) }
+  } catch (error) {
+    if (waveMetadata) return { metadataRead: true, releaseDate: readLocalReleaseDate({ year: waveMetadata.year }) }
+    return { metadataRead: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
@@ -770,6 +797,7 @@ async function parseTrack(
     const duration = Number(cachedAudio.duration ?? 0)
     const cached = {
       ...cachedAudio,
+      artists: libraryArtistCredits(cachedAudio as Partial<import('../../shared/track.ts').TrackData>),
       identityTags: normalizeTrackIdentityTags(cachedAudio.identityTags) ?? legacyTrackIdentityTags(cachedAudio)
     }
     const cueTracks = file.cueSignature
@@ -854,6 +882,7 @@ async function parseTrack(
     const track: LibraryTrackRecord = {
       ...baseTrack,
       identityTags,
+      ...(fileArtistCredits(identityTags).length ? { artists: fileArtistCredits(identityTags) } : {}),
       title,
       artist,
       album,

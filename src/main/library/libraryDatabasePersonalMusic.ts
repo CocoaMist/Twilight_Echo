@@ -421,7 +421,8 @@ export class LibraryDatabasePersonalMusic {
   private aliasKey(row: MusicBackupRecord, entities: Map<string, string>): string {
     if (row.namespace !== 'source.artist') return str(row.key)
     const key = JSON.parse(str(row.key)) as unknown[]
-    if (key.length === 3 && typeof key[1] === 'string' && entities.has(key[1])) key[1] = entities.get(key[1])!
+    if ((key.length === 3 || (key.length === 4 && key[2] === 'name')) &&
+      typeof key[1] === 'string' && entities.has(key[1])) key[1] = entities.get(key[1])!
     return JSON.stringify(key)
   }
   private existing(name: MusicBackupRecordKind, row: MusicBackupRecord): MusicBackupRecord | undefined {

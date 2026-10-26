@@ -15,6 +15,7 @@ import type {
   LibraryTrackRecord
 } from '../../shared/libraryDatabase.ts'
 import type { LibraryMetadata } from '../../shared/libraryDatabase.ts'
+import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 
 export interface CoreScanCoordinatorOptions {
   now(): number
@@ -104,6 +105,24 @@ export class LibraryDatabaseScanCoordinator extends EventEmitter {
   ): Promise<LibraryScanCommit> {
     for (const file of batch.files) {
       signal.throwIfAborted()
+      if (file.releaseDateOnly) {
+        if (file.identity.filePath.toLowerCase().endsWith('.iso')) {
+          file.metadataRead = false
+          file.error = 'Native ISO metadata reader is required'
+          if (this.options.readSacdIsoMetadata) {
+            try {
+              const metadata = await this.options.readSacdIsoMetadata(file.identity.filePath, signal)
+              if (metadata && !metadata.error) {
+                file.releaseDate = normalizeReleaseDate(metadata.year || metadata.isoTracks?.[0]?.year)
+                file.metadataRead = true
+                delete file.error
+              }
+            } catch (error) { file.error = String(error) }
+          }
+        }
+        signal.throwIfAborted()
+        continue
+      }
       if (
         file.identity.filePath.toLowerCase().endsWith('.iso') &&
         this.options.readSacdIsoMetadata

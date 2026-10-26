@@ -70,7 +70,7 @@ test('v21 browse fence upgrade preserves user classifications and creates one pr
   old.sql.exec(LEGACY_BROWSE_REVISION_SQL + 'PRAGMA user_version=21;')
   old.close()
   const db = new LibraryDatabase(file)
-  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(db.genresTree({}), genres)
   assert.equal(revision(db), 0)
   assert.deepEqual(db.sql.prepare('PRAGMA foreign_key_check').all(), [])

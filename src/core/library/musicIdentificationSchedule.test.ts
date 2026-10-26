@@ -338,7 +338,7 @@ test('v16 migration backs up original storage and creates scheduling without aut
   db.close()
   db = new LibraryDatabase(path)
   try {
-    assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 27)
+    assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
     assert.deepEqual(db.identificationScheduleStatus(), {
       pending: 0,
       history: { cursor: 0, horizon: null }

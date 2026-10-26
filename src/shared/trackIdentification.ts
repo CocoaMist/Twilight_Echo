@@ -1,3 +1,5 @@
+import { normalizeNcmFileIdentity } from './ncmFileIdentity.ts'
+
 /** Observations, not confirmed identities. Parallel name/ID arrays are never zipped. */
 export type TrackTagOrigin = 'audio_tag' | 'cue' | 'filename' | 'manual' | 'legacy'
 export interface TrackTagValue<T> {
@@ -7,6 +9,7 @@ export interface TrackTagValue<T> {
 export interface TrackIdentityTags {
   version: 1
   scope: 'audio_file' | 'cue_track'
+  ncm?: import('./ncmFileIdentity.ts').NcmFileIdentity
   title?: TrackTagValue<string>
   artist?: TrackTagValue<string>
   artists?: TrackTagValue<string[]>
@@ -36,6 +39,17 @@ export interface TrackIdentityTags {
   truncated?: boolean
 }
 
+/** File credits are names, not provider identities. Never zip MusicBrainz ID arrays.
+ * CUE performers belong to their logical track, not the containing audio file.
+ */
+export function fileArtistCredits(tags: TrackIdentityTags | undefined): { name: string }[] {
+  tags = normalizeTrackIdentityTags(tags)
+  if (!tags || tags.scope !== 'audio_file') return []
+  const values = tags.ncm?.artists.map(artist => artist.name) ??
+    (tags.artists?.origin === 'audio_tag' ? tags.artists.value : [])
+  return [...new Set(values.map(name => name.trim()).filter(Boolean))].map(name => ({ name }))
+}
+
 /** Keep the catalog's private snapshot data-only and bounded, including plugin input. */
 export function normalizeTrackIdentityTags(raw: unknown): TrackIdentityTags | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -43,6 +57,8 @@ export function normalizeTrackIdentityTags(raw: unknown): TrackIdentityTags | un
   if (input.version !== 1 || !['audio_file', 'cue_track'].includes(String(input.scope)))
     return undefined
   const result: TrackIdentityTags = { version: 1, scope: input.scope as TrackIdentityTags['scope'] }
+  const ncm = normalizeNcmFileIdentity(input.ncm)
+  if (ncm) result.ncm = ncm
   let remaining = 16384
   const text = (v: unknown): string | undefined => {
     if (typeof v !== 'string' || !v.trim()) return undefined

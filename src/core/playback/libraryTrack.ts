@@ -1,6 +1,7 @@
 import type { LibraryTrackRecord } from '../../shared/libraryDatabase.ts'
 import type { TrackData } from '../../shared/track.ts'
 import { getTrackSource } from '../../shared/trackSourceIdentity.ts'
+import { libraryArtistCredits } from '../../shared/libraryCollections.ts'
 
 /** Legacy documents may omit display fields. Their database identities and
  * extension fields survive; occurrence identity always comes from the queue. */
@@ -10,8 +11,10 @@ export function libraryTrack(record: LibraryTrackRecord): TrackData {
       ? record.fileName
       : record.filePath.split(/[\\/]/).pop() || record.id
   const { queueEntryId: _queueEntryId, ...metadata } = record
+  const artists = libraryArtistCredits(record as Partial<TrackData>)
   return {
     ...metadata,
+    ...(artists.length ? { artists } : {}),
     // Legacy SQL rows have arbitrary IDs (e.g. track:10:2), not provider IDs.
     source:
       typeof record.source === 'string'

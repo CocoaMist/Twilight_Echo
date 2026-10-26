@@ -327,7 +327,7 @@ test('enrichment enqueue, demand and outbox acknowledgement roll back together; 
   assert.deepEqual(db.metadataJobs({}).items, before)
 })
 
-test('restart preserves confirmed follow-up outbox and recovers the single shared running generation', (t) => {
+test('restart resumes interrupted shared work and later reopens reuse the saved result', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'automatic-enrich-')),
     path = join(root, 'library.sqlite')
   let db = new LibraryDatabase(path)
@@ -351,6 +351,18 @@ test('restart preserves confirmed follow-up outbox and recovers the single share
   assert.equal(current.job.generation, old.job.generation + 1)
   assert.equal(db.metadataFinish(old, completed(), 2002, configuration()), false)
   assert.equal(db.metadataFinish(current, completed(), 2002, configuration()), true)
+  assert.equal(db.metadataDetail(id, 'zh-Hans').introduction!.value, '介绍')
+  const saved = db.metadataJobs({}).items
+  db.close()
+  db = new LibraryDatabase(path)
+  const later = 2002 + 2 * 86400000
+  db.metadataRecover(later)
+  // A refreshed scheduler/configuration check must not turn a saved result
+  // into a fresh network lookup, even beyond the explicit lookup's cache TTL.
+  db.sql.exec('UPDATE metadata_identification_schedule SET dirty=1')
+  drain(db, configuration(), later)
+  assert.deepEqual(db.metadataJobs({}).items, saved)
+  assert.equal(db.metadataClaim(later), null)
   assert.equal(db.metadataDetail(id, 'zh-Hans').introduction!.value, '介绍')
 })
 

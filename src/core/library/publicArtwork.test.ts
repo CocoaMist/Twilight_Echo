@@ -57,6 +57,7 @@ function fixture() {
     reciprocal: ARTIST,
     author: '<a href="https://commons.wikimedia.org/wiki/User:Example">A &amp; B</a>',
     license: 'https://creativecommons.org/licenses/by-sa/4.0/',
+    extraLicense: {} as Record<string, { value: string }>,
     resource:
       'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Artist.jpg/960px-Artist.jpg',
     calls: [] as URL[],
@@ -108,7 +109,8 @@ function fixture() {
                 extmetadata: {
                   Artist: { value: state.author },
                   LicenseUrl: { value: state.license },
-                  Copyrighted: { value: 'True' }
+                  Copyrighted: { value: 'True' },
+                  ...state.extraLicense
                 }
               }
             ]
@@ -285,6 +287,24 @@ test('Commons follows confirmed P18 and keeps per-file author, license, timestam
     state.calls.some((url) => url.hostname.endsWith('wikipedia.org')),
     false
   )
+})
+
+test('Commons structured public-domain templates without LicenseUrl require consistent rights fields', async () => {
+  const { state, provider } = fixture()
+  state.license = ''
+  state.extraLicense = {
+    License: { value: 'pd' }, LicenseShortName: { value: 'Public domain' },
+    UsageTerms: { value: 'Public domain' }, Copyrighted: { value: 'False' }, Restrictions: { value: '' }
+  }
+  const image = (await provider.enrich({ kind: 'artist', externalId: ARTIST, language: 'en' }, signal())).artwork[0]
+  assert.equal(image.attribution.license, 'Public domain')
+  assert.match(image.attribution.licenseUrl, /Commons:Licensing/)
+  for (const [key, value] of [['License', 'unknown'], ['Copyrighted', 'True'], ['UsageTerms', 'Noncommercial'], ['Restrictions', 'permission required']]) {
+    const original = state.extraLicense[key]
+    state.extraLicense[key] = { value }
+    assert.deepEqual((await provider.enrich({ kind: 'artist', externalId: ARTIST, language: 'en' }, signal())).artwork, [])
+    state.extraLicense[key] = original
+  }
 })
 
 test('Commons missing author/license, restricted licenses, raw SVG and credential URLs are not image resources', async () => {
@@ -488,6 +508,37 @@ test('durable images re-project after DB/Core replacement, never appear as raw p
   db.identificationDetach(link.id, link.revision, state.now)
   assert.equal((await core.detail(entityId, 'en')).artwork, undefined)
   await core.shutdown()
+})
+
+test('collection reads can include permitted automatic portraits without sharing a source hidden state', async (t) => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  const entityId = seed(db, 'artist'), { state, provider } = fixture()
+  db.metadataEnqueue({ entityId, type: 'enrich', language: 'en', batchId: 'portrait',
+    provider: 'public-artwork', providerContext: provider.context() }, state.now)
+  const work = db.metadataClaim(state.now)!
+  const result = await provider.enrich({ kind: 'artist', externalId: ARTIST, language: 'en' }, signal())
+  db.metadataFinish(work, { state: 'completed', outcome: 'matched', ...result }, state.now)
+  const before = db.metadataDetail(entityId, 'en', { now: state.now })
+  db.metadataArtworkOverride({ entityId, revision: before.revision, mode: 'clear', language: 'en' }, state.now)
+  let handles = 0
+  const core = new CoreEntityMetadataService({
+    database: asyncDb(db), policy: () => state.policy,
+    provider: new MusicBrainzWikiProvider(() => state.policy),
+    enrichmentProviders: () => [provider], now: () => state.now, changed() {}, failed() {},
+    artwork: async () => { handles++; return 'twilight-media://image/shared-portrait' }
+  })
+  t.after(() => core.shutdown())
+  assert.equal((await core.detail(entityId, 'en', 'local')).artwork, undefined)
+  assert.equal(handles, 0, 'ordinary personal reads keep their original contract')
+  const shared = await core.detail(entityId, 'en', 'local', true)
+  assert.equal(shared.artworkOverride?.mode, 'clear')
+  assert.equal(shared.artwork?.[0].handle, 'twilight-media://image/shared-portrait')
+  state.policy.commonsImages = false
+  assert.equal((await core.detail(entityId, 'en', 'local', true)).artwork, undefined)
+  const query = { entityId, language: 'en', includeAutomaticArtwork: true }
+  assert.equal(validEntityMetadataPayload('metadata.entity.detail', query), true)
+  assert.equal(validEntityMetadataPayload('metadata.entity.detail', { ...query, includeAutomaticArtwork: 'yes' }), false)
 })
 
 test('image expiry and deployment context hide and retire only automatic resources', async (t) => {

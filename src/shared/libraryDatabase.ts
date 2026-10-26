@@ -269,6 +269,10 @@ export interface LibraryScanCommit {
     dependencies?: LibraryScanDependency[]
     audioMetadata?: LibraryTrackRecord
     metadataReused?: boolean
+    /** Narrow legacy-date read; never replaces logical tracks. Published only at successful finish. */
+    releaseDateOnly?: true
+    /** An absent value on a successful date-only read clears an obsolete date. */
+    releaseDate?: string
   }>
 }
 export interface LibraryScanJob {
@@ -287,6 +291,8 @@ export interface LibraryScanDirectoryResult {
 }
 export interface LibraryScanWorkPage {
   identities: LocalLibraryFileIdentity[]
+  /** Subset of identities requiring only the legacy release-date backfill. */
+  releaseDateFilePaths?: string[]
   lastBatch: number
   state: LibraryScanJob['state']
 }

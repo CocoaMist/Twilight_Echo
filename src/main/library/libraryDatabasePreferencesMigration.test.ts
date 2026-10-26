@@ -22,7 +22,7 @@ test('v23 preferences upgrade preserves ratings and creates a consistent pre-upg
   old.close()
 
   const current = new LibraryDatabase(file)
-  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+  assert.equal(current.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
   assert.deepEqual(current.catalogStatus(), catalog)
   assert.deepEqual(current.getMetadata(), metadata)
   assert.deepEqual(current.getTracksByIds(['one']), tracks)

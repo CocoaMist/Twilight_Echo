@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { LibraryDatabase } from './libraryDatabase.ts'
 import { emptyMusicVersions } from '../../shared/musicVersions.ts'
 import { versionSourceKey } from '../../shared/trackSourceIdentity.ts'
@@ -11,6 +11,7 @@ import { getAlbumIdentity } from '../../shared/libraryIdentity.ts'
 import type { TrackData } from '../../shared/track.ts'
 import { LEGACY_CATALOG_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import { CATALOG_MEMBERSHIP_ADDED_PREFIX } from './libraryDatabaseCatalog.ts'
+import type { CatalogEntity, CatalogKind, CatalogPage, CatalogQuery } from '../../shared/musicCatalog.ts'
 
 const track = (id: string, extra: Partial<TrackData> = {}): TrackData => ({
   id,
@@ -58,6 +59,155 @@ test('catalog shared count/page preserves kind counts, empty results and beyond-
   assert.equal(db.catalogQuery({ kind: 'album_project', limit: 1 }).total, 2)
   const empty = db.catalogQuery({ kind: 'recording', search: 'no such title' })
   assert.equal(empty.total, 0); assert.deepEqual(empty.items, [])
+})
+
+/** Independent oracle using the complete original effective-binding view. */
+function bindingViewPage(db: LibraryDatabase, query: CatalogQuery): CatalogPage {
+  const conditions = ['e.kind=?'], params: SQLInputValue[] = [query.kind]
+  if (query.scope !== 'all')
+    conditions.push('EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id)')
+  if (query.source) {
+    conditions.push('s.provider=?')
+    params.push(query.source)
+  }
+  if (query.search) {
+    conditions.push("instr(lower(e.title || ' ' || e.artist),lower(?))>0")
+    params.push(query.search)
+  }
+  const context = query.context
+  if (context) {
+    conditions.push("s.availability<>'missing'", `s.provider<>'local' OR (
+      EXISTS(SELECT 1 FROM tracks t WHERE t.id=s.track_id) AND
+      NOT EXISTS(SELECT 1 FROM catalog_pending p WHERE p.track_id=s.track_id))`)
+    if (context.type === 'track') {
+      conditions.push('s.provider=? AND s.track_id=?')
+      params.push(context.provider, context.id)
+    } else if (context.type === 'native') {
+      if (query.kind === 'artist') {
+        conditions.push("e.id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.artist' AND key=?)")
+        params.push(JSON.stringify([context.provider, context.id]))
+      } else {
+        conditions.push("s.release_id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.release' AND key=?)")
+        params.push(JSON.stringify(['album', context.provider, `id:${context.id}`]))
+      }
+    } else {
+      throw new Error('Collection contexts are covered by CatalogReferences tests')
+    }
+  }
+  const rows = db.sql.prepare(`SELECT e.*,count(*) source_count FROM catalog_entity_sources b
+    JOIN catalog_sources s ON s.id=b.source_id JOIN catalog_entities e ON e.id=b.entity_id
+    WHERE ${conditions.map(value => `(${value})`).join(' AND ')}
+    GROUP BY e.id ORDER BY e.title COLLATE NOCASE,e.id`).all(...params)
+  const offset = query.offset ?? 0
+  return {
+    revision: db.catalogStatus().revision, offset, total: rows.length,
+    items: rows.slice(offset, offset + (query.limit ?? 200)).map(row => ({
+      id: String(row.id), kind: row.kind as CatalogKind, title: String(row.title),
+      artist: String(row.artist), identity: row.identity as CatalogEntity['identity'],
+      sourceCount: Number(row.source_count)
+    }))
+  }
+}
+
+test('kind-specific catalog pages match the full binding view across membership and manual-version states', t => {
+  const db = memory(t), local = track('shared', { title: 'alpha', album: 'First' }),
+    tie = track('tie', { title: 'Alpha', album: 'Second' }),
+    untagged = track('untagged', { title: '100% literal', artist: '', album: '' }),
+    online = track('shared', {
+      source: 'ncm', filePath: '', title: 'Alpha', albumId: 'native',
+      artists: [{ id: 42, name: 'Same artist' }]
+    }),
+    other = track('other', {
+      source: 'ncm', filePath: '', title: 'beta', albumId: 'other',
+      artists: [{ id: 42, name: 'Same artist' }]
+    }),
+    cached = track('cached', { source: 'ncm', filePath: '', title: 'alpha cache', albumId: 'cached' })
+  seed(db, [local, tie, untagged]); drain(db)
+  remote(db, [online, other])
+  let job = db.catalogSync({ kind: 'begin', revision: 2 })
+  job = db.catalogSync({ kind: 'append', ...job, tracks: [cached] })
+  db.catalogSync({ kind: 'abort', id: job.id })
+  db.sql.prepare('INSERT INTO catalog_memberships VALUES(?,?)').run('another-owner', sourceId(db, local))
+  const kinds: CatalogKind[] = ['recording', 'release', 'artist', 'album_project']
+  function compare(state: string) {
+    const changes = db.sql.prepare('SELECT total_changes() n').get()!.n
+    for (const kind of kinds) {
+      const queries: CatalogQuery[] = [
+        { kind }, { kind, scope: 'all' }, { kind, scope: 'all', source: 'ncm' },
+        { kind, source: 'local' }, { kind, source: 'unavailable' },
+        { kind, search: 'alpha', limit: 1 }, { kind, search: 'ALPHA SAME ARTIST' },
+        { kind, scope: 'all', search: '%' }, { kind, search: 'not present' },
+        { kind, limit: 1 }, { kind, limit: 1, offset: 1 }, { kind, limit: 1, offset: 99 },
+        { kind, context: { type: 'track', provider: 'local', id: local.id } },
+        { kind, context: { type: 'track', provider: 'ncm', id: online.id } },
+        { kind, scope: 'all', context: { type: 'track', provider: 'ncm', id: cached.id } }
+      ]
+      if (kind !== 'recording') queries.push(
+        { kind, context: { type: 'native', provider: 'ncm', id: kind === 'artist' ? '42' : 'native' } },
+        { kind, source: 'local', context: { type: 'native', provider: 'ncm', id: kind === 'artist' ? '42' : 'native' } }
+      )
+      for (const query of queries)
+        assert.deepEqual(db.catalogQuery(query), bindingViewPage(db, query), `${state}: ${JSON.stringify(query)}`)
+    }
+    assert.equal(db.sql.prepare('SELECT total_changes() n').get()!.n, changes, 'queries are read-only')
+  }
+  compare('native sources, same-name ties and cache-only source')
+  const versions = emptyMusicVersions()
+  versions.tracks.versions = [{
+    id: 'joined', label: 'Alpha', sources: [versionSourceKey(local), versionSourceKey(online)],
+    preferredSource: versionSourceKey(online)
+  }]
+  versions.albums.versions = [{
+    id: 'joined', label: 'Edition', sources: [local, online].map(value =>
+      JSON.stringify(['album', value.source, getAlbumIdentity(value)])), preferredSource: null
+  }]
+  db.catalogProjectVersions(versions, 1)
+  compare('manual track and album bindings')
+  const joined = db.catalogQuery({ kind: 'recording' }).items.find(item => item.identity === 'manual')!
+  assert.equal(joined.sourceCount, 2, 'multiple membership owners do not multiply sources')
+  assert.equal(db.catalogQuery({ kind: 'recording', source: 'ncm' }).items.find(item => item.id === joined.id)!.sourceCount, 1)
+  db.patchTracks([{ id: local.id, expectedVersion: 1, patch: { title: 'Pending edit' } }])
+  compare('pending local projection')
+  assert.equal(db.catalogQuery({ kind: 'recording', context: { type: 'track', provider: 'local', id: local.id } }).total, 0)
+  assert.equal(db.catalogQuery({ kind: 'recording' }).items.find(item => item.id === joined.id)!.sourceCount, 2,
+    'default membership browsing retains the original pending-source contract')
+  db.sql.prepare("UPDATE catalog_sources SET availability='missing' WHERE source_key=?").run(versionSourceKey(online))
+  compare('missing remote source retains membership')
+  assert.equal(db.catalogQuery({ kind: 'recording', context: { type: 'track', provider: 'ncm', id: online.id } }).total, 0)
+  assert.equal(db.catalogQuery({ kind: 'recording' }).items.find(item => item.id === joined.id)!.sourceCount, 2)
+  seed(db, [tie, untagged])
+  compare('removed local Track before maintenance')
+  drain(db)
+  compare('removed local projection published')
+  db.catalogProjectVersions(emptyMusicVersions(), 2)
+  compare('manual bindings reset')
+})
+
+test('catalog query plans use one source relation and materialize only paging fields before the page', t => {
+  const db = memory(t)
+  seed(db, [track('one'), track('two')]); drain(db)
+  const prepare = db.sql.prepare.bind(db.sql), captured: string[] = []
+  t.mock.method(db.sql, 'prepare', (query: string) => {
+    if (query.startsWith('WITH candidates')) captured.push(query)
+    return prepare(query)
+  })
+  for (const kind of ['recording', 'release', 'artist', 'album_project'] as const) {
+    db.catalogQuery({ kind, limit: 2 })
+    const query = captured.at(-1)!
+    const plan = prepare(`EXPLAIN QUERY PLAN ${query}`).all(kind, 2, 0).map(row => String(row.detail))
+    assert.equal((query.match(/\bcatalog_sources\b/gu) ?? []).length, 1)
+    assert.equal(query.includes('catalog_bindings'), false)
+    assert.match(query, /matched AS MATERIALIZED \(SELECT e\.id,e\.title,c\.source_count/u)
+    assert.match(query, /LEFT JOIN page p ON 1 LEFT JOIN catalog_entities e ON e\.id=p\.id/u)
+    assert.ok(plan.some(detail => detail === 'MATERIALIZE matched'))
+    if (kind === 'artist') {
+      assert.equal(query.includes('catalog_versions'), false)
+    } else {
+      assert.match(query, new RegExp(`b.scope='${kind === 'recording' ? 'tracks' : 'albums'}'`, 'u'))
+      assert.equal(query.includes(`b.scope='${kind === 'recording' ? 'albums' : 'tracks'}'`), false)
+      assert.equal(plan.filter(detail => /SEARCH v USING INDEX/u.test(detail)).length, 1)
+    }
+  }
 })
 
 test('catalog incrementally preserves IDs across metadata edits, removal, reimport and selector changes', (t) => {

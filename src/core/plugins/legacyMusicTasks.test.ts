@@ -976,7 +976,7 @@ test('v19 upgrades snapshot the actual WAL data and seed manual input revisions'
   f.db.sql.exec(LEGACY_MUSIC_TASKS_SQL + 'PRAGMA user_version=19')
   const upgraded = new LibraryDatabase(f.path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 21)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
     assert.equal(
       upgraded.sql.prepare('SELECT revision FROM metadata_legacy_inputs').get()!.revision,
       8

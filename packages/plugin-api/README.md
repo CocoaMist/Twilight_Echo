@@ -53,3 +53,26 @@ handlers returning `PlatformMetadataResult`. Keep native IDs, source language
 (`und` when unknown), attribution and field permissions. The host caps declared
 permissions by its reviewed deployment policy. These methods do not replace
 the string-only `fetchArtistIntro` or the playback list `fetchAlbumTracks`.
+
+Optional `searchRecordingIdentities(query, limit, offset, context?)` returns
+`PlatformRecordingPage` for identity verification, independently of display/playback
+`searchSongs`. Return full titles, all ordered artist names and their native IDs
+(`null` for an unknown artist ID), original-precision seconds, the native album ID
+and title, and the independently reported search total (`null` when unknown).
+Do not include playback URLs, images or account data. Declare the handler explicitly
+under the `search` capability; older providers need not implement it. Core reads
+at most four ten-item pages and never treats a truncated or changing index as a
+unique identity match.
+Artists in these results may include official `aliases` belonging to their native
+ID; omit aliases when the ID is unknown. Optional
+`fetchArtistIdentity(artistId, context?)` returns `PlatformArtistIdentity` with the
+same native ID, its name and official aliases. Declare this handler under the
+`library` capability. Core uses it to check translated credits, shares cached
+lookups, and rejects an ID mismatch. Neither method changes older providers.
+
+An optional `artwork` array (up to three items) carries an HTTPS `resource`, source
+page `url`, revision, attribution, license information and optional usage restrictions.
+Images require an independent host approval; text rights do not authorize image use.
+Image-only responses use `status: 'ok'` with empty `texts`. Core keeps resource URLs
+private and supplies presentation clients with media handles. Older text-only responses
+remain valid.

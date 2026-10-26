@@ -242,6 +242,16 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
   `{ items: AlbumSummary[], total: number, incomplete?: boolean }`；`AlbumSummary.artist` 是可选展示字段。
   宿主仅对实际注册此方法的音源开放专辑搜索，并通过 request context 传递取消信号。
   供应商未报告总数、过滤了无效项或响应不完整时设置 `incomplete: true`；不能用当前数组长度证明完整搜索结果。
+- `search` 能力可选提供 `searchRecordingIdentities(query, limit, offset, context?)`，返回 SDK 的 `PlatformRecordingPage`。
+  返回原生歌曲 ID、完整曲名、全部有序艺人姓名／原生 ID（未知 ID 为 null）、原始精度秒数和所属专辑 ID／标题。
+  `total` 必须是服务独立报告的总数，未知为 null；不携带播放 URL、图片或账号数据。Core 最多读取四页、每页十项，
+  分页总数变化、重复条目、超出预算或缺少校验字段时不自动确认。旧 `searchSongs` 的行为不变，旧插件无须新增此方法。
+- `library` 能力可选提供 `fetchArtistIdentity(artistId, context?)`，返回 SDK 的 `PlatformArtistIdentity`：
+  相同原生 ID、姓名与官方别名 `aliases`。`searchRecordingIdentities` 的艺人也可携带归属于自身原生 ID 的官方别名，
+  未知 ID 不得携带别名。Core 按具体 ID 缓存核对，拒绝错 ID 和配置变化后的迟到响应；旧插件无须新增方法。
+  内置网易云匿名读取 `/artist/detail` 的姓名、别名与译名，不返回图片、账号或播放信息。
+  无文件歌曲 ID 时，Core 结合原始曲名、时长、完整合作署名与专辑进行核对；搜索过宽时加入已观察的专辑名重查，
+  不将截断搜索当作唯一命中，也不按姓名跨条目传播已确认身份。
 - `playlist` 能力可选提供 `fetchAlbumIdentity(albumId, context?)`，返回 SDK 的 `PlatformAlbumIdentity` v1。
   该方法用于本地与平台的专辑身份核对，须实际注册 handler；旧 `fetchAlbumTracks(): Track[]` 继续负责播放曲目表。
   返回自身 provider、原生专辑 ID、完整标题和结构化艺人，独立服务总数 `trackCount`、取全标志 `complete`，
@@ -256,13 +266,18 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
   `not_found / not_provided / unsupported`。请求故障走原异常通道，不用空正文掩盖错误。
   DTO 保留 provider、原生 ID、artist／release 层次及最多 8 条纯文本（每条最多 20,000 字符），
   每条保留原语言、来源页面、修订、署名、许可与可选用途声明；来源未说明语言时用 `und`。
+  可选 `artwork` 最多 3 条，携带 HTTPS `resource`、来源 `url`、`revision`、`attribution`、
+  `license`、`licenseUrl` 和可选 `usage`；无正文但有图片时可以返回 `ok` 和空 `texts`。
+  图片用途由宿主独立核准，不继承文字许可；原始资源 URL 只进入 Core 私有记录，界面仅获得图片句柄。
   `display / cache / crossSource / export` 受宿主部署已核准的文字权限进一步限制；未提供 usage 不表示允许所有用途。
   只有实际注册的新方法才参与能力路由；旧 `fetchArtistIntro(): string` 和 `fetchAlbumTracks(): Track[]` 不改变。
-  内置网易云实现了新人物／专辑正文方法，核对原生 ID，允许匿名请求并传递取消上下文，不推断图片许可或物理压片。
+  内置网易云核对原生 ID，匿名获取人物完整简介／头像和具体发行的简介／图片，保留取消上下文；
+  图片只取人物自身字段或该发行封面，不推断开放许可或物理压片。本地资料按字段兜底，不取代已有公共源或手工内容。
+  已确认身份可在版本校验后的人工复核中补充尚未归属其他身份的网易云引用；该操作不替换原身份、不合并不同目标。
 - 网易云音乐是 Twilight Echo 自带基础 `MediaProvider` 插件：插件 ID 为
   `com.twilightecho.provider.ncm`，provider 前缀固定为 `ncm`，随软件分发并默认启用；
   用户可停用以隔离故障或隐藏在线音源，但不可像第三方插件一样卸载。
-  内置网易云支持未登录的专辑搜索和曲目读取；已有登录 Cookie 时继续随请求携带。
+  内置网易云支持未登录的歌手／专辑搜索和曲目读取；已有登录 Cookie 时继续随请求携带。
   启动恢复登录须等待音源注册完成；登录检查失败或未返回用户资料时保留加密 Cookie，
   供后续检查重试，仅显式退出登录时删除凭据。
   `library` 能力可选提供 `fetchSavedAlbums()` / `fetchSavedArtists()`，返回标准

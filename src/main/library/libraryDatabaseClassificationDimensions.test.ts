@@ -134,6 +134,35 @@ test('technical dimensions keep unknowns and constrain format/depth/rate to one 
   ])
 })
 
+test('technical values and unknowns are single-valued without a repeated payload fallback', t => {
+  const { sql, source } = fixture(t)
+  const cases = [
+    { payload: { format: ' flac ', bitDepth: 24, sampleRate: 96000 }, values: ['FLAC', '24', '96000'] },
+    { payload: {}, values: ['unknown', 'unknown', 'unknown'] },
+    { payload: { format: null, bitDepth: null, sampleRate: null }, values: ['unknown', 'unknown', 'unknown'] },
+    { payload: { format: 42, bitDepth: '24', sampleRate: '44100' }, values: ['unknown', 'unknown', 'unknown'] },
+    { payload: { format: ['FLAC'], bitDepth: true, sampleRate: {} }, values: ['unknown', 'unknown', 'unknown'] },
+    { payload: { format: ' ', bitDepth: 0, sampleRate: -1 }, values: ['unknown', 'unknown', 'unknown'] },
+    { payload: { format: 'x'.repeat(65), bitDepth: 24.5, sampleRate: 44100.5 }, values: ['unknown', 'unknown', 'unknown'] },
+    { payload: { format: 'x'.repeat(64), bitDepth: 16.0, sampleRate: 44100.0 }, values: ['X'.repeat(64), '16', '44100'] }
+  ]
+  cases.forEach(({ payload }, index) => source(String(index), 'local', `r:${index}`, null, payload))
+  const dimensions = ['format', 'bitDepth', 'sampleRate'] as const
+  const q = classificationDimensionsCtes('recording', 1000, {}, 1000, dimensions)
+  const graph = `WITH scoped_sources AS (SELECT * FROM catalog_sources),${q.sql}`
+  const rows = sql.prepare(`${graph} SELECT * FROM source_dimensions ORDER BY source_id,dimension`).all(...q.params)
+  assert.equal(rows.length, cases.length * dimensions.length)
+  cases.forEach(({ values }, index) => dimensions.forEach((dimension, dimensionIndex) => {
+    assert.deepEqual(rows.filter(row => row.source_id === String(index) && row.dimension === dimension).map(row => row.value),
+      [values[dimensionIndex]])
+  }))
+  assert.deepEqual(sql.prepare(`${graph} SELECT * FROM dimension_known_values`).all(...q.params), [])
+  assert.deepEqual(sql.prepare(`${graph} SELECT * FROM dimension_names`).all(...q.params), [])
+  const plan = sql.prepare(`EXPLAIN QUERY PLAN ${graph} SELECT * FROM source_dimensions`).all(...q.params)
+  assert.equal(plan.filter(row => /^(SCAN|SEARCH) c( USING|$)/.test(String(row.detail))).length, 3)
+  assert.equal(plan.some(row => String(row.detail).includes('CORRELATED SCALAR SUBQUERY')), false)
+})
+
 test('project first year, release year, country and type use only their confirmed layer', (t) => {
   const { sql, source, link, fact, values } = fixture(t)
   source('one', 'local', 'recording:one', 'release:one', { releaseDate: '2020-03-15' })
@@ -160,6 +189,42 @@ test('project first year, release year, country and type use only their confirme
     .run()
   assert.deepEqual(values('one', 'region'), ['unknown'])
   assert.deepEqual(values('one', 'releaseYear'), ['2020'])
+})
+
+test('requested dimensions map only their metadata layers and fields, skipping absent facts without losing native fallback', t => {
+  const { sql, source, link, fact } = fixture(t)
+  source('one', 'local', 'recording:one', 'release:one', { releaseDate: '2020-03-15', format: 'flac' })
+  sql.prepare('INSERT INTO catalog_release_projects VALUES(?,?)').run('release:one', 'project:one')
+  for (const id of ['recording:one', 'release:one', 'project:one']) link(id)
+  fact('recording:one', 'introduction', 'Recording introduction')
+  fact('release:one', 'introduction', 'Release introduction')
+  const read = (requested: ClassificationDimension[], relation: string, kind: 'recording' | 'release' = 'recording') => {
+    const q = classificationDimensionsCtes(kind, 1000, {}, 1000, requested)
+    return sql.prepare(`WITH scoped_sources AS (SELECT * FROM catalog_sources),${q.sql} SELECT * FROM ${relation}`)
+      .all(...q.params).map(row => ({ ...row }))
+  }
+  assert.deepEqual(read(['releaseYear'], 'dimension_source_entities'), [])
+  assert.deepEqual(read(['releaseYear'], 'source_dimensions'), [{ source_id: 'one', dimension: 'releaseYear', value: '2020' }])
+  assert.deepEqual(read(['format'], 'dimension_source_entities'), [])
+  assert.deepEqual(read(['format'], 'source_dimensions'), [{ source_id: 'one', dimension: 'format', value: 'FLAC' }])
+  fact('recording:one', 'releaseDate', '1990')
+  fact('release:one', 'releaseDate', '2011')
+  fact('release:one', 'country', 'GB')
+  fact('project:one', 'firstReleaseDate', '1973')
+  fact('project:one', 'primaryType', 'Album')
+  assert.deepEqual(read(['releaseYear'], 'dimension_source_entities'), [{ source_id: 'one', entity_id: 'release:one', kind: 'release' }])
+  assert.deepEqual(read(['releaseYear'], 'dimension_facts').map(row => [row.kind, row.field, row.value]), [['release', 'releaseDate', '2011']])
+  assert.deepEqual(read(['projectYear', 'albumType'], 'dimension_facts').map(row => [row.kind, row.field]).sort(),
+    [['album_project', 'firstReleaseDate'], ['album_project', 'primaryType']])
+  for (const kind of ['recording', 'release'] as const) {
+    const fields = read(['management'], 'dimension_facts', kind)
+    assert.deepEqual(fields.map(row => [row.kind, row.field]), [[kind, 'introduction']])
+  }
+  const full = classificationDimensionsCtes('recording', 1000)
+  const all = sql.prepare(`WITH scoped_sources AS (SELECT * FROM catalog_sources),${full.sql} SELECT * FROM source_dimensions`).all(...full.params)
+  for (const dimension of ['format', 'region', 'releaseYear', 'projectYear', 'albumType', 'management'] as const)
+    assert.deepEqual(read([dimension], 'source_dimensions').sort((a, b) => String(a.value).localeCompare(String(b.value))),
+      all.filter(row => row.dimension === dimension).map(row => ({ ...row })).sort((a, b) => String(a.value).localeCompare(String(b.value))))
 })
 
 test('date classification accepts actual precision, not invalid dates or name-like prefixes', (t) => {

@@ -118,6 +118,39 @@ const provider = (extra: Partial<MetadataProvider> = {}): MetadataProvider => ({
   enrich: async () => [structuredClone(intro)],
   ...extra
 })
+
+test('public NCM rate limits remain durable retries even after the ordinary error budget', async t => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  const [entityId] = seed(db)
+  const published = db.identificationPublish(db.identificationInput(entityId), [{
+    provider: 'ncm', name: '周杰伦', summary: '', matcherVersion: 'fixture',
+    references: [{ provider: 'ncm', kind: 'artist', idType: 'native', value: '42' }],
+    evidence: { origin: 'search', matches: ['name'], missing: [], conflicts: [], incomplete: false, provenance: 'fixture' }
+  }], 1000)[0]
+  db.identificationDecide({ candidateId: published.id, revision: published.revision, linkRevision: published.linkRevision, decision: 'confirm' }, 1001)
+  let now = 2000
+  const failures: unknown[] = []
+  const makeService = () => new CoreEntityMetadataService({
+    database: asyncDb(db), provider: provider(), policy: () => policy, now: () => now,
+    changed() {}, failed: e => failures.push(e), enrichmentProviders: () => [{
+      id: 'platform.ncm', supports: () => true, blockedReason: () => null, context: () => 'public',
+      enrich: async () => { throw new Error('NCM_METADATA_RATE_LIMITED') }
+    }]
+  })
+  const job = db.metadataEnqueue({ entityId, type: 'enrich', provider: 'platform.ncm', language: 'en', batchId: 'rate-test', providerContext: 'public' }, now)
+  for (let i = 0; i < 6; i++) {
+    const service = makeService(); service.activate()
+    await until(() => { const saved = db.metadataJobs({ jobId: job.id }).items[0]; return saved.state === 'retry_wait' && saved.attempts >= i + 1 })
+    const saved = db.metadataJobs({ jobId: job.id }).items[0]
+    assert.equal(saved.reason, 'platform_metadata_rate_limited')
+    assert.ok(saved.nextAttemptAt >= now + 60_000)
+    await service.shutdown()
+    now = saved.nextAttemptAt + 1
+  }
+  assert.ok(db.metadataJobs({ jobId: job.id }).items[0].attempts >= 6)
+  assert.deepEqual(failures, [])
+})
 function resolve(db: LibraryDatabase, entityId: string, batchId = 'identify') {
   const job = db.metadataEnqueue(
     { entityId, mbid: MBID, language: 'zh-Hans', batchId, type: 'resolve' },
@@ -422,7 +455,7 @@ test('v12 migration makes a consistent backup, preserves catalog IDs and rolls b
     db.sql.exec(LEGACY_METADATA_SCHEMA_SQL + 'PRAGMA user_version=12;')
     db.close()
     db = new LibraryDatabase(path)
-    assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 28)
+    assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
     assert.deepEqual(
       db.catalogQuery({ kind: 'artist' }).items.map((e) => e.id),
       ids
@@ -675,6 +708,23 @@ test('exact MB → reciprocal Wikidata → Wikipedia preserves language, revisio
     async () => new Response(JSON.stringify({ id: 'wrong', name: 'Same', type: 'Person' }))
   )
   await assert.rejects(wrong.resolve(MBID, new AbortController().signal), MetadataIdentityError)
+})
+
+test('exact artist lookups accept an unknown MusicBrainz subtype without inventing biography or identity errors', async () => {
+  for (const type of [null, undefined]) {
+    const p = new MusicBrainzWikiProvider(() => policy, async () =>
+      new Response(JSON.stringify({ id: MBID, name: 'BilliumMoto', type, relations: [] })))
+    const identity = await p.resolve(MBID, new AbortController().signal)
+    assert.equal(identity?.type, '')
+    assert.equal(identity?.wikidataId, null)
+    const facts = await p.enrich(MBID, 'en', new AbortController().signal)
+    assert.deepEqual(facts.map(fact => [fact.field, fact.value]), [['name', 'BilliumMoto']])
+  }
+  for (const type of ['Recording', '', {}, ['Person']]) {
+    const p = new MusicBrainzWikiProvider(() => policy, async () =>
+      new Response(JSON.stringify({ id: MBID, name: 'Artist', type })))
+    await assert.rejects(p.resolve(MBID, new AbortController().signal), MetadataIdentityError)
+  }
 })
 
 test('HTTP request dedup isolates consumer cancellation; shared host budget serializes old/new adapters and honors Retry-After', async () => {

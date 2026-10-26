@@ -44,3 +44,17 @@ test('Core artwork projects cache handles and re-grants durable or session image
   controller.abort()
   await assert.rejects(project({ cover: null, coverSource: null }, controller.signal), { name: 'AbortError' })
 })
+
+test('only approved non-expiring metadata is retained, and disk failures preserve display', async () => {
+  let saves = 0
+  const project = createArtworkProjection({ normalizeCachedCover: async h => h, migrateBase64Cover:()=>null,
+    grant:()=> 'twilight-media://image/photo', resolve:()=>({source:'https://example.com/photo.jpg'}),
+    retainMetadata:async()=>{saves++;throw Error('disk full')} })
+  const signal=new AbortController().signal
+  const input={cover:'https://example.com/photo.jpg',coverSource:null}
+  await project(input,signal)
+  await project({...input,retainMetadata:true,imageExpiresAt:Date.now()+1000},signal)
+  assert.equal(saves,0)
+  assert.equal((await project({...input,retainMetadata:true},signal)).cover,'twilight-media://image/photo')
+  assert.equal(saves,1)
+})

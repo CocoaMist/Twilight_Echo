@@ -30,6 +30,7 @@ import { LibraryDatabaseLegacyTasks } from './libraryDatabaseLegacyTasks.ts'
 import type { LibraryDatabaseLegacyMusic } from './libraryDatabaseLegacyMusic.ts'
 import type { IdentificationScheduleRequest } from '../../shared/musicIdentificationSchedule.ts'
 import { parsePersonalMusicArtwork } from '../../shared/personalMusicArtwork.ts'
+import { isPublicMetadataSource, metadataProviderReference, selectMetadataIntroduction } from '../../shared/metadataProviders.ts'
 
 export const ENTITY_METADATA_SCHEMA_SQL = `
 CREATE TABLE metadata_entities(id TEXT PRIMARY KEY, provider TEXT NOT NULL, kind TEXT NOT NULL,
@@ -186,10 +187,10 @@ export class LibraryDatabaseEntityMetadata {
     const importedClear = imports.some(item => item.descriptionCleared)
     const languages =
       language === 'en'
-        ? ['en', 'und']
+        ? ['en', 'und', 'ja']
         : language === 'zh-Hant'
-          ? ['zh-Hant', 'zh', 'zh-Hans', 'en', 'und']
-          : ['zh-Hans', 'zh', 'zh-Hant', 'en', 'und']
+          ? ['zh-Hant', 'zh', 'zh-Hans', 'en', 'und', 'ja']
+          : ['zh-Hans', 'zh', 'zh-Hant', 'en', 'und', 'ja']
     // Choose language before provider. Platform pages favor their own source;
     // shared local text favors Wikipedia at the same language and field.
     facts.sort((a, b) => {
@@ -197,13 +198,10 @@ export class LibraryDatabaseEntityMetadata {
         ? 0 : f.attribution.provider === 'wikipedia' ? 1 : f.sourceProvider ? 3 : 2
       return rank(a) - rank(b)
     })
-    const select = (items: EntityMetadataFact[]) =>
-      languages.flatMap(lang => items.filter(f => metadataLanguageFamily(f.language) === lang && f.field === 'introduction'))[0] ??
-      languages.flatMap(lang => items.filter(f => metadataLanguageFamily(f.language) === lang && f.field === 'description'))[0]
     // A preference only ranks the facts already authorised for this source/account.
     // An unavailable source stays saved and falls back; it never starts a request.
-    const preferred = preferredProvider ? select(facts.filter(f => f.attribution.provider === preferredProvider)) : undefined
-    const selected = preferred ?? select(facts)
+    const preferred = preferredProvider ? selectMetadataIntroduction(facts.filter(f => f.attribution.provider === preferredProvider), language) : undefined
+    const selected = preferred ?? selectMetadataIntroduction(facts, language, sourceProvider === 'local')
     return {
       entityId: id,
       targetId,
@@ -235,7 +233,7 @@ export class LibraryDatabaseEntityMetadata {
               attribution: null
             }
         : importedClear ? null
-        : retainedIntroduction && (personalImport(retainedIntroduction) || !selected)
+        : retainedIntroduction && (personalImport(retainedIntroduction) || !selected || (!preferred && selected.attribution.provider === 'platform.ncm'))
           ? { value: retainedIntroduction.description!, language: 'und', origin: 'imported', attribution: null }
         : selected
           ? {
@@ -262,14 +260,18 @@ export class LibraryDatabaseEntityMetadata {
   }
   artwork(id: string, options: EntityMetadataReadOptions): MetadataArtworkRecord[] {
     const subject = this.subject(id)
-    if ((options.artworkTargetId !== undefined && options.artworkTargetId !== subject.target_id) ||
+    if ((options.artworkTargetId !== undefined && options.artworkTargetId !== (subject.state === 'confirmed' ? String(subject.target_id) : null)) ||
       (options.artworkRevision !== undefined && options.artworkRevision !== Number(subject.revision ?? 0))) throw stale()
-    if (subject.state !== 'confirmed' || !options.artworkContext) return []
-    return this.sql.prepare("SELECT payload FROM metadata_facts WHERE target_id=? AND provider='public-artwork' AND field='artwork' ORDER BY CASE language WHEN 'release' THEN 0 ELSE 1 END LIMIT 3")
-      .all(String(subject.target_id)).map(row => decode<MetadataArtworkRecord>(row)!)
-      .filter(image => image.providerContext === options.artworkContext && image.usage.display && image.usage.cache && image.usage.crossSource &&
-        (image.usage.expiresAt === undefined || image.usage.expiresAt > (options.now ?? Date.now())))
-      .slice(0, 1)
+    const contexts = { ...(options.artworkContext ? { 'public-artwork': options.artworkContext } : {}), ...options.artworkContexts }
+    if (subject.state !== 'confirmed' || !Object.keys(contexts).length) return []
+    return this.sql.prepare(`SELECT provider,payload FROM metadata_facts WHERE target_id=? AND field='artwork'
+      ORDER BY CASE provider WHEN 'public-artwork' THEN 0 WHEN 'platform.ncm' THEN 2 ELSE 1 END,provider,CASE language WHEN 'release' THEN 0 ELSE 1 END LIMIT 16`)
+      .all(String(subject.target_id)).flatMap(row => {
+        const image = decode<MetadataArtworkRecord>(row)!
+        return contexts[String(row.provider)] && image.providerContext === contexts[String(row.provider)] &&
+          image.usage.display && image.usage.cache && image.usage.crossSource &&
+          (image.usage.expiresAt === undefined || image.usage.expiresAt > (options.now ?? Date.now())) ? [image] : []
+      }).slice(0, 1)
   }
   private save(job: EntityMetadataJob, input?: string, key?: string) {
     this.sql
@@ -312,10 +314,10 @@ export class LibraryDatabaseEntityMetadata {
       if (type === 'enrich' && provider === 'musicbrainz-wiki' && (subject.kind !== 'artist' || !subject.mbid))
         throw new Error('当前人物尚未关联 MusicBrainz，不能请求百科资料')
       const entityId = type === 'enrich' ? String(subject.target_id) : request.entityId
-      const typedProvider = ['musicbrainz-details', 'public-artwork'].includes(provider) ? 'musicbrainz' : provider.startsWith('platform.') ? provider.slice(9) : null
-      const native = typedProvider ? this.sql.prepare(`SELECT value FROM metadata_identity_refs
-        WHERE target_id=? AND provider=? AND kind=? AND id_type=?`).get(entityId, typedProvider, String(subject.kind), typedProvider === 'musicbrainz' ? 'mbid' : 'native') : undefined
-      if (typedProvider && !native) throw new Error('当前实体没有该供应商的已确认身份')
+      const typedProvider = provider !== 'musicbrainz-wiki'
+      const native = typedProvider ? metadataProviderReference(provider, subject.kind as EntityMetadataJob['entityKind'] & string,
+        this.identification.detail(request.entityId).references) : undefined
+      if (typedProvider && !native) throw new Error('当前实体没有该资料源可验证的身份，请先查找并核对身份')
       const externalId = native ? String(native.value) : type === 'resolve' ? mbid!.toLowerCase() : String(subject.mbid)
       const key = JSON.stringify([entityId, provider, request.language, type, externalId, ...(providerContext ? [providerContext] : [])])
       const input = this.input(entityId, type)
@@ -593,9 +595,7 @@ export class LibraryDatabaseEntityMetadata {
           !this.liveConsumer(item.entityId, job.entityId)) throw stale()
         if (job.provider !== 'musicbrainz-wiki' &&
           (!Object.hasOwn(contexts, job.provider) || (job.providerContext ?? '') !== contexts[job.provider])) throw stale()
-        const provider = job.provider.startsWith('platform.') ? job.provider.slice(9) : 'musicbrainz'
-        if (!identity.references.some(r => r.provider === provider && r.kind === input.kind &&
-          r.idType === (provider === 'musicbrainz' ? 'mbid' : 'native') && r.value === job.externalId)) throw stale()
+        if (metadataProviderReference(job.provider, input.kind, identity.references)?.value !== job.externalId) throw stale()
         return job
       })
       const batchId = request.demandId
@@ -692,6 +692,8 @@ export class LibraryDatabaseEntityMetadata {
       this.sql.prepare(`DELETE FROM metadata_facts WHERE rowid IN (SELECT rowid FROM metadata_facts
         WHERE json_extract(payload,'$.usage.expiresAt')<=? LIMIT 100)`).run(now)
       const turn = Number(this.sql.prepare("SELECT value FROM metadata_identification_schedule_state WHERE key='claim_turn'").get()?.value ?? 0)
+      // A requested profile refresh must not sit behind a library-wide identity
+      // backlog. Keep FIFO within updates and the existing fourth-turn fairness.
       for (let checked = 0; checked < 100; checked++) {
         const row = this.sql
           .prepare(
@@ -701,8 +703,11 @@ export class LibraryDatabaseEntityMetadata {
             ORDER BY CASE WHEN ?%4=3 AND next_attempt<=?-60000 AND
               NOT EXISTS(SELECT 1 FROM metadata_demands d WHERE d.job_id=j.id AND NOT EXISTS(SELECT 1 FROM metadata_identification_schedule a WHERE a.demand_id=d.batch_id)) THEN 0
               WHEN EXISTS(SELECT 1 FROM metadata_demands d WHERE d.job_id=j.id AND NOT EXISTS(SELECT 1 FROM metadata_identification_schedule a WHERE a.demand_id=d.batch_id)) THEN 1 ELSE 2 END,
+              CASE WHEN json_extract(payload,'$.type')='enrich' AND EXISTS(SELECT 1 FROM metadata_demands d WHERE d.job_id=j.id AND NOT EXISTS(SELECT 1 FROM metadata_identification_schedule a WHERE a.demand_id=d.batch_id)) THEN 0 ELSE 1 END,
               CASE WHEN EXISTS(SELECT 1 FROM metadata_demands d WHERE d.job_id=j.id AND NOT EXISTS(SELECT 1 FROM metadata_identification_schedule a WHERE a.demand_id=d.batch_id)) THEN 0
                 WHEN EXISTS(SELECT 1 FROM metadata_demands d JOIN metadata_identification_schedule s ON s.demand_id=d.batch_id WHERE d.job_id=j.id AND s.origin='new') THEN 0 ELSE 1 END,
+              CASE WHEN json_extract(payload,'$.type')='enrich' THEN 0
+                WHEN json_extract(payload,'$.provider')='platform.ncm' THEN 1 ELSE 2 END,
               CASE WHEN EXISTS(SELECT 1 FROM metadata_demands d WHERE d.job_id=j.id AND NOT EXISTS(SELECT 1 FROM metadata_identification_schedule a WHERE a.demand_id=d.batch_id)) THEN 0
                 ELSE CASE coalesce(json_extract(payload,'$.entityKind'),(SELECT kind FROM catalog_entities e WHERE e.id=j.entity_id)) WHEN 'album_project' THEN 0 WHEN 'release' THEN 1 ELSE 2 END END,
               next_attempt,rowid LIMIT 1`
@@ -864,7 +869,14 @@ export class LibraryDatabaseEntityMetadata {
           this.owner.exploration?.().ingest(result.exploration)
         }
         if (result.artwork?.length) {
-          if (result.artwork.length > 3 || job.provider !== 'public-artwork') throw new Error('Invalid artwork result')
+          if (result.artwork.length > 3 || (job.provider !== 'public-artwork' && !isPublicMetadataSource(job.provider) && !job.provider.startsWith('platform.')) ||
+            result.artwork.some(image => image.providerContext !== job.providerContext ||
+              (job.provider.startsWith('platform.') && (image.scope !== job.entityKind ||
+                image.targetRef?.provider !== job.provider.slice(9) || image.targetRef.kind !== job.entityKind ||
+                image.targetRef.idType !== 'native' || image.targetRef.value !== image.targetId ||
+                image.attribution.provider !== job.provider || image.attribution.externalId !== image.targetId)) ||
+              (isPublicMetadataSource(job.provider) && (image.scope !== job.entityKind || image.targetRef?.provider !== job.provider ||
+                image.targetRef.value !== image.targetId)))) throw new Error('Invalid artwork result')
           // Replace this adapter's successful selection. Empty/missing images do
           // not clear old permitted resources, embedded art or personal choices.
           this.sql.prepare("DELETE FROM metadata_facts WHERE target_id=? AND provider=? AND field='artwork'").run(job.entityId, job.provider)

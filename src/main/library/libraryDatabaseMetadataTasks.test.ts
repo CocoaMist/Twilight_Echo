@@ -4,6 +4,8 @@ import { LibraryDatabase } from './libraryDatabase.ts'
 import type { EntityMetadataJob, EntityMetadataState } from '../../shared/entityMetadata.ts'
 import { validMetadataTasksPayload } from '../../shared/entityMetadataTasks.ts'
 import { isCoreRequest, coreOperation } from '../../shared/coreProtocol.ts'
+import { emptyMusicVersions } from '../../shared/musicVersions.ts'
+import type { CatalogEntityReference } from '../../shared/musicCatalog.ts'
 
 const MBID = 'a223958d-5c56-4b2c-a30a-87e357bc121b'
 function fixture(t: test.TestContext, count = 8) {
@@ -194,6 +196,190 @@ test('old jobs remain visible after source removal but do not offer an obsolete 
   assert.equal(db.metadataTasks({}).items[0].entity, null)
   assert.equal(db.metadataTasks({}).items[0].id, job.id)
   assert.equal(db.metadataJobs({}).total, 1)
+})
+
+function identify(db: LibraryDatabase, entities: CatalogEntityReference[]) {
+  return entities.map(entity => db.identificationEnqueue({
+    entityId: entity.id, batchId: 'review', providers: [{ id: 'fixture', matcherVersion: '1' }]
+  }, 1000)[0])
+}
+
+test('explicit profile updates overtake an identification backlog while retaining update FIFO', (t) => {
+  const { db, entities } = fixture(t, 4)
+  identify(db, entities.slice(0, 3))
+  const entityId = entities[3].id
+  const [candidate] = db.identificationPublish(db.identificationInput(entityId), [{
+    provider: 'musicbrainz', name: 'Artist 3', summary: '', matcherVersion: 'fixture',
+    references: [{ provider: 'musicbrainz', kind: 'artist', idType: 'mbid', value: MBID }],
+    evidence: { origin: 'explicit_id', matches: ['explicit_id'], missing: [], conflicts: [],
+      incomplete: false, provenance: 'fixture' }
+  }], 1001)
+  db.identificationDecide({ candidateId: candidate.id, revision: candidate.revision,
+    linkRevision: candidate.linkRevision, decision: 'confirm' }, 1002)
+  const updates = (['en', 'zh-Hans'] as const).map(language => db.metadataEnqueue({
+    entityId, language, type: 'enrich', provider: 'musicbrainz-details', batchId: 'profile-update'
+  }, 2000))
+  for (const update of updates) {
+    const work = db.metadataClaim(2000)!
+    assert.equal(work.job.id, update.id)
+    db.metadataFinish(work, { state: 'completed', facts: [], outcome: 'not_found' }, 2001)
+  }
+  assert.equal(db.metadataClaim(2001)!.job.type, 'identify')
+})
+
+test('all review kinds require live membership and a published local source, not a same-ID platform source', t => {
+  const { db } = fixture(t, 1)
+  const entities = db.sql.prepare(`SELECT e.* FROM catalog_entities e
+    JOIN catalog_entity_sources b ON b.entity_id=e.id
+    JOIN catalog_sources s ON s.id=b.source_id WHERE s.provider='local'`).all()
+    .map(row => ({ id: String(row.id), kind: row.kind, title: row.title, artist: row.artist }) as CatalogEntityReference)
+  assert.equal(entities.length, 4)
+  const jobs = identify(db, entities)
+  const references = () => db.metadataTasks({}).items.map(item => item.entity?.id ?? null)
+  assert.ok(references().every(Boolean))
+  db.sql.prepare('INSERT INTO catalog_pending VALUES(?)').run('track-0')
+  assert.deepEqual(references(), [null, null, null, null])
+  db.sql.prepare('DELETE FROM catalog_pending WHERE track_id=?').run('track-0')
+  assert.ok(references().every(Boolean))
+  db.sql.prepare("DELETE FROM catalog_memberships WHERE owner='local'").run()
+  assert.deepEqual(references(), [null, null, null, null], 'cached projections alone are not members')
+  db.sql.prepare("INSERT INTO catalog_memberships SELECT 'local',id FROM catalog_sources").run()
+  db.sql.prepare("UPDATE catalog_sources SET availability='missing'").run()
+  assert.deepEqual(references(), [null, null, null, null])
+  db.sql.prepare("UPDATE catalog_sources SET availability='indexed'").run()
+  let sync = db.catalogSync({ kind: 'begin', revision: 1 })
+  sync = db.catalogSync({ kind: 'append', ...sync, tracks: [{
+    id: 'track-0', source: 'ncm', title: 'Online song', artist: 'Other artist', album: 'Other album',
+    albumId: 'other', filePath: '', fileName: '', size: 0, duration: 1, cover: null, lyrics: null
+  }] })
+  db.catalogSync({ kind: 'commit', ...sync })
+  const online = db.catalogQuery({ kind: 'recording', source: 'ncm' }).items[0]
+  identify(db, [online])
+  db.sql.prepare('DELETE FROM tracks WHERE id=?').run('track-0')
+  db.sql.prepare('DELETE FROM catalog_pending WHERE track_id=?').run('track-0')
+  const page = db.metadataTasks({})
+  assert.equal(page.items.find(item => item.entity?.id === online.id)?.entity?.id, online.id)
+  assert.ok(page.items.filter(item => jobs.some(job => job.id === item.id))
+    .every(item => item.entity === null), 'a platform Track ID cannot make removed local bindings live')
+})
+
+test('review entries follow effective manual recording, release and project bindings and reverse on reset', t => {
+  const { db } = fixture(t, 1)
+  const original = db.getTracksByIds(['track-0']).catalog!.tracks[0]!.items
+    .filter(item => item.kind !== 'artist')
+  identify(db, original)
+  const source = db.sql.prepare("SELECT source_key,album_key FROM catalog_sources WHERE provider='local'").get()!
+  const versions = emptyMusicVersions()
+  versions.tracks.versions.push({ id: 'recording', label: 'Manual recording', sources: [String(source.source_key)], preferredSource: null })
+  versions.albums.versions.push({ id: 'release', label: 'Manual release', sources: [String(source.album_key)], preferredSource: null })
+  db.catalogProjectVersions(versions, 1)
+  const effective = db.getTracksByIds(['track-0']).catalog!.tracks[0]!.items
+    .filter(item => item.kind !== 'artist')
+  assert.equal(effective.length, 3)
+  identify(db, effective)
+  const check = (live: CatalogEntityReference[], removed: CatalogEntityReference[]) => {
+    const page = db.metadataTasks({})
+    assert.equal(page.total, 6)
+    assert.deepEqual(page.items.filter(item => item.entity).map(item => item.entity!.id).sort(), live.map(item => item.id).sort())
+    for (const entity of removed) assert.equal(page.items.find(item => item.title === entity.title)!.entity, null)
+  }
+  check(effective, original)
+  db.sql.prepare('INSERT INTO catalog_pending VALUES(?)').run('track-0')
+  assert.ok(db.metadataTasks({}).items.every(item => item.entity === null))
+  db.sql.prepare('DELETE FROM catalog_pending WHERE track_id=?').run('track-0')
+  db.catalogProjectVersions(emptyMusicVersions(), 2)
+  check(original, effective)
+})
+
+test('task-page liveness seeks only displayed review entities and reuses repeated entity checks', t => {
+  const { db, entities } = fixture(t, 3)
+  identify(db, entities)
+  const jobs = db.identificationEnqueue({ entityId: entities[2].id, batchId: 'page', providers: [
+    { id: 'second', matcherVersion: '1' }, { id: 'third', matcherVersion: '1' }
+  ] }, 1000)
+  const prepare = db.sql.prepare.bind(db.sql), plans: string[] = [], checked: string[] = []
+  t.mock.method(db.sql, 'prepare', (query: string) => {
+    assert.equal(query.includes('catalog_entity_sources'), false, 'never expand the global binding UNION')
+    const statement = prepare(query)
+    if (query.startsWith('SELECT 1 FROM catalog_source_artists')) {
+      const get = statement.get.bind(statement)
+      t.mock.method(statement, 'get', (...params: Parameters<typeof statement.get>) => {
+        checked.push(String(params[0]))
+        plans.push(...prepare(`EXPLAIN QUERY PLAN ${query}`).all(...params).map(row => String(row.detail)))
+        return get(...params)
+      })
+    }
+    return statement
+  })
+  const before = prepare('SELECT total_changes() n').get()!.n
+  const page = db.metadataTasks({ limit: 2 })
+  assert.equal(page.total, 5)
+  assert.deepEqual(page.items.map(item => item.id), jobs.map(job => job.id).reverse())
+  assert.deepEqual(checked, [entities[2].id])
+  assert.ok(plans.some(plan => /SEARCH a USING COVERING INDEX catalog_artist_sources \(artist_id=\?\)/u.test(plan)))
+  assert.equal(plans.some(plan => /SCAN s\b/u.test(plan)), false)
+  assert.equal(prepare('SELECT total_changes() n').get()!.n, before)
+})
+
+test('manual review liveness batches a whole page and seeks both native IDs and exact version source keys', t => {
+  const { db } = fixture(t, 3)
+  const originals = db.getTracksByIds(['track-0', 'track-1', 'track-2']).catalog!.tracks
+    .flatMap(refs => refs!.items.filter(item => item.kind !== 'artist'))
+  identify(db, originals)
+  const versions = emptyMusicVersions()
+  for (const [i, source] of db.sql.prepare('SELECT source_key,album_key FROM catalog_sources').all().entries()) {
+    versions.tracks.versions.push({ id: `track-${i}`, label: `Manual recording ${i}`, sources: [String(source.source_key)], preferredSource: null })
+    versions.albums.versions.push({ id: `album-${i}`, label: `Manual release ${i}`, sources: [String(source.album_key)], preferredSource: null })
+  }
+  db.catalogProjectVersions(versions, 1)
+  const effective = db.getTracksByIds(['track-0', 'track-1', 'track-2']).catalog!.tracks
+    .flatMap(refs => refs!.items.filter(item => item.kind !== 'artist'))
+  identify(db, effective)
+  const prepare = db.sql.prepare.bind(db.sql), nativePlans: string[] = [], manualPlans: string[] = []
+  const batches: string[][] = []
+  t.mock.method(db.sql, 'prepare', (query: string) => {
+    assert.equal(query.includes('catalog_entity_sources'), false)
+    const statement = prepare(query)
+    if (query.includes('WITH review_versions AS MATERIALIZED')) {
+      const all = statement.all.bind(statement)
+      t.mock.method(statement, 'all', (...params: Parameters<typeof statement.all>) => {
+        batches.push(JSON.parse(String(params[0])))
+        manualPlans.push(...prepare(`EXPLAIN QUERY PLAN ${query}`).all(...params).map(row => String(row.detail)))
+        return all(...params)
+      })
+    } else if (query.startsWith('SELECT 1 FROM catalog_sources')) {
+      const get = statement.get.bind(statement)
+      t.mock.method(statement, 'get', (...params: Parameters<typeof statement.get>) => {
+        nativePlans.push(...prepare(`EXPLAIN QUERY PLAN ${query}`).all(...params).map(row => String(row.detail)))
+        return get(...params)
+      })
+    }
+    return statement
+  })
+  const page = db.metadataTasks({ limit: 50 })
+  assert.equal(page.total, 18)
+  assert.deepEqual(page.items.filter(item => item.entity).map(item => item.entity!.id).sort(), effective.map(item => item.id).sort())
+  assert.equal(batches.length, 1, 'native misses share one version-link pass, not one pass per entity/job')
+  assert.equal(batches[0].length, 12, 'projects and their releases share the same target check')
+  assert.ok(nativePlans.some(plan => /SEARCH s USING INDEX catalog_source_recording \(recording_id=\?\)/u.test(plan)))
+  assert.ok(nativePlans.some(plan => /SEARCH s USING INDEX catalog_source_release \(release_id=\?\)/u.test(plan)))
+  assert.ok(manualPlans.some(plan => /SEARCH s USING INDEX .* \(source_key=\?\)/u.test(plan)))
+  assert.ok(manualPlans.some(plan => /SEARCH s USING INDEX catalog_source_album_key \(album_key=\?\)/u.test(plan)))
+  assert.equal([...nativePlans, ...manualPlans].some(plan => /SCAN s\b/u.test(plan)), false)
+})
+
+test('legacy and enrichment jobs never resolve a review entry even when their entity is a live catalog row', t => {
+  const { db, entities } = fixture(t, 2)
+  const jobs = identify(db, entities)
+  for (const [i, job] of jobs.entries()) db.sql.prepare('UPDATE metadata_jobs SET payload=? WHERE id=?')
+    .run(JSON.stringify({ ...job, type: i === 0 ? 'legacy' : 'enrich' }), job.id)
+  const prepare = db.sql.prepare.bind(db.sql)
+  t.mock.method(db.sql, 'prepare', (query: string) => {
+    assert.equal(query.includes('catalog_sources'), false)
+    assert.equal(query.includes('catalog_version_sources'), false)
+    return prepare(query)
+  })
+  assert.ok(db.metadataTasks({}).items.every(item => item.entity === null))
 })
 
 test('legacy tasks and finished jobs expose consumers without allowing a generic reexecution or cancellation', (t) => {

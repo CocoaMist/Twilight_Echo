@@ -28,12 +28,17 @@ import { LibraryDatabaseRatings } from './libraryDatabaseRatings.ts'
 import { LibraryDatabasePreferences } from './libraryDatabasePreferences.ts'
 import { legacyTrackIdentityTags, normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
 import type { TrackData } from '../../shared/track.ts'
+import { catalogArtistAlias } from './catalogArtistAlias.ts'
 import { parentDirectoryOf } from '../../shared/libraryIdentity.ts'
 import {
   explicitMusicBrainzIds, identityProofSources, sourceNativeIds, validIdentificationVerification
 } from '../../shared/musicIdentificationVerification.ts'
 import { localAlbumLayout, validateAlbumTracks } from '../../shared/musicAlbumValidation.ts'
 import { validatePlatformAlbum } from '../../shared/musicPlatformAlbumValidation.ts'
+import { verifyArtistRecordings } from '../../shared/musicArtistRecordingVerification.ts'
+import { verifyAlbumSubset } from '../../shared/musicAlbumSubsetVerification.ts'
+import { ncmFileReferences } from '../../shared/ncmFileIdentity.ts'
+import { platformRecordingReferences } from '../../shared/musicPlatformRecording.ts'
 import { albumMemberProposals, type AlbumMemberView, type AlbumMemberProof } from '../../shared/musicAlbumMembers.ts'
 import {
   validIdentificationPayload,
@@ -287,12 +292,8 @@ export class LibraryDatabaseIdentification {
       if (cohortKey && !cohorts.has(cohortKey)) cohorts.set(cohortKey, String(cohorts.size + 1))
       const artists = track.artists?.length ? track.artists : [{ name: track.artist }]
       const artistIndexes = entity.kind === 'artist' ? artists.flatMap((artist, index) => {
-        const key = artist.id !== undefined
-          ? [source.provider, String(artist.id)]
-          : [source.provider, source.recording_id, index]
-        const alias = this.sql.prepare("SELECT entity_id FROM catalog_aliases WHERE namespace='source.artist' AND key=?")
-          .get(JSON.stringify(key))
-        return alias?.entity_id === entityId ? [index] : []
+        const alias = catalogArtistAlias(this.sql, String(source.provider), String(source.recording_id), index, artist)
+        return alias.entityId === entityId ? [index] : []
       }) : []
       const item: IdentificationSourceInput = {
         sourceId: String(source.id), provider: String(source.provider), trackId: String(source.track_id),
@@ -508,7 +509,8 @@ export class LibraryDatabaseIdentification {
         AND EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id)
         AND (s.provider<>'local' OR (EXISTS(SELECT 1 FROM tracks t WHERE t.id=s.track_id)
           AND NOT EXISTS(SELECT 1 FROM catalog_pending p WHERE p.track_id=s.track_id)))`
-    const where = `c.state=?${query.kind ? ' AND e.kind=?' : ''} AND EXISTS(
+    const where = `c.state=?${query.kind ? ' AND e.kind=?' : ''}${query.unresolvedOnly ? ` AND NOT EXISTS(
+      SELECT 1 FROM metadata_identity_links l WHERE l.entity_id=e.id AND l.state IN ('confirmed','detached'))` : ''} AND EXISTS(
       SELECT 1 FROM catalog_entity_sources b JOIN catalog_sources s ON s.id=b.source_id
       WHERE b.entity_id=e.id AND ${live})`
     const args = [query.state ?? 'candidate', ...(query.kind ? [query.kind] : [])]
@@ -581,6 +583,16 @@ export class LibraryDatabaseIdentification {
       namespaces.set(key, ref.value)
     }
     const proposedTargetId = targets[0] ?? null
+    // Explicitly add an unowned NCM reference to an existing person/release.
+    // Never merge other targets, change namespaces, or infer sameness by name.
+    const native = candidate.references.length === 1 ? candidate.references[0] : null
+    const canAttachToCurrent = !staleInput && !conflicts.length &&
+      current.link?.state === 'confirmed' && !!current.link.targetId &&
+      ['artist', 'release'].includes(candidate.kind) && candidate.provider === 'ncm' &&
+      native?.provider === 'ncm' && native.kind === candidate.kind && native.idType === 'native' &&
+      /^[1-9]\d{0,15}$/.test(native.value) &&
+      (!proposedTargetId || proposedTargetId === current.link.targetId) &&
+      !current.references.some(r => r.provider === 'ncm' && r.kind === candidate.kind && r.idType === 'native')
     const ratingImpact = this.ratings.identityImpact(candidate.entityId, candidate.kind, proposedTargetId)
     const preferenceImpact = this.preferences.identityImpact(candidate.entityId, candidate.kind, proposedTargetId, candidate.references)
     return {
@@ -596,6 +608,7 @@ export class LibraryDatabaseIdentification {
             ? 'keep'
             : 'replace',
       canConfirm: !staleInput && !conflicts.length,
+      ...(canAttachToCurrent ? { canAttachToCurrent: true } : {}),
       ...(ratingImpact ? { ratingImpact } : {}),
       ...(preferenceImpact ? { preferenceImpact } : {})
     }
@@ -702,11 +715,24 @@ export class LibraryDatabaseIdentification {
       const ids = explicitMusicBrainzIds(input)
       if (ref.provider !== 'musicbrainz' || ref.idType !== 'mbid' || c.evidence.origin !== 'explicit_id' ||
         ids.size !== 1 || ids.get(ref.value) !== true || !sameSources(identityProofSources(input, ref))) return false
+    } else if (proof.method === 'file_native') {
+      const refs = ncmFileReferences(input)
+      if (ref.provider !== 'ncm' || ref.idType !== 'native' || c.evidence.origin !== 'explicit_id' ||
+        refs.size !== 1 || !refs.has(ref.value) || !sameSources(refs.get(ref.value)!)) return false
+    } else if (proof.method === 'platform_recordings') {
+      const ids = platformRecordingReferences(input, proof.samples)
+      if (ref.provider !== 'ncm' || ref.idType !== 'native' || c.evidence.origin !== 'search' ||
+        ids.length !== 1 || ids[0] !== ref.value || !sameSources(proof.samples.map(s => s.sourceId))) return false
     } else if (proof.method === 'provider_native') {
       const ids = new Set((input.sources ?? []).filter(s => s.provider === ref.provider).flatMap(s => sourceNativeIds(input, s)))
       if (ref.provider === 'local' || ref.provider === 'musicbrainz' || ref.idType !== 'native' ||
         c.evidence.origin !== 'provider_native' || ids.size !== 1 || !ids.has(ref.value) ||
         !sameSources(identityProofSources(input, ref))) return false
+    } else if (proof.method === 'artist_recordings') {
+      if (c.evidence.origin !== 'cross_reference' || !verifyArtistRecordings(input, proof)) return false
+    } else if (proof.method === 'album_subset') {
+      if (candidates.length !== 1 || c.evidence.origin !== 'cross_reference' ||
+        !verifyAlbumSubset(input, proof)) return false
     } else if (proof.method === 'album_tracks') {
       if (ref.provider !== 'musicbrainz' || ref.idType !== 'mbid' || c.evidence.origin !== 'album_tracks' ||
         !sameSources((input.sources ?? []).map(s => s.sourceId)) ||
@@ -807,27 +833,34 @@ export class LibraryDatabaseIdentification {
     if (!validIdentificationPayload('identification.decide', request))
       throw new Error('无效的识别决定')
     return this.transaction(() => {
-      const { decision, ratingResolution, preferenceResolution, ...review } = request
+      const { decision, attachToCurrent, ratingResolution, preferenceResolution, ...review } = request
       const preview = this.preview(review),
         candidate = preview.candidate
       if (preview.stale) throw stale()
+      if (attachToCurrent && (mode !== 'manual' || !preview.canAttachToCurrent))
+        throw Object.assign(new Error('无法补充此引用：请核对当前身份、引用归属及版本'), { code: 'IDENTITY_CONFLICT' })
       const link = this.ensure(candidate.entityId)
       if (mode === 'automatic' && (link.state !== 'unresolved' || candidate.suppressed ||
         preview.ratingImpact?.conflict || preview.preferenceImpact?.conflict || candidate.references.some(ref => this.suppressed(candidate.entityId, ref)))) return this.detail(candidate.entityId)
-      const audit = JSON.stringify({ ...candidate, decision: {
+      const audit = JSON.stringify({ ...candidate,
+        ...(attachToCurrent ? { references: [...preview.current.references, ...candidate.references] } : {}),
+        decision: {
         mode, ...(mode === 'automatic' ? { rule: candidate.evidence.verification!.method } : {}),
+        ...(attachToCurrent ? { attachToCurrent: true } : {}),
         ...(ratingResolution ? { ratingResolution } : {}),
         ...(preferenceResolution ? { preferenceResolution } : {})
       } })
-      let targetId = preview.proposedTargetId
+      let targetId = attachToCurrent ? preview.current.link!.targetId : preview.proposedTargetId
       if (decision === 'confirm') {
         if (!preview.canConfirm)
           throw Object.assign(new Error('外部引用已属于不同身份，请先复核关联冲突'), {
             code: 'IDENTITY_CONFLICT'
           })
         targetId ??= randomUUID()
-        this.ratings.applyIdentity(candidate.entityId, candidate.kind, targetId, ratingResolution, now)
-        this.preferences.applyIdentity(candidate.entityId, candidate.kind, targetId, preferenceResolution, now, candidate.references)
+        if (!attachToCurrent) {
+          this.ratings.applyIdentity(candidate.entityId, candidate.kind, targetId, ratingResolution, now)
+          this.preferences.applyIdentity(candidate.entityId, candidate.kind, targetId, preferenceResolution, now, candidate.references)
+        }
         if (link.state === 'confirmed' && link.targetId !== targetId) {
           this.suppress(link.entityId, this.references(link.targetId), 'replaced', now)
           this.markSuppressed(link.entityId, now)

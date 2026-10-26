@@ -70,6 +70,109 @@ function parseRequest(path) {
   return new URL(path, 'http://twilight.local')
 }
 
+test('recording identity search is anonymous, exact-precision, bounded and excludes playback/private data', async () => {
+  const provider = await activateProvider(async path => {
+    const u = parseRequest(path)
+    assert.equal(u.pathname, '/cloudsearch')
+    assert.equal(u.searchParams.get('limit'), '10')
+    return { code: 200, result: { songCount: 1, songs: [{ id: 123, name: 'Song', dt: 200125,
+      ar: [{ id: 42, name: 'AC/DC' }, { id: 43, name: 'Guest' }], al: { id: 456, name: 'Album' }, url: 'unused' }] } }
+  }, new Map())
+  try {
+    assert.deepEqual(await provider.searchRecordingIdentities('Song', 30, 0), { total: 1, items: [{ id: '123', title: 'Song',
+      durationSeconds: 200.125, artists: [{ id: '42', name: 'AC/DC' }, { id: '43', name: 'Guest' }], album: { id: '456', title: 'Album' } }] })
+  } finally { ncmProvider.deactivate() }
+})
+
+test('public metadata does not attach a saved account, preserves missing guest IDs and stops on rate limits', async () => {
+  let calls = 0
+  const provider = await activateProvider(async (_path, cookie) => {
+    assert.equal(cookie, '')
+    calls++
+    return calls === 1 ? { code: 200, result: { songCount: 1, songs: [{ id: 123, name: 'Song', dt: 200125,
+      ar: [{ id: 42, name: 'AC/DC' }, { id: 0, name: 'Guest' }], al: { id: 456, name: 'Album' } }] } }
+      : { code: 429, message: '操作频繁，请稍候再试' }
+  })
+  try {
+    assert.equal((await provider.searchRecordingIdentities('Song')).items[0].artists[1].id, null)
+    await assert.rejects(provider.fetchArtistMetadata('42'), /NCM_METADATA_RATE_LIMITED/)
+    await assert.rejects(provider.fetchAlbumMetadata('42'), /NCM_METADATA_RATE_LIMITED/)
+    assert.equal(calls, 2, 'a cooldown must not send more upstream requests')
+  } finally { ncmProvider.deactivate() }
+})
+
+test('artist identity uses exact anonymous IDs and only typed native aliases', async () => {
+  let mismatch = false
+  const controller = new AbortController()
+  const provider = await activateProvider(async (path, cookie, options) => {
+    assert.equal(cookie, '')
+    assert.equal(parseRequest(path).pathname, '/artist/detail')
+    assert.equal(options.signal, controller.signal)
+    return { code: 200, data: { artist: { id: mismatch ? 99 : 42, name: 'かめりあ', alias: ['Camellia', 'Camellia', null], transNames: ['山茶花'], avatar: 'not identity data', private: 'discard' } } }
+  })
+  try {
+    assert.deepEqual(await provider.fetchArtistIdentity('42', { signal: controller.signal }), { id: '42', name: 'かめりあ', aliases: ['Camellia', '山茶花'] })
+    mismatch = true
+    await assert.rejects(provider.fetchArtistIdentity('42', { signal: controller.signal }), /身份不一致/)
+  } finally { ncmProvider.deactivate() }
+})
+
+test('recording search retains provider aliases only for a valid owning artist ID', async () => {
+  const provider = await activateProvider(async () => ({ code: 200, result: { songCount: 1, songs: [{ id: 123, name: 'Song', dt: 200125,
+    ar: [{ id: 42, name: 'かめりあ', alia: ['Camellia'] }, { id: 0, name: 'Guest', alias: ['not trusted'] }], al: { id: 456, name: 'Album' } }] } }))
+  try {
+    assert.deepEqual((await provider.searchRecordingIdentities('Song')).items[0].artists,
+      [{ id: '42', name: 'かめりあ', aliases: ['Camellia'] }, { id: null, name: 'Guest' }])
+  } finally { ncmProvider.deactivate() }
+})
+
+test('public artist search is anonymous-capable and still forwards an available account', async () => {
+  for (const settings of [new Map(), new Map([['cookie', 'MUSIC_U=test;']])]) {
+    const provider = await activateProvider(async (_path, cookie) => {
+      assert.equal(cookie, settings.get('cookie') ?? '')
+      return { code: 200, result: { artists: [{ id: 42, name: 'Artist' }], artistCount: 1 } }
+    }, settings)
+    try { assert.equal((await provider.searchArtists('Artist')).items[0].id, 42) }
+    finally { ncmProvider.deactivate() }
+  }
+})
+
+test('metadata portraits use artist avatar first, permit image-only details and reject non-CDN or signed resources', async () => {
+  const avatar = 'http://p4.music.126.net/portrait==/109951167441551721.jpg'
+  let artist = { id: 42, name: 'Artist', avatar, cover: 'https://p4.music.126.net/banner/123.jpg' }
+  const provider = await activateProvider(async path => parseRequest(path).pathname === '/artist/detail'
+    ? { code: 200, data: { artist } }
+    : { code: 200 }, new Map())
+  try {
+    const result = await provider.fetchArtistMetadata('42')
+    assert.equal(result.status, 'ok')
+    assert.deepEqual(result.metadata.texts, [])
+    assert.equal(result.metadata.artwork[0].resource, avatar.replace('http:', 'https:'))
+    assert.equal(result.metadata.artwork[0].url, 'https://music.163.com/#/artist?id=42')
+    assert.equal(result.metadata.artwork[0].license, '')
+    assert.equal(result.metadata.artwork[0].usage, undefined)
+    for (const bad of ['https://evil.example/portrait/123.jpg', 'https://p4.music.126.net/portrait/123.jpg?token=secret',
+      'https://user:secret@p4.music.126.net/portrait/123.jpg', 'file:///tmp/123.jpg']) {
+      artist = { id: 42, name: 'Artist', avatar: bad, album: { picUrl: avatar } }
+      assert.deepEqual(await provider.fetchArtistMetadata('42'), { status: 'not_provided' })
+    }
+    artist = { id: 42, name: 'Artist', briefDesc: '详情里的简介', avatar }
+    assert.equal((await provider.fetchArtistMetadata('42')).metadata.texts[0].value, '详情里的简介')
+  } finally { ncmProvider.deactivate() }
+})
+
+test('release artwork never changes its identity scope to artist or album project', async () => {
+  const provider = await activateProvider(async () => ({ code: 200,
+    album: { id: 42, name: 'Album', picUrl: 'http://p3.music.126.net/album/123.jpg' }
+  }), new Map())
+  try {
+    const result = await provider.fetchAlbumMetadata('42')
+    assert.equal(result.metadata.kind, 'release')
+    assert.equal(result.metadata.artwork[0].resource, 'https://p3.music.126.net/album/123.jpg')
+    assert.deepEqual(result.metadata.texts, [])
+  } finally { ncmProvider.deactivate() }
+})
+
 test('native artist text preserves full source sections, unspecified language and anonymous request cancellation context', async () => {
   const controller = new AbortController(), calls = []
   const provider = await activateProvider(async (path, cookie, options) => {

@@ -21,6 +21,8 @@ import { projectCoreTrack } from '../../core/projections.ts'
 import { normalizeCueRange } from '../../shared/cue.ts'
 import { libraryTrack } from '../../core/playback/libraryTrack.ts'
 import { normalizeTrackIdentityTags } from '../../shared/trackIdentification.ts'
+import { libraryArtistCredits } from '../../shared/libraryCollections.ts'
+import { catalogArtistAlias } from './catalogArtistAlias.ts'
 
 /** First actual catalog membership publication, not Track.addedAt or cached-source time. */
 export const CATALOG_MEMBERSHIP_ADDED_PREFIX = 'membership_added:'
@@ -111,6 +113,8 @@ const finite = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v 
 /** Stores source identity, never guesses recording equality from names. All writes are bounded. */
 export class LibraryDatabaseCatalog {
   private readonly owner: Owner
+  private readonly totalCache = new Map<string, number>()
+  private readonly queryCache = new Map<string, CatalogPage>()
   constructor(owner: Owner) {
     this.owner = owner
   }
@@ -219,6 +223,7 @@ export class LibraryDatabaseCatalog {
       localHorizon: horizon,
       localPending:
         cursor < horizon || dirty > 0 ||
+        Number(this.state('file_artist_cursor_v1')) < Number(this.state('file_artist_horizon_v1')) ||
         Number(this.state('project_cursor')) < Number(this.state('project_horizon')),
       dirtySources: dirty,
       playlistsRevision: playlists === null ? null : Number(playlists),
@@ -272,7 +277,22 @@ export class LibraryDatabaseCatalog {
       }
       const projectCursor = Number(this.state('project_cursor')),
         projectHorizon = Number(this.state('project_horizon'))
-      const remaining = limit - processed - pending.length
+      let remaining = limit - processed - pending.length
+      const creditCursor = Number(this.state('file_artist_cursor_v1')),
+        creditHorizon = Number(this.state('file_artist_horizon_v1'))
+      let creditsVisited = 0
+      if (creditCursor < creditHorizon && remaining > 0) {
+        const rows = this.sql.prepare('SELECT seq,payload FROM tracks WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?')
+          .all(creditCursor, creditHorizon, remaining) as Row[]
+        for (const row of rows) {
+          const raw = JSON.parse(str(row.payload))
+          if (!raw.artists?.length && libraryArtistCredits(raw).length)
+            this.upsert(libraryTrack(raw), 'local', raw)
+        }
+        this.set('file_artist_cursor_v1', rows.length === remaining ? Number(rows.at(-1)!.seq) : creditHorizon)
+        creditsVisited = rows.length
+        remaining -= rows.length
+      }
       if (projectCursor < projectHorizon && remaining > 0) {
         const rows = this.sql
           .prepare("SELECT rowid AS seq,id FROM catalog_entities WHERE rowid>? AND rowid<=? AND kind='release' ORDER BY rowid LIMIT ?")
@@ -280,7 +300,7 @@ export class LibraryDatabaseCatalog {
         for (const row of rows) this.project(str(row.id))
         this.set('project_cursor', rows.length === remaining ? Number(rows.at(-1)!.seq) : projectHorizon)
       }
-      if (processed || pending.length || cursor < horizon || projectCursor < projectHorizon) this.bump()
+      if (processed || pending.length || creditsVisited || cursor < horizon || projectCursor < projectHorizon) this.bump()
       return this.status()
     })
   }
@@ -434,20 +454,17 @@ export class LibraryDatabaseCatalog {
     if (str(raw.title).trim()) fact(recording, 'title', str(raw.title))
     if (str(raw.artist).trim()) fact(recording, 'artist', str(raw.artist))
     if (release) fact(release, 'album', input.album)
-    const artists =
-      Array.isArray(raw.artists) && raw.artists.length
-        ? (track.artists ?? [])
-        : [{ name: str(raw.artist) }]
+    const credits = libraryArtistCredits(track)
+    const artists = credits.length ? credits : [{ name: str(raw.artist) }]
     const performerIds: string[] = []
     for (const [index, artist] of artists.entries()) {
       if (!str(artist.name).trim()) continue
       // A compilation's first credit need not be the same person on every track.
       // Without provider IDs, keep source-scoped credits until identification.
-      const artistKey =
-        artist.id !== undefined
-          ? JSON.stringify([provider, String(artist.id)])
-          : JSON.stringify([provider, recording, index])
-      const performer = this.entity('source.artist', artistKey, 'artist', artist.name)
+      const alias = catalogArtistAlias(this.sql, provider, recording, index, artist)
+      if (alias.entityId) this.sql.prepare("INSERT OR IGNORE INTO catalog_aliases VALUES('source.artist',?,?)")
+        .run(alias.key, alias.entityId)
+      const performer = this.entity('source.artist', alias.key, 'artist', artist.name)
       performerIds.push(performer)
       this.sql
         .prepare('INSERT OR IGNORE INTO catalog_source_artists VALUES(?,?)')
@@ -598,6 +615,22 @@ export class LibraryDatabaseCatalog {
     this.fence(query.revision)
     const params: SQLInputValue[] = []
     const conditions = ['1=1']
+    const artist = query.kind === 'artist'
+    const recording = query.kind === 'recording'
+    const scope = recording ? 'tracks' : 'albums'
+    const sourceKey = recording ? 'source_key' : 'album_key'
+    const effective = `coalesce(v.entity_id,s.${recording ? 'recording_id' : 'release_id'})`
+    const entity = artist ? 'a.artist_id' : query.kind === 'album_project' ? 'p.project_id' : effective
+    // Read each source once and resolve only the binding layer this kind uses.
+    // catalog_bindings plus another source join repeats the source lookup and
+    // resolves both track and album versions even when only one is consumed.
+    const relation = artist
+      ? 'catalog_sources s JOIN catalog_source_artists a ON a.source_id=s.id'
+      : `catalog_sources s
+        LEFT JOIN catalog_version_sources b ON b.scope='${scope}' AND b.source_key=s.${sourceKey}
+        LEFT JOIN catalog_versions v ON v.scope=b.scope AND v.id=b.version_id
+        ${query.kind === 'album_project' ? `JOIN catalog_release_projects p ON p.release_id=${effective}` : ''}`
+    if (query.kind === 'release') conditions.push(`${effective} IS NOT NULL`)
     if (query.scope !== 'all')
       conditions.push('EXISTS(SELECT 1 FROM catalog_memberships m WHERE m.source_id=s.id)')
     if (query.source) {
@@ -616,40 +649,55 @@ export class LibraryDatabaseCatalog {
         conditions.push(`s.provider='local' AND s.track_id IN (SELECT id FROM tracks ${selection.sql})`)
         params.push(...selection.params)
       } else if (query.kind === 'artist') {
-        conditions.push("b.entity_id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.artist' AND key=?)")
+        conditions.push("a.artist_id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.artist' AND key=?)")
         params.push(JSON.stringify([context.provider, context.id]))
       } else {
         conditions.push("s.release_id IN (SELECT entity_id FROM catalog_aliases WHERE namespace='source.release' AND key=?)")
         params.push(JSON.stringify(['album', context.provider, `id:${context.id}`]))
       }
     }
-    // Aggregate from the source side once, rather than an OR-correlated full
-    // source scan for every entity. Filtering keeps sourceCount meaningful.
-    const bindings = query.kind === 'artist' ? 'catalog_source_artists'
-      : query.kind === 'album_project' ? `(SELECT p.project_id entity_id,s.id source_id FROM catalog_bindings s
-        JOIN catalog_release_projects p ON p.release_id=s.release)`
-      : `(SELECT ${query.kind} entity_id,id source_id FROM catalog_bindings${query.kind === 'release' ? ' WHERE release IS NOT NULL' : ''})`
-    const relation = query.kind === 'artist' ? '(SELECT artist_id entity_id,source_id FROM catalog_source_artists)' : bindings
-    const cte = `WITH candidates AS (SELECT b.entity_id,count(*) AS source_count
-      FROM ${relation} b JOIN catalog_sources s ON s.id=b.source_id
-      WHERE ${conditions.map(c => `(${c})`).join(' AND ')} GROUP BY b.entity_id)`
+    const cte = `WITH candidates AS (SELECT ${entity} entity_id,count(*) AS source_count
+      FROM ${relation}
+      WHERE ${conditions.map(c => `(${c})`).join(' AND ')} GROUP BY ${entity})`
     params.push(query.kind)
     let where = 'e.kind=?'
+    if (query.artistName !== undefined) {
+      where += ' AND trim(e.title)=?'
+      params.push(query.artistName.trim())
+    }
     if (query.search) {
       where += " AND instr(lower(e.title || ' ' || e.artist),lower(?))>0"
       params.push(query.search)
     }
     const from = `FROM candidates c CROSS JOIN catalog_entities e ON e.id=c.entity_id WHERE ${where}`
-    const offset = query.offset ?? 0
+    const offset = query.offset ?? 0,
+      limit = query.limit ?? 200,
+      revision = Number(this.state('revision')),
+      changes = Number((this.sql.prepare('SELECT total_changes() AS c').get() as Row)?.c ?? 0),
+      filterKey = JSON.stringify([changes, revision, conditions, where, params]),
+      pageKey = `${filterKey}:${offset}:${limit}`,
+      cached = this.queryCache.get(pageKey)
+    if (cached) return cached
+    const knownTotal = this.totalCache.get(filterKey),
+      reverse = knownTotal !== undefined && offset > knownTotal / 2 && offset < knownTotal,
+      pageLimit = reverse ? Math.min(limit, Math.max(0, knownTotal - offset)) : limit,
+      pageOffset = reverse ? Math.max(0, knownTotal - offset - limit) : offset
     const rows = this.sql
       .prepare(
-        `${cte}, matched AS MATERIALIZED (SELECT e.*,c.source_count ${from}),
-        page AS (SELECT * FROM matched ORDER BY title COLLATE NOCASE,id LIMIT ? OFFSET ?)
-        SELECT p.*,t.total FROM (SELECT count(*) total FROM matched) t LEFT JOIN page p ON 1
-        ORDER BY title COLLATE NOCASE,id`
+        `${cte}, matched AS MATERIALIZED (SELECT e.id,e.title,c.source_count ${from}),
+        page AS (SELECT * FROM matched ORDER BY title COLLATE NOCASE ${reverse ? 'DESC' : 'ASC'},id ${reverse ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?)
+        SELECT e.*,p.source_count,t.total FROM (SELECT count(*) total FROM matched) t
+          LEFT JOIN page p ON 1 LEFT JOIN catalog_entities e ON e.id=p.id
+        ORDER BY e.title COLLATE NOCASE,e.id`
       )
-      .all(...params, query.limit ?? 200, offset) as Row[]
-    return { revision: Number(this.state('revision')), offset, total: Number(rows[0].total), items: rows.filter(row => row.id !== null).map(entityView) }
+      .all(...params, pageLimit, pageOffset) as Row[]
+    const total = Number(rows[0].total),
+      result: CatalogPage = { revision, offset, total, items: rows.filter(row => row.id !== null).map(entityView) }
+    this.totalCache.set(filterKey, total)
+    while (this.totalCache.size > 32) this.totalCache.delete(this.totalCache.keys().next().value!)
+    this.queryCache.set(pageKey, result)
+    while (this.queryCache.size > 32) this.queryCache.delete(this.queryCache.keys().next().value!)
+    return result
   }
   detail(id: string, revision?: number): CatalogDetail {
     if (!validCatalogPayload('catalog.detail', { id, revision }))
@@ -801,8 +849,9 @@ function snapshot(track: TrackData, provider: string): TrackData {
       Object.assign(result, { [field]: track[field] })
   if (track.cueRange) result.cueRange = normalizeCueRange(track.cueRange) ?? undefined
   result.identityTags = normalizeTrackIdentityTags(track.identityTags)
-  if (Array.isArray(track.artists))
-    result.artists = track.artists
+  const credits = libraryArtistCredits(track)
+  if (credits.length)
+    result.artists = credits
       .slice(0, 128)
       .filter((a) => a && typeof a.name === 'string')
       .map((a) => ({

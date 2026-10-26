@@ -1,5 +1,7 @@
 import type { ICommonTagsResult } from 'music-metadata'
 import type { TrackIdentityTags } from '../../shared/trackIdentification.ts'
+import { readNcmFileIdentity } from './ncmFileIdentity.ts'
+import { ncmFileTagMatches } from '../../shared/ncmFileIdentity.ts'
 
 /** Read alongside the existing parser. No extra file pass or metadata-version bump. */
 export function collectTrackIdentityTags(
@@ -57,5 +59,7 @@ export function collectTrackIdentityTags(
   tags.isrcs = list(common.isrc)
   tags.barcode = text(common.barcode)
   tags.catalogNumbers = list(common.catalognumber)
+  const ncm = readNcmFileIdentity(common.comment)
+  if (ncm && ncmFileTagMatches({ ...tags, ncm })) tags.ncm = ncm
   return tags
 }

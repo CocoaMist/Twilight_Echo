@@ -25,7 +25,7 @@ export function normalizeMusicIdentificationSettings(raw: unknown): MusicIdentif
             v.sources.filter(
               (s): s is string =>
                 typeof s === 'string' &&
-                /^(musicbrainz|platform\.[a-z0-9][a-z0-9._-]{0,118})$/.test(s)
+                /^(musicbrainz|vocadb|theaudiodb|discogs|platform\.[a-z0-9][a-z0-9._-]{0,118})$/.test(s)
             )
           )
         ].slice(0, 16)

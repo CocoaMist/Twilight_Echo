@@ -36,6 +36,7 @@ import type { CoreLibraryLoudnessService } from './audio/libraryLoudnessService.
 import type { CoreLibraryMaintenance } from './library/maintenanceService.ts'
 import type { CoreDuplicatesService } from './library/duplicatesService.ts'
 import type { CoreInboxService } from './library/inboxService.ts'
+import type { CoreLibraryHealthService } from './library/libraryHealthService.ts'
 import type { CorePersonalBackupService } from './persistence/personalBackupService.ts'
 import type { CoreAuditionService } from './audio/auditionService.ts'
 import type { CoreOutputTestService } from './audio/outputTestService.ts'
@@ -114,6 +115,7 @@ export interface CoreApplicationDependencies {
   personalBackup?: CorePersonalBackupService
   duplicates?: CoreDuplicatesService
   inbox?: CoreInboxService
+  libraryHealth?: CoreLibraryHealthService
   libraryMaintenance?: CoreLibraryMaintenance
   libraryRepair?: { shutdown(): Promise<void> }
   autoMix?: CoreAutoMixService
@@ -996,6 +998,22 @@ export class CoreApplication {
         }
         break
       }
+      case 'library.health.start':
+      case 'library.health.status':
+      case 'library.health.page':
+      case 'library.health.repair': {
+        const health = this.dependencies.libraryHealth
+        if (!health) throw failure('FAILED', '音乐库体检服务不可用')
+        if (request.kind === 'command' && identity.role !== 'desktop')
+          throw failure('FORBIDDEN', '音乐库体检操作需要桌面窗口')
+        switch (request.name) {
+          case 'library.health.start': return health.start()
+          case 'library.health.status': return health.state()
+          case 'library.health.page': return health.page(request.payload)
+          case 'library.health.repair': return health.repair(request.payload)
+        }
+        break
+      }
       case 'library.inbox.refresh':
       case 'library.inbox.mark':
       case 'library.inbox.page': {
@@ -1835,7 +1853,7 @@ export class CoreApplication {
           case 'identification.decide': return service.decideIdentity(request.payload)
           case 'identification.detach': return service.detachIdentity(request.payload.linkId, request.payload.revision)
           case 'metadata.entity.policy': return service.policy()
-          case 'metadata.entity.detail': return service.detail(request.payload.entityId, request.payload.language, request.payload.sourceProvider)
+          case 'metadata.entity.detail': return service.detail(request.payload.entityId, request.payload.language, request.payload.sourceProvider, request.payload.includeAutomaticArtwork)
           case 'metadata.entity.jobs': return service.jobs(request.payload)
           case 'metadata.entity.tasks': return service.tasks(request.payload)
           case 'metadata.entity.demands': return service.demands(request.payload)
@@ -2058,6 +2076,7 @@ export class CoreApplication {
       await this.dependencies.libraryRepair?.shutdown()
       await this.dependencies.duplicates?.shutdown()
       await this.dependencies.inbox?.shutdown()
+      await this.dependencies.libraryHealth?.shutdown()
       await this.dependencies.personalBackup?.shutdown()
       await this.dependencies.settingsBackup?.shutdown()
       await this.dependencies.pluginExperiences?.shutdown()

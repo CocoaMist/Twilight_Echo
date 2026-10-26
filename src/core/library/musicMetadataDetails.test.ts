@@ -104,6 +104,7 @@ function fixture() {
     reciprocal: 'P436',
     pageQid: 'Q202996',
     chineseMissing: false,
+    chineseIntroduction: '专辑项目背景介绍',
     calls: [] as URL[],
     data: releaseData() as Record<string, any>
   }
@@ -138,7 +139,7 @@ function fixture() {
                     ? { disambiguation: '', wikibase_item: state.pageQid }
                     : { wikibase_item: state.pageQid },
                 extract: url.hostname.startsWith('zh.')
-                  ? '专辑项目背景介绍'
+                  ? state.chineseIntroduction
                   : 'English album introduction',
                 revisions: [{ revid: 88 }]
               }
@@ -215,6 +216,7 @@ const asyncDb = (db: LibraryDatabase) =>
 
 test('album projects use reciprocal release-group IDs for Wikipedia and retain first date, type, language and source revision', async () => {
   const { state, detail } = fixture()
+  state.chineseIntroduction = '完整专辑作品介绍。'.repeat(180)
   state.data = {
     id: GROUP,
     title: 'OK Computer',
@@ -230,10 +232,14 @@ test('album projects use reciprocal release-group IDs for Wikipedia and retain f
   assert.equal(result.facts.find((f) => f.field === 'firstReleaseDate')?.value, '1997-05-21')
   assert.equal(result.facts.find((f) => f.field === 'primaryType')?.value, 'Album')
   const intro = result.facts.find((f) => f.field === 'introduction')!
+  assert.equal(intro.value, state.chineseIntroduction)
   assert.equal(intro.language, 'zh-Hant')
   assert.equal(intro.sourceLanguage, 'zh')
   assert.equal(intro.attribution.revision, '88')
   assert.equal(intro.attribution.license, 'CC-BY-SA-4.0')
+  const wiki = state.calls.find(url => url.hostname === 'zh.wikipedia.org')!
+  assert.equal(wiki.searchParams.get('exintro'), '1')
+  assert.equal(wiki.searchParams.has('exchars'), false, 'MediaWiki clamps exchars to 1200 and truncates the lead')
   assert.equal(
     result.facts.some((f) => f.field === 'releaseDate'),
     false
@@ -555,7 +561,7 @@ test('v17 upgrades preserve targets, overrides, source membership and running jo
   db.close()
   db = new LibraryDatabase(path)
   try {
-    assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 27)
+    assert.equal(db.sql.prepare('PRAGMA user_version').get()!.user_version, 29)
     assert.equal(db.identificationDetail(entityId).link!.targetId, targetId)
     assert.equal(db.metadataDetail(entityId, 'en').introduction?.value, 'My album notes')
     db.metadataRecover(3000)

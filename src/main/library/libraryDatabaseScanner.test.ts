@@ -479,7 +479,7 @@ test('schema v1 upgrades only after a consistent snapshot including committed WA
   // Leave this writer open so the upgrade must read committed WAL pages.
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 28)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 29)
     assert.equal(upgraded.getTracksByIds(['wal']).tracks[0].id, 'wal')
     const names = readdirSync(root).filter((name) => name.includes('.v1-backup-'))
     assert.equal(names.length, 1)

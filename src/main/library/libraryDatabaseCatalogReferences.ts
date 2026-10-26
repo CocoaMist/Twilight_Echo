@@ -97,20 +97,21 @@ export class LibraryDatabaseCatalogReferences {
     )
     // Batch all displayed groups in one SQL read. In particular, do not scan the
     // full artist library separately for every card on the page.
-    const key =
+    const memberLabels =
       kind === 'albums'
-        ? 't.album_key'
-        : "COALESCE(NULLIF(json_extract(t.payload,'$.artist'),''),'未知艺术家')"
+        ? `SELECT id,album_key AS label FROM tracks ${selection.sql}`
+        : `SELECT tracks.id,credit.value AS label FROM (SELECT * FROM tracks ${selection.sql}) tracks,
+          json_each(library_artist_names(json_extract(payload,'$.artist'),json_extract(payload,'$.artists'),json_extract(payload,'$.identityTags'))) credit`
     const rows = this.sql
       .prepare(
         `WITH selected AS (SELECT json_extract(value,'$.position') position,json_extract(value,'$.key') label FROM json_each(?)),
-      members AS (SELECT * FROM tracks ${selection.sql}), selected_sources AS MATERIALIZED (
-        SELECT r.position,s.id source_id,s.recording,s.release FROM members t JOIN selected r ON r.label=${key}
+      members AS ${kind === 'artists' ? 'MATERIALIZED' : ''} (${memberLabels}), selected_sources AS MATERIALIZED (
+        SELECT r.position,s.id source_id,s.recording,s.release FROM members t JOIN selected r ON r.label=t.label
         JOIN catalog_bindings s ON s.provider='local' AND s.track_id=t.id WHERE ${live}
       ), ${sourceReferences}, refs AS (
         SELECT DISTINCT r.position,e.id,e.kind,e.title,e.artist FROM source_refs r
         JOIN catalog_entities e ON e.id=r.entity_id
-        WHERE e.kind ${kind === 'albums' ? "IN ('release','album_project')" : "='artist'"}
+        WHERE e.kind ${kind === 'albums' ? "IN ('release','album_project')" : "='artist' AND trim(e.title)=trim((SELECT label FROM selected WHERE position=r.position))"}
       ), ranked AS (SELECT *,count(*) OVER(PARTITION BY position) total,
         row_number() OVER(PARTITION BY position ORDER BY kind,id) ordinal FROM refs)
       SELECT * FROM ranked WHERE ordinal<=8 ORDER BY position,ordinal`

@@ -7,6 +7,8 @@ import type {
 } from './musicIdentification.ts'
 import { validMusicExternalReference } from './musicIdentification.ts'
 import { validPlatformAlbumIdentity } from './musicPlatformAlbum.ts'
+import { validArtistRecordingProof } from './musicArtistRecordingVerification.ts'
+import { validPlatformRecordingPage } from './musicPlatformRecording.ts'
 
 export function explicitMusicBrainzIds(input: IdentificationInput) {
   const ids = new Map<string, boolean>()
@@ -80,6 +82,19 @@ export function validIdentificationVerification(
   )
     return false
   if (v.method === 'typed_id' || v.method === 'provider_native') return true
+  if (v.method === 'file_native') return v.reference.provider === 'ncm' &&
+    v.reference.idType === 'native' && /^[1-9]\d{0,15}$/.test(v.reference.value) &&
+    ['artist', 'recording', 'release'].includes(v.reference.kind)
+  if (v.method === 'platform_recordings') return v.reference.provider === 'ncm' &&
+    v.reference.idType === 'native' && /^[1-9]\d{0,15}$/.test(v.reference.value) &&
+    ['artist', 'recording', 'release'].includes(v.reference.kind) && Array.isArray(v.samples) &&
+    v.samples.length > 0 && v.samples.length <= 2 && v.samples.length === v.sourceIds.length &&
+    v.samples.every((s, i) => s?.sourceId === v.sourceIds[i] && validPlatformRecordingPage(s.page))
+  if (v.method === 'artist_recordings') return validArtistRecordingProof(v)
+  if (v.method === 'album_subset') return v.toleranceSeconds === 2 &&
+    v.reference.provider === 'musicbrainz' && v.reference.kind === 'album_project' &&
+    v.reference.idType === 'mbid' && validAlbumRelease(v.release) &&
+    v.reference.value === v.release.projectId
   if (v.method === 'album_member') return !!v.parent &&
     ['artist', 'recording'].includes(v.reference.kind) &&
     [v.parent.entityId, v.parent.candidateId].every(s => typeof s === 'string' && !!s && s.length <= 128) &&
