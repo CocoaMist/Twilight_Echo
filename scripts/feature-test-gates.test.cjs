@@ -147,6 +147,16 @@ test('radio and remote gate owns library watcher, radio, podcast, cover, and rem
   for (const file of radioRemoteTests) assert.match(command, new RegExp(escapeRegExp(file)))
 })
 
+test('library database gate retains narrow date publication, ordinary scan cancellation and actual worker recovery', () => {
+  const command = packageJson.scripts['test:library-database']
+  for (const file of [
+    'src/main/library/libraryDatabaseReleaseDate.test.ts',
+    'src/main/library/libraryDatabaseScan.test.ts',
+    'src/main/library/libraryDatabaseScanCoordinator.test.ts'
+  ]) assert.ok(command.includes(file), `${file} must run in the library database gate`)
+  assert.match(packageJson.scripts['test:no-real-device'], /pnpm run test:library-database(?: &&|$)/)
+})
+
 test('network source gate owns profile, path, cache, metadata, and adapter tests', () => {
   const command = packageJson.scripts['test:network-sources']
   assert.equal(typeof command, 'string')

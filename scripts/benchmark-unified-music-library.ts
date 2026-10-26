@@ -9,6 +9,7 @@ import { reconcileMusicLibrary } from '../src/main/library/libraryDatabaseReconc
 
 // node --expose-gc --experimental-strip-types scripts/benchmark-unified-music-library.ts 50000 docs/audit-evidence/m5.3-unified-library-100k.json
 // Query-only follow-up: append --reuse-fixture=<absolute root> --ingestion-evidence=<original report>.
+// After the worker probe, also declare --expected-completed-metadata-jobs=2 --expected-metadata-facts=1.
 const args = process.argv.slice(2), positional = args.filter(arg => !arg.startsWith('--'))
 const option = (name: string) => {
   const value = args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -16,6 +17,12 @@ const option = (name: string) => {
   return value
 }
 const reuseRoot = option('reuse-fixture'), ingestionEvidencePath = option('ingestion-evidence')
+const countOption = (name: string) => {
+  const value = option(name) ?? '0', count = Number(value)
+  assert.ok(/^\d+$/.test(value) && Number.isSafeInteger(count), `--${name} requires a non-negative integer`)
+  return count
+}
+const expectedMetadata = { completedJobs: countOption('expected-completed-metadata-jobs'), facts: countOption('expected-metadata-facts') }
 assert.ok(!ingestionEvidencePath || reuseRoot, '--ingestion-evidence requires --reuse-fixture')
 const perSource = Number(positional[0] ?? 50_000)
 const output = resolve(positional[1] ?? (reuseRoot ? 'docs/audit-evidence/m5.3-unified-library-100k-reused.json' : 'docs/audit-evidence/m5.3-unified-library-100k.json'))
@@ -24,7 +31,7 @@ if (ingestionEvidencePath) assert.notEqual(comparablePath(output), comparablePat
 const rounds = Number(process.env.MUSIC_BENCHMARK_ROUNDS ?? 3)
 assert.ok(Number.isSafeInteger(rounds) && rounds >= 1 && rounds <= 10)
 const start = performance.now()
-const fixture = await openMixedLibraryFixture({ perSource, cached: Math.min(1000, perSource / 5), reuseRoot,
+const fixture = await openMixedLibraryFixture({ perSource, cached: Math.min(1000, perSource / 5), reuseRoot, expectedMetadata,
   progress: phase => console.error(`[mixed benchmark] ${phase}`) })
 const db = fixture.database, e = fixture.expected, limit = 50
 const fixtureMs = performance.now() - start
@@ -68,7 +75,11 @@ const cases: Record<string, () => Page> = {
     const page = db.albumsBrowse({ entityId: fixture.anchor.releaseId, limit: 1 }), release = page.items[0]
     return check(db.albumsSources({ entityId: fixture.anchor.releaseId, releaseId: release.id, token: page.token, limit }), e.anchorReleaseSources)
   },
-  metadataTasksFirst: () => check(db.metadataTasks({ limit }), 0)
+  metadataTasksFirst: () => {
+    const page = db.metadataTasks({ limit })
+    assert.deepEqual(Object.fromEntries(Object.entries(page.counts).filter(([, count]) => count > 0)), fixture.metadataInventory.jobStates)
+    return check(page, fixture.metadataInventory.totalJobs)
+  }
 }
 try {
   let ingestionEvidence: unknown = null
@@ -166,7 +177,9 @@ try {
     timestamp: new Date().toISOString(), runtime: process.versions,
     machine: { platform: process.platform, arch: process.arch, cpu: cpus()[0]?.model, cpuThreads: cpus().length, totalMemoryBytes: totalmem() },
     fixture: { mode: fixture.mode, reusedPath: fixture.mode === 'reused' ? fixture.root : null,
-      setupMeasurement: fixture.mode === 'reused' ? 'Open and validate an existing fixture; no ingestion in this run' : 'Create, ingest and validate the fixture in this run' },
+      metadataInventory: fixture.metadataInventory,
+      schema: fixture.schema,
+      setupMeasurement: fixture.mode === 'reused' ? 'Production constructor open, possible migration/backup, and fixture validation before query_only=ON; no ingestion in this run' : 'Create, ingest and validate the fixture in this run' },
     method: { pageLimit: limit, warmup: 'first invocation recorded separately per case, including lightweight SQL capture where applicable; later samples run without capture; shared SQLite caches, no cold-cache measurement', rounds,
       fixtureReuse: fixture.mode === 'reused' ? 'Cross-process reuse of an existing SQLite fixture; OS and filesystem caches may be warm' : 'Fixture ingested in this process before query measurement',
       workerProbe: fixture.mode === 'reused' ? 'Skipped: query-only fixture reuse must not publish metadata' : args.includes('--no-worker') ? 'Skipped by --no-worker' : 'Executed after read measurements',

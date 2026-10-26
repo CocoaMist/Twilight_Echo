@@ -1,6 +1,6 @@
 # 统一音乐库实施计划：本地与流媒体并重
 
-日期：2026-10-23，更新：2026-10-25。状态：**M1 已完成，M2.1—M2.5 功能已接线；M3.1—M3.3 的分类、发行浏览及统一选源和 M4.1—M4.4 的评分、统一收藏／自动禁播、标签及 Focus 已接入；M5.1 人物／作品探索已接入；M5.2 的 v2 个人备份、手工图片与资料首选、旧正文出处复核和跨字典恢复已接线；M5.3 十万条原轮与同库复测均已完成，查询及 worker 启动性能仍未通过。人工内容与桌面验收按用户要求后置**。本批记录：[M5.3 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.3.md)；前批：[M5.2 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.2.md)、[M5.1](D:/Project/Twilight_Echo/docs/unified-music-library-m5.1.md)、[M4.4](D:/Project/Twilight_Echo/docs/unified-music-library-m4.4.md)；此前记录：[M4.3](D:/Project/Twilight_Echo/docs/unified-music-library-m4.3.md)、[M4.2](D:/Project/Twilight_Echo/docs/unified-music-library-m4.2.md)、[M4.1](D:/Project/Twilight_Echo/docs/unified-music-library-m4.1.md)、[M3.3](D:/Project/Twilight_Echo/docs/unified-music-library-m3.3.md)、[M3.2](D:/Project/Twilight_Echo/docs/unified-music-library-m3.2.md)、[M3.1](D:/Project/Twilight_Echo/docs/unified-music-library-m3.1.md)。
+日期：2026-10-23，更新：2026-10-25。状态：**M1 已完成，M2.1—M2.5 功能已接线；M3.1—M3.3 的分类、发行浏览及统一选源和 M4.1—M4.4 的评分、统一收藏／自动禁播、标签及 Focus 已接入；M5.1 人物／作品探索已接入；M5.2 的 v2 个人备份、手工图片与资料首选、旧正文出处复核和跨字典恢复已接线；M5.3 本轮目录分页与技术分面优化已完成十万条复测，目录首屏降至一秒内，任务页保持毫秒级，Genre／Focus 仍有秒级热点，性能未通过。schema 29 已修复 SQLite date-only 补读的人工字段与取消合同，启动长耗时已定位到一次完整健康检查，缓存条件仍待受控验证。人工内容与桌面验收按用户要求后置**。本批记录：[M5.3 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.3.md)；前批：[M5.2 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.2.md)、[M5.1](D:/Project/Twilight_Echo/docs/unified-music-library-m5.1.md)、[M4.4](D:/Project/Twilight_Echo/docs/unified-music-library-m4.4.md)；此前记录：[M4.3](D:/Project/Twilight_Echo/docs/unified-music-library-m4.3.md)、[M4.2](D:/Project/Twilight_Echo/docs/unified-music-library-m4.2.md)、[M4.1](D:/Project/Twilight_Echo/docs/unified-music-library-m4.1.md)、[M3.3](D:/Project/Twilight_Echo/docs/unified-music-library-m3.3.md)、[M3.2](D:/Project/Twilight_Echo/docs/unified-music-library-m3.2.md)、[M3.1](D:/Project/Twilight_Echo/docs/unified-music-library-m3.1.md)。
 
 目标：用户导入缺少介绍、分类和发行信息的音乐后，播放器立即可用，并在后台补齐可确认的资料；本地文件与流媒体共享音乐身份、资料和个人评价，同时保留各自的版本、来源及播放权限。
 
@@ -28,7 +28,7 @@
 
 - 复用扫描、数据库分页、FTS/拼音检索、队列 occurrence、版本编辑、个人备份、插件权限和媒体授权机制。
 - 扩展 [CoreMetadataService](D:/Project/Twilight_Echo/src/core/library/metadataService.ts)，不再新增一套 Renderer 补全队列或独立 JSON 音乐库。
-- [补全文档](D:/Project/Twilight_Echo/docs/local-library-metadata-enrichment.md)和[身份文档](D:/Project/Twilight_Echo/docs/search-and-library-identity.md)已按生产 Core／SQLite 权威更新。扫描的 date-only 回填合同缺口单列保留，不能以文档更新代替代码修复。
+- [补全文档](D:/Project/Twilight_Echo/docs/local-library-metadata-enrichment.md)和[身份文档](D:/Project/Twilight_Echo/docs/search-and-library-identity.md)已按生产 Core／SQLite 权威更新。schema 29 的 date-only 补读先暂存、成功结束才窄合并日期与 marker，保留普通扫描已提交批次的取消语义；大规模旧库补读耗时与实际验收仍单列。
 
 ## 2. 稳定身份、资料与个人状态的统一模型
 
@@ -202,7 +202,9 @@ Focus 首版分面保留全部当前条件，按目标实体去重；列表、�
 
 **M5.2 功能已接线**：新导出使用 v2 envelope／music 域，保留 v1 读取和旧收藏合同；评分、偏好、标签、Focus、人工资料、手工图片及资料源首选、身份历史、流派及有序演绎可以选择性备份和恢复。同库内容事务发布，跨文件沿原 redo；暂存后 revision 改变的恢复转入设置页待复核。schema 28 保存有界用户图片和逐字段 Rhine 来历，旧不明正文可逐版本复核，未确认内容不出库；跨字典恢复保留本机内置定义并拦截未知别名规则及合并环。M5.3 性能复测仍未通过，真实验收仍保留。详见 [M5.2 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.2.md)。
 
-**M5.3 同库复测完成，性能未通过**：只读全库对账与真实 worker 后台任务读取探针已接入，默认收藏恢复的重复 occurrence／跨 provider 快照问题已修复。十万条混合合成库中，本地首屏 p50 从 4,775.59 降至 71.92 ms，Genre 从 27,811.32 降至 4,527.10 ms，Focus 从 16,821.84 降至 8,629.04 ms；Catalog 首屏仍为 1,414.38 ms。worker 读取组 p50 为 93—109 ms，但打开从 1.28 退化至 28.49 秒，idle／resolving 首组仍有 1.32／1.18 秒尾值。两轮对账均无 error／pending，未提供 Core state，首选版本跨存储权威尚未核对。正式报告、采样口径与定向检查见 [M5.3 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.3.md)，当前不进入发布验收。
+**M5.3 本轮同库复测完成，性能未通过**：只读全库对账与真实 worker 后台任务读取探针已接入，默认收藏恢复的重复 occurrence／跨 provider 快照问题已修复。本轮十万条混合合成库保留 2 个 completed jobs／1 个 fact，schema 29→29。Catalog 改为单来源、按实体种类解析版本和窄分页后，首屏／深页 p50 为 890.59／1,589.73 ms；技术字段单次 CASE 后，流派格式分面为 5,254.25 ms，流派首屏仍为 3,677.04 ms。Focus 爵士仍需 6,729.38 ms，真实两任务页保持 0.26 ms。未改的本地首屏也由上一轮 162.29 变为 75.93 ms，缓存与主机状态未受控，不把跨轮差异全部归因于代码。生产打开与库存验证共 22.43 秒；对账无 error／pending，未提供 Core state，首选版本跨存储权威仍未核对。历史 worker 读取组 p50 为 93—109 ms；完整健康检查曾占一次生产打开的 22.51 秒，后续约 1.28 秒启动观测仍非受控冷启动，长打开尚未收尾。正式报告、配对诊断与检查见 [M5.3 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.3.md)，当前不进入发布验收。
+
+**SQLite 日期补读合同已修复**：schema 29 暂存旧文件日期，成功结束时统一验证并窄合并，取消／失败／中断不泄漏日期或 marker；手工字段、CUE／ISO 逻辑身份、Catalog 及识别输入保留。日期入口有整体解析期限，新用例已注册原数据库 gate。普通扫描取消继续保留已提交批次。大规模旧库日期补读／最终事务耗时不属于上述十万条查询证据。
 
 - [ ] 完成 credits 的人物 ID、角色、目标和来源；人物页按演唱、作曲、制作等角色展示参与内容。
 - [ ] 接通作品、演绎、录音关联页面，支持多轨演绎及不同录制，不从曲名猜完整作品关系。
@@ -242,11 +244,11 @@ Focus 首版分面保留全部当前条件，按目标实体去重；列表、�
 
 ## 6. 接下来从哪里开始
 
-2026-10-25 继续点：本轮冻结生产代码，先保存已测候选与正式证据并分批提交。M5.3 后续仍需优化 Catalog／Genre／Focus、定位 worker 28.49 秒启动及首组长尾，再做同口径复测；随后修复 SQLite date-only 回填对人工字段与取消发布的合同缺口，再推进 M5.4 的文档／插件契约、受影响检查与实际交付。普通扫描保留已提交批次的取消语义不变。人工内容与真实桌面验收仍后置。
+2026-10-25 继续点：目录分页与技术分面优化已完成共同十万条复测，Catalog／引用 28 项、Genre／分类／Focus／runner 62 项回归、scoped lint 和整合 Node 类型检查通过。目录独立审查的 1,876 次完整结果差分一致；技术分面采用单次 CASE，不采用更慢的后置 subset。2026-10-25 用户要求暂停性能优化，保留现有实现、证据及未通过状态。恢复后由音乐库域负责人处理 Focus 爵士筛选与流派全量构图；Catalog 深页、发行来源、worker 首组长尾与受控启动条件仍待处理。大规模旧库日期发布成本、Core state 首选版本对账及 M5.4 文档／插件契约、生产构建与实际交付仍保留。UI 重构由同期任务负责，本任务不覆盖其改动；人工内容与真实桌面验收仍后置。
 
-**当前继续点是 M5.3 全库对账与十万条混合记录性能；M5.2 功能已接线，人工内容与桌面验收后置。** [M5.2 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.2.md)记录选域导出、手工图片／资料首选、旧正文复核、跨字典兼容、引用冲突、同库恢复事务与跨文件 redo；[M4.4](D:/Project/Twilight_Echo/docs/unified-music-library-m4.4.md)记录 schema 26 的 Focus 查询、保存、分面、冻结播放和请求回执；[M4.3](D:/Project/Twilight_Echo/docs/unified-music-library-m4.3.md)记录标签管理及动态展开；[M4.2](D:/Project/Twilight_Echo/docs/unified-music-library-m4.2.md)记录统一收藏权威、偏好冲突及自动禁播；[M4.1](D:/Project/Twilight_Echo/docs/unified-music-library-m4.1.md)记录录音／具体发行评分。此前 M3.1—M3.3 的分类和版本／统一选源沿原入口，M2.5 的资料任务仍使用原事务 outbox 和唯一 Core worker；重新查询创建新显式需求，当前批次只包含尚未删除的需求。
+**M5.3 性能优化按用户要求暂停，仍未通过；M5.2 功能已接线，人工内容与桌面验收继续后置。** [M5.2 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.2.md)记录选域导出、手工图片／资料首选、旧正文复核、跨字典兼容、引用冲突、同库恢复事务与跨文件 redo；[M4.4](D:/Project/Twilight_Echo/docs/unified-music-library-m4.4.md)记录 schema 26 的 Focus 查询、保存、分面、冻结播放和请求回执；[M4.3](D:/Project/Twilight_Echo/docs/unified-music-library-m4.3.md)记录标签管理及动态展开；[M4.2](D:/Project/Twilight_Echo/docs/unified-music-library-m4.2.md)记录统一收藏权威、偏好冲突及自动禁播；[M4.1](D:/Project/Twilight_Echo/docs/unified-music-library-m4.1.md)记录录音／具体发行评分。此前 M3.1—M3.3 的分类和版本／统一选源沿原入口，M2.5 的资料任务仍使用原事务 outbox 和唯一 Core worker；重新查询创建新显式需求，当前批次只包含尚未删除的需求。
 
-M5.1 已沿明确人物 ID 和角色接通参与内容、作品／录音及人工演绎导航、标签／偏好和搜索；同名及曲名不作为关系依据，评分目标仍限录音／发行。M5.2 已接通个人备份 v2、持久手工图片及资料源首选、逐版本 Rhine 出处复核与跨字典恢复；当前 M5.3 原轮及同库查询／worker 复测均已完成，仍保留秒级查询和启动退化，之后修复 date-only 扫描合同并推进 M5.4。真实资料评分源尚未启用。后续验收仍由音乐库域负责人建立并人工核对本地、平台各至少 100 条样本，分别统计身份、发行、中文介绍、图片和 credits；实际 Electron 页面、原生键盘、主题与打包验收仍待进行。本批自动检查见 M5.3 记录；生产 sandbox 验收等待 Windows 窗口站创建权限恢复后运行原入口，见 [M2.1](D:/Project/Twilight_Echo/docs/unified-music-library-m2.1.md)。整个 M5.2、M2.6、M3 的实际验收、整个 M4 及 M1—M5 均未标记完成。
+M5.1 已沿明确人物 ID 和角色接通参与内容、作品／录音及人工演绎导航、标签／偏好和搜索；同名及曲名不作为关系依据，评分目标仍限录音／发行。M5.2 已接通个人备份 v2、持久手工图片及资料源首选、逐版本 Rhine 出处复核与跨字典恢复；当前 M5.3 已有原轮、checkpoint、分页投影、窄匹配、目录／分面及启动诊断证据，真实两任务页已消除全库展开，仍保留 Genre／Focus 等秒级查询和启动条件缺口。date-only 合同修复已落地，M5.4 实际交付仍待推进。真实资料评分源尚未启用。后续验收仍由音乐库域负责人建立并人工核对本地、平台各至少 100 条样本，分别统计身份、发行、中文介绍、图片和 credits；实际 Electron 页面、原生键盘、主题与打包验收仍待进行。本批自动检查见 M5.3 记录；生产 sandbox 验收等待 Windows 窗口站创建权限恢复后运行原入口，见 [M2.1](D:/Project/Twilight_Echo/docs/unified-music-library-m2.1.md)。整个 M5.2、M2.6、M3 的实际验收、整个 M4 及 M1—M5 均未标记完成。
 
 M2.1 已用明确 ID 接通 MusicBrainz → Wikidata／Wikipedia，后端测试覆盖本地／平台人物分别确认后共用介绍、出处和语言，以及资料与任务恢复。外部资料不写入扫描会重建的三字段 `catalog_facts`；旧 Track 级补全接口保持兼容。
 

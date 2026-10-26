@@ -57,26 +57,27 @@ function summary(samplesMs: number[]) {
   }
 }
 
-/** Real database IPC + Core task owner. The provider is controlled in-process, not HTTP or audio. */
-export async function probeMusicLibraryWorker(options: {
-  databasePath: string; localTrackId: string; samples?: number; progress?: (phase: string) => void
-}) {
-  const samples = options.samples ?? 12
-  assert.ok(Number.isSafeInteger(samples) && samples >= 1 && samples <= 100)
+type WorkerProbeOptions = { databasePath: string; progress?: (phase: string) => void }
+
+function createProbeWorker(options: WorkerProbeOptions) {
   // The production worker resolves this fixed filename beside the legacy JSON entry point.
   assert.equal(basename(options.databasePath), 'music-library.sqlite')
   const progress = options.progress ?? (() => {})
   let child: ChildProcess | undefined
+  let forkedAt: number | undefined, readyAt: number | undefined, openedAt: number | undefined
   const requestCounts: Record<string, number> = {}
   const client = new LibraryDatabaseServiceClient({
     serviceEntry: fileURLToPath(new URL('../src/main/library/libraryDatabaseService.ts', import.meta.url)),
     libraryFilePath: join(dirname(options.databasePath), 'music-library.json'),
     fork(entry) {
+      forkedAt = performance.now()
       child = fork(entry, [], { execArgv: ['--experimental-strip-types'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
       // Drain diagnostics without mixing them into the machine-readable benchmark result.
       child.stderr?.resume()
       child.on('message', message => {
         const kind = (message as { kind?: string }).kind
+        if (kind === 'ready') readyAt = performance.now()
+        if (kind === 'opened') openedAt = performance.now()
         if (kind === 'ready' || kind === 'opened' || kind === 'open-error') progress(`worker-${kind}`)
       })
       Object.assign(child, { postMessage(request: LibraryDatabaseWorkerRequest) {
@@ -86,6 +87,50 @@ export async function probeMusicLibraryWorker(options: {
       return child as unknown as DatabaseUtilityProcess
     }
   })
+  return {
+    client, requestCounts,
+    async open() {
+      progress('opening')
+      const start = performance.now()
+      const metadata = await client.getMetadata()
+      const respondedAt = performance.now()
+      assert.ok(forkedAt !== undefined && readyAt !== undefined && openedAt !== undefined)
+      return { metadata, startup: {
+        requestToForkMs: forkedAt - start,
+        forkToReadyMs: readyAt - forkedAt,
+        readyToOpenedMs: openedAt - readyAt,
+        openedToMetadataMs: respondedAt - openedAt,
+        totalMs: respondedAt - start
+      } }
+    },
+    async close() {
+      const exited = child && child.exitCode === null && child.signalCode === null ? once(child, 'exit') : undefined
+      try { await client.close() } finally { client.destroy(); await exited }
+    }
+  }
+}
+
+/** Requests only metadata; production open still performs normal health checks and recovery. */
+export async function probeMusicLibraryWorkerStartup(options: WorkerProbeOptions) {
+  const worker = createProbeWorker(options)
+  try {
+    const { metadata, startup } = await worker.open()
+    return {
+      transport: 'production-database-worker-node-ipc' as const,
+      workerOpenMs: startup.totalMs, startup, metadata, requestCounts: worker.requestCounts
+    }
+  } finally { await worker.close() }
+}
+
+/** Real database IPC + Core task owner. The provider is controlled in-process, not HTTP or audio. */
+export async function probeMusicLibraryWorker(options: WorkerProbeOptions & {
+  localTrackId: string; samples?: number
+}) {
+  const samples = options.samples ?? 12
+  assert.ok(Number.isSafeInteger(samples) && samples >= 1 && samples <= 100)
+  const progress = options.progress ?? (() => {})
+  const worker = createProbeWorker(options)
+  const { client, requestCounts } = worker
   const resolveEntered = gate(), resolveHeld = gate(), enrichEntered = gate(), enrichHeld = gate()
   const providerRequests = { resolve: 0, enrich: 0 }
   let metadataEvents = 0
@@ -104,10 +149,8 @@ export async function probeMusicLibraryWorker(options: {
   }
   let metadata: CoreEntityMetadataService | undefined
   try {
-    progress('opening')
-    const start = performance.now()
-    const initial = await client.getMetadata()
-    const workerOpenMs = performance.now() - start
+    const { metadata: initial, startup } = await worker.open()
+    const workerOpenMs = startup.totalMs
     progress('queue-creating')
     const queue = await client.createLibraryQueue({ ids: [options.localTrackId], sort: 'playlist' })
     assert.equal(queue.total, 1)
@@ -171,7 +214,7 @@ export async function probeMusicLibraryWorker(options: {
     return {
       transport: 'production-database-worker-node-ipc' as const,
       providerMode: 'controlled-fixture-no-http' as const,
-      externalNetworkRequests: 0, providerRequests, metadataEvents, requestCounts, workerOpenMs,
+      externalNetworkRequests: 0, providerRequests, metadataEvents, requestCounts, workerOpenMs, startup,
       samplesPerPhase: samples, requestsPerSample: 3, maxResponseTracks: 1,
       idle, resolving, enriching, publishing, queueUnchanged: true,
       metadataPublished: true, libraryRevisionUnchanged: true
@@ -179,9 +222,6 @@ export async function probeMusicLibraryWorker(options: {
   } finally {
     resolveHeld.release(); enrichHeld.release()
     try { await metadata?.shutdown() }
-    finally {
-      const exited = child && child.exitCode === null && child.signalCode === null ? once(child, 'exit') : undefined
-      try { await client.close() } finally { client.destroy(); await exited }
-    }
+    finally { await worker.close() }
   }
 }

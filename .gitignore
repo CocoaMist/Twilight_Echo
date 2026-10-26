@@ -129,6 +129,13 @@ CLAUDE.md
 !/docs/audit-evidence/m5.3-unified-library-100k.json
 !/docs/audit-evidence/m5.3-unified-library-100k-checkpoint.json
 !/docs/audit-evidence/m5.3-unified-library-100k-worker-checkpoint.json
+!/docs/audit-evidence/m5.3-unified-library-100k-selective.json
+!/docs/audit-evidence/m5.3-unified-library-100k-focus-page.json
+!/docs/audit-evidence/m5.3-unified-library-100k-startup.json
+!/docs/audit-evidence/m5.3-database-open-diagnostic.json
+!/docs/audit-evidence/m5.3-metadata-tasks-diagnostic.json
+!/docs/audit-evidence/m5.3-unified-library-100k-focus-matched.json
+!/docs/audit-evidence/m5.3-unified-library-100k-catalog-facets.json
 !/docs/audit-evidence/m5.3-ingestion-aborted.json
 **/docs/history-session/
 **/docs/performance-audit-evidence/

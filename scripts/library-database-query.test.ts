@@ -194,6 +194,7 @@ test('collection count-only reads preserve raw artist labels and all scoped/sear
   const { db } = fixture(t, [
     { artist: ' Singer ', genre: 'Rock', album: 'A' },
     { artist: 'Singer', genre: 'Pop', album: 'B' },
+    { artist: 'Invalid credit data', artists: 'not an array' as never },
     { artist: '' },
     { artist: undefined },
     { artist: 5 as never },
@@ -543,6 +544,44 @@ test('artist links use structured credits, exact split names and the unknown art
     )
 })
 
+test('artist cards merge solo and collaboration membership before counting, filtering and paging', (t) => {
+  const { db } = fixture(t, [
+    { artist: 'Alice', title: 'Solo', album: 'Solo album', duration: 100 },
+    { artist: 'Alice/Bob', artists: [{ name: 'Alice' }, { name: 'Bob' }], title: 'Duet', album: 'Shared album', duration: 200 },
+    { artist: 'Bob / Alice', artists: [{ name: 'Bob' }, { name: 'Alice' }, { name: ' Alice ' }], title: 'Again', album: 'Shared album', duration: 300 },
+    { artist: 'Bob / Carol', title: 'Legacy duet', album: 'Other album', duration: 400 },
+    { artist: 'AC/DC', title: 'Band', duration: 500 },
+    { artist: 'Literal / Slash', artists: [{ name: 'Literal / Slash' }], duration: 600 }
+  ])
+  const all = db.queryCollections('artists', { collectionSort: 'label' })
+  assert.deepEqual(all.items.map(item => item.name).sort(), ['AC/DC', 'Alice', 'Bob', 'Carol', 'Literal / Slash'])
+  assert.equal(db.queryCollections('artists', { collectionCountOnly: true }).total, all.total)
+  for (const [name, ids, duration] of [
+    ['Alice', ['0', '1', '2'], 600],
+    ['Bob', ['1', '2', '3'], 900],
+    ['Carol', ['3'], 400]
+  ] as const) {
+    const summary = all.items.find(item => item.name === name)!
+    assert.equal(summary.trackCount, ids.length)
+    assert.equal(summary.duration, duration)
+    const query = { artist: name, sort: 'playlist' as const }
+    assert.deepEqual(db.queryTracks(query).tracks.map(track => track.id), ids)
+    const queue = db.createLibraryQueue(query)
+    assert.deepEqual(db.readLibraryQueue(queue.id, 0, 20).items.map(item => item.track!.id), ids)
+  }
+  assert.equal(db.queryCollections('albums', { artist: 'Alice' }).total, 2)
+  assert.equal(db.queryTracks({ artist: 'Alice', search: 'Duet' }).total, 1)
+  assert.deepEqual(db.queryTracks({ artist: 'Alice/Bob' }).tracks.map(track => track.id), ['1'], 'old full-credit links still work')
+  const search = { search: 'Alice', collectionSearchMode: 'artistName' as const }
+  assert.deepEqual(db.queryCollections('artists', search).items.map(item => item.name), ['Alice'])
+  assert.equal(db.queryCollections('artists', { search: 'Duet' }).items.find(item => item.name === 'Alice')!.trackCount, 3)
+  const first = db.queryCollections('artists', { limit: 2 }), second = db.queryCollections('artists', { offset: 2, limit: 3 })
+  assert.deepEqual([...first.items, ...second.items].map(item => item.id), db.queryCollections('artists').items.map(item => item.id))
+  db.patchTracks([{ id: '1', expectedVersion: db.getTracksByIds(['1']).versions['1'], patch: { artists: [{ name: 'Carol' }] } }])
+  assert.equal(db.queryCollections('artists').items.find(item => item.name === 'Carol')!.trackCount, 2)
+  assert.equal(db.queryCollections('artists', { collectionCountOnly: true }).total, 5)
+})
+
 test('collection added-at ordering uses complete member dates and stable natural-name ties', (t) => {
   const { db } = fixture(t, [
     { album: 'Album 10', artist: 'Ten', addedAt: 10 },
@@ -708,4 +747,34 @@ test('genres and folders retain their existing default text order while artist a
         (item) => item.name
       )
     )
+})
+
+test('genre collection summaries resolve cover and durable coverSource from member tracks and support Roon trackCount sorting', (t) => {
+  const { db, tracks } = fixture(t, [
+    { title: 'One', genre: 'Jazz / Electronic', cover: null, coverSource: 'durable-jazz-cover' },
+    { title: 'Two', genre: 'Pop/Rock', cover: 'cover://pop-rock-1.jpg', coverSource: 'pop-source-1' },
+    { title: 'Three', genre: 'Pop/Rock', cover: 'cover://pop-rock-2.jpg' },
+    { title: 'Four', genre: 'Classical', cover: null }
+  ])
+  const derived = buildDerivedCollections(tracks, ['C:\\Music'], '/')
+  const page = db.queryCollections('genres', {
+    genreSeparators: '/',
+    collectionSort: 'trackCount',
+    direction: 'desc'
+  })
+  assert.deepEqual(
+    page.items.map((item) => [item.name, item.trackCount, item.cover, item.coverSource ?? null]),
+    [
+      ['Pop', 2, 'cover://pop-rock-1.jpg', 'pop-source-1'],
+      ['Rock', 2, 'cover://pop-rock-1.jpg', 'pop-source-1'],
+      ['Classical', 1, null, null],
+      ['Electronic', 1, null, 'durable-jazz-cover'],
+      ['Jazz', 1, null, 'durable-jazz-cover']
+    ]
+  )
+  for (const item of page.items) {
+    const match = derived.genres.find((g) => g.name === item.name)!
+    assert.equal(item.cover, match.cover)
+    assert.equal(item.coverSource, match.coverSource)
+  }
 })

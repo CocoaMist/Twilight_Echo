@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { openMixedLibraryFixture } from './fixtures/mixed-music-library.ts'
+import { probeMusicLibraryWorker } from './unified-music-library-worker-probe.ts'
 
 test('mixed benchmark fixture validates complete inventories, bounded paging, membership and personal semantics', async t => {
   const fixture = await openMixedLibraryFixture({ perSource: 100, cached: 20 })
@@ -42,6 +43,10 @@ test('mixed benchmark fixture validates complete inventories, bounded paging, me
   assert.equal(db.albumsSources({ entityId: fixture.anchor.releaseId, releaseId: editions.items[0].id, token: editions.token, limit: 7 }).total, 10)
   assert.equal(db.getMetadata().trackCount, 100)
   assert.equal(db.catalogStatus().localPending, false)
+  assert.deepEqual(fixture.metadataInventory, { expected: { completedJobs: 0, facts: 0 }, jobStates: {}, totalJobs: 0, facts: 0 })
+  assert.equal(fixture.schema.beforeOpen, null)
+  assert.equal(fixture.schema.afterOpen, Number(db.sql.prepare('PRAGMA user_version').get()!.user_version))
+  assert.equal(fixture.schema.upgradedOnOpen, false)
 })
 
 test('existing mixed fixture is reused without ingestion, writes or directory deletion', async t => {
@@ -66,6 +71,8 @@ test('existing mixed fixture is reused without ingestion, writes or directory de
   const reused = await openMixedLibraryFixture({ perSource: 20, cached: 4, reuseRoot: root, progress: phase => progress.push(phase) })
   try {
     assert.equal(reused.mode, 'reused')
+    assert.equal(reused.schema.beforeOpen, reused.schema.afterOpen)
+    assert.equal(reused.schema.upgradedOnOpen, false)
     assert.deepEqual(reused.expected, expected)
     assert.deepEqual(reused.anchor, anchor)
     assert.equal(reused.tagId, tagId)
@@ -88,6 +95,9 @@ test('existing mixed fixture is reused without ingestion, writes or directory de
   assert.deepEqual(report.expected, expected)
   assert.equal(report.fixture.mode, 'reused')
   assert.equal(report.fixture.reusedPath, resolve(root))
+  assert.equal(report.fixture.schema.beforeOpen, report.fixture.schema.afterOpen)
+  assert.equal(report.fixture.schema.upgradedOnOpen, false)
+  assert.match(report.fixture.setupMeasurement, /possible migration\/backup/)
   assert.deepEqual(report.ingestionPhasesMs, {})
   assert.equal(report.ingestionEvidence.sourceReportPath, evidencePath)
   assert.equal(report.ingestionEvidence.fixtureMs, 123)
@@ -114,4 +124,42 @@ test('fixture reuse rejects relative or missing paths without creating a databas
   const missing = join(tmpdir(), `twilight-mixed-library-missing-${process.pid}-${Date.now()}`)
   await assert.rejects(openMixedLibraryFixture({ perSource: 20, cached: 4, reuseRoot: missing }), /Cannot reuse missing fixture/)
   assert.equal(existsSync(missing), false)
+})
+
+test('post-worker reuse requires explicit completed-job and fact inventories without deleting probe data', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'twilight-mixed-library-worker-reuse-test-'))
+  t.after(() => {
+    assert.equal(dirname(resolve(root)), resolve(tmpdir()))
+    assert.ok(basename(root).startsWith('twilight-mixed-library-worker-reuse-test-'))
+    rmSync(root, { recursive: true, force: true })
+  })
+  const seeded = await openMixedLibraryFixture({ perSource: 20, cached: 4, root })
+  const { databasePath, anchor, expected } = seeded
+  seeded.close()
+  const probe = await probeMusicLibraryWorker({ databasePath, localTrackId: anchor.localTrackId, samples: 1 })
+  assert.equal(probe.metadataPublished, true)
+  await assert.rejects(openMixedLibraryFixture({ perSource: 20, cached: 4, reuseRoot: root }), /metadata job inventory/)
+  await assert.rejects(openMixedLibraryFixture({ perSource: 20, cached: 4, reuseRoot: root,
+    expectedMetadata: { completedJobs: 2, facts: 0 } }), /metadata fact inventory/)
+
+  const outputPath = join(root, 'post-worker-query-report.json')
+  const result = spawnSync(process.execPath, ['--experimental-strip-types',
+    fileURLToPath(new URL('./benchmark-unified-music-library.ts', import.meta.url)), '20', outputPath,
+    `--reuse-fixture=${root}`, '--expected-completed-metadata-jobs=2', '--expected-metadata-facts=1'], {
+    encoding: 'utf8', env: { ...process.env, MUSIC_BENCHMARK_ROUNDS: '1' }, timeout: 60_000
+  })
+  assert.equal(result.status, 0, result.stderr || result.error?.message)
+  const report = JSON.parse(readFileSync(outputPath, 'utf8'))
+  assert.deepEqual(report.expected, expected)
+  assert.deepEqual(report.fixture.metadataInventory, {
+    expected: { completedJobs: 2, facts: 1 }, jobStates: { completed: 2 }, totalJobs: 2, facts: 1
+  })
+  assert.equal(report.metrics.metadataTasksFirst.total, 2)
+  const reused = await openMixedLibraryFixture({ perSource: 20, cached: 4, reuseRoot: root,
+    expectedMetadata: { completedJobs: 2, facts: 1 } })
+  try {
+    assert.equal(reused.database.metadataTasks({ limit: 1 }).counts.completed, 2)
+    assert.equal(reused.database.sql.prepare('SELECT count(*) n FROM metadata_facts').get()!.n, 1)
+    assert.throws(() => reused.database.sql.exec('DELETE FROM metadata_jobs'), /readonly/i)
+  } finally { reused.close() }
 })
